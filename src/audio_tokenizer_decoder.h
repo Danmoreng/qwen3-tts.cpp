@@ -48,6 +48,7 @@ struct pre_tfm_layer {
 
 // Residual block weights (Snake + Conv + Snake + Conv)
 struct residual_block {
+    int dilation = 1;  // Dilation for conv1: [1, 3, 9] for res[0], res[1], res[2]
     struct ggml_tensor * act1_alpha = nullptr;
     struct ggml_tensor * act1_beta = nullptr;
     struct ggml_tensor * conv1_w = nullptr;

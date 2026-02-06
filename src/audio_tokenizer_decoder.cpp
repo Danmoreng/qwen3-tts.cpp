@@ -323,6 +323,12 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
         return false;
     }
     
+    for (int i = 0; i < 4; ++i) {
+        model_.dec_blocks[i].res[0].dilation = 1;
+        model_.dec_blocks[i].res[1].dilation = 3;
+        model_.dec_blocks[i].res[2].dilation = 9;
+    }
+    
     normalize_codebooks();
     
     state_.backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -486,7 +492,9 @@ struct ggml_tensor * AudioTokenizerDecoder::apply_upsample_block(struct ggml_con
     struct ggml_tensor * residual = x;
     
     if (block.dwconv_w) {
-        x = ggml_conv_1d_dw(ctx, block.dwconv_w, x, 1, 3, 1);
+        // Causal padding: pad left with 6 zeros (kernel_size - 1 = 7 - 1 = 6)
+        x = ggml_pad_ext(ctx, x, 6, 0, 0, 0, 0, 0, 0, 0);  // left pad only
+        x = ggml_conv_1d_dw(ctx, block.dwconv_w, x, 1, 0, 1);  // no padding in conv
         if (block.dwconv_b) {
             x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.dwconv_b, 1, channels, 1));
         }
@@ -583,7 +591,9 @@ struct ggml_tensor * AudioTokenizerDecoder::apply_residual_block(struct ggml_con
     }
     
     int64_t out_channels = block.conv1_w->ne[2];
-    x = ggml_conv_1d(ctx, block.conv1_w, x, 1, 3, 1);
+    int padding = 6 * block.dilation;
+    x = ggml_pad_ext(ctx, x, padding, 0, 0, 0, 0, 0, 0, 0);
+    x = ggml_conv_1d(ctx, block.conv1_w, x, 1, 0, block.dilation);
     if (block.conv1_b) {
         x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.conv1_b, 1, out_channels, 1));
     }
@@ -643,9 +653,10 @@ struct ggml_tensor * AudioTokenizerDecoder::apply_decoder_block(struct ggml_cont
         ggml_set_output(x);
     }
     
+    // Python CausalTransConvNet: left_pad = right_pad = kernel_size - stride
     int pad = kernel_size - upsample_rate;
-    int left_pad = (pad + 1) / 2;
-    int right_pad = pad - left_pad;
+    int left_pad = pad;
+    int right_pad = pad;
     int64_t out_seq_len = new_seq_len - left_pad - right_pad;
     
     x = ggml_view_3d(ctx, x, out_seq_len, out_channels, 1,
@@ -832,7 +843,9 @@ struct ggml_cgraph * AudioTokenizerDecoder::build_graph(int32_t n_frames) {
     ggml_set_name(cur, "upsample_output");
     ggml_set_output(cur);
     
-    cur = ggml_conv_1d(ctx0, model_.dec0_conv_w, cur, 1, 3, 1);
+    // Causal padding: left pad with 6 (kernel_size - 1 = 7 - 1 = 6)
+    cur = ggml_pad_ext(ctx0, cur, 6, 0, 0, 0, 0, 0, 0, 0);
+    cur = ggml_conv_1d(ctx0, model_.dec0_conv_w, cur, 1, 0, 1);
     if (model_.dec0_conv_b) {
         cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model_.dec0_conv_b, 1, cfg.decoder_dim, 1));
     }
@@ -856,7 +869,9 @@ struct ggml_cgraph * AudioTokenizerDecoder::build_graph(int32_t n_frames) {
     ggml_set_name(cur, "dec5_output");
     ggml_set_output(cur);
     
-    cur = ggml_conv_1d(ctx0, model_.dec6_conv_w, cur, 1, 3, 1);
+    // Causal padding: left pad with 6 (kernel_size - 1 = 7 - 1 = 6)
+    cur = ggml_pad_ext(ctx0, cur, 6, 0, 0, 0, 0, 0, 0, 0);
+    cur = ggml_conv_1d(ctx0, model_.dec6_conv_w, cur, 1, 0, 1);
     if (model_.dec6_conv_b) {
         cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model_.dec6_conv_b, 1, 1, 1));
     }

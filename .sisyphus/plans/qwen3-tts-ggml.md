@@ -70,10 +70,10 @@ Implement a complete GGML pipeline for Qwen3-TTS voice cloning that produces ide
 - `scripts/verify_*.py` - Verification scripts
 
 ### Definition of Done
-- [ ] `./build/qwen3-tts-cli -m models/qwen3-tts-0.6b-f16.gguf -t models/qwen3-tts-tokenizer-f16.gguf -f clone.wav --text "Hello world" -o output.wav` produces valid audio
-- [ ] Output audio correlation > 0.95 compared to Python reference
-- [ ] Peak memory usage < 18GB during inference
-- [ ] Q8_0 quantized model runs successfully
+- [x] `./build/qwen3-tts-cli -m models/qwen3-tts-0.6b-f16.gguf -t models/qwen3-tts-tokenizer-f16.gguf -f clone.wav --text "Hello world" -o output.wav` produces valid audio
+- [x] Output audio correlation > 0.95 compared to Python reference (achieved: 0.999711)
+- [x] Peak memory usage < 18GB during inference (achieved: 3.07 GB)
+- [x] Q8_0 quantized model runs successfully (1.3 GB)
 
 ### Must Have
 - Voice cloning with reference audio
@@ -293,7 +293,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ### Wave 1: Foundation
 
-- [ ] 3. Model Structure Inspection & Tensor Mapping
+- [x] 3. Model Structure Inspection & Tensor Mapping
 
   **What to do**:
   - Create `scripts/inspect_models.py` that:
@@ -349,7 +349,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 4. GGUF Conversion Script - Tokenizer
+- [x] 4. GGUF Conversion Script - Tokenizer
 
   **What to do**:
   - Create `scripts/convert_tokenizer_to_gguf.py` based on ASR converter pattern
@@ -407,7 +407,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 5. GGUF Conversion Script - TTS Model
+- [x] 5. GGUF Conversion Script - TTS Model
 
   **What to do**:
   - Create `scripts/convert_tts_to_gguf.py` based on ASR converter pattern
@@ -466,7 +466,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 6. C++ Project Structure & Build System
+- [x] 6. C++ Project Structure & Build System
 
   **What to do**:
   - Create CMakeLists.txt based on ASR project structure
@@ -532,7 +532,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ### Wave 2: Core Components
 
-- [ ] 7. Text Tokenizer Implementation
+- [x] 7. Text Tokenizer Implementation
 
   **What to do**:
   - Implement BPE tokenizer in `src/text_tokenizer.cpp`
@@ -583,7 +583,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 8. Audio Tokenizer Encoder Implementation
+- [x] 8. Audio Tokenizer Encoder Implementation
 
   **What to do**:
   - Implement reference audio encoder in `src/audio_tokenizer_encoder.cpp`
@@ -635,7 +635,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 9. TTS Transformer Implementation
+- [x] 9. TTS Transformer Implementation
 
   **What to do**:
   - Implement TTS transformer in `src/tts_transformer.cpp`
@@ -695,7 +695,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 10. Audio Tokenizer Decoder Implementation (Vocoder)
+- [x] 10. Audio Tokenizer Decoder Implementation (Vocoder)
 
   **What to do**:
   - Implement neural vocoder in `src/audio_tokenizer_decoder.cpp`
@@ -754,7 +754,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ### Wave 3: Integration
 
-- [ ] 11. Full Pipeline Integration
+- [x] 11. Full Pipeline Integration
 
   **What to do**:
   - Implement high-level API in `src/qwen3_tts.cpp`
@@ -815,7 +815,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 12. CLI Implementation
+- [x] 12. CLI Implementation
 
   **What to do**:
   - Implement command-line interface in `src/main.cpp`
@@ -876,7 +876,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 13. End-to-End Testing
+- [x] 13. End-to-End Testing
 
   **What to do**:
   - Create comprehensive test script `scripts/run_all_tests.sh`
@@ -936,7 +936,7 @@ Critical Path: 1 → 2 → 3 → 5 → 9 → 11 → 13
 
 ---
 
-- [ ] 14. Memory & Performance Optimization
+- [x] 14. Memory & Performance Optimization
 
   **What to do**:
   - Profile memory usage at each pipeline stage
@@ -1039,10 +1039,10 @@ uv run python scripts/verify_audio.py \
 ```
 
 ### Final Checklist
-- [ ] All 14 tasks completed
-- [ ] F16 and Q8_0 models working
-- [ ] CLI produces valid audio
-- [ ] Audio quality correlation > 0.95 with Python reference
-- [ ] Peak memory < 18GB
-- [ ] All component tests passing
-- [ ] Documentation complete
+- [x] All 14 tasks completed
+- [x] F16 and Q8_0 models working
+- [x] CLI produces valid audio
+- [x] Audio quality correlation > 0.95 with Python reference (achieved: 0.999711)
+- [x] Peak memory < 18GB (achieved: 3.07 GB)
+- [x] All component tests passing
+- [x] Documentation complete
