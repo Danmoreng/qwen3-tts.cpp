@@ -2042,6 +2042,13 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                                const float * speaker_embd, int32_t max_len,
                                std::vector<int32_t> & output,
                                int32_t language_id) {
+#ifdef QWEN3_TTS_TIMING
+    using clk = std::chrono::high_resolution_clock;
+    tts_timing timing = {};
+    auto t_gen_start = clk::now();
+    auto t0 = t_gen_start, t1 = t_gen_start;
+#endif
+
     if (!model_.ctx) {
         error_msg_ = "Model not loaded";
         return false;
@@ -2066,19 +2073,35 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     std::vector<float> prefill_embd;
     std::vector<float> trailing_text_hidden;
     std::vector<float> tts_pad_embed;
+
+#ifdef QWEN3_TTS_TIMING
+    t0 = clk::now();
+#endif
     if (!build_prefill_graph(text_tokens, n_tokens, speaker_embd, language_id,
                              prefill_embd, trailing_text_hidden, tts_pad_embed)) {
         return false;
     }
+#ifdef QWEN3_TTS_TIMING
+    t1 = clk::now();
+    timing.t_prefill_build_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+#endif
 
     const int32_t prefill_len = (int32_t)(prefill_embd.size() / cfg.hidden_size);
     const int32_t trailing_len = (int32_t)(trailing_text_hidden.size() / cfg.hidden_size);
     
     std::vector<float> hidden_out;
     std::vector<float> logits;
+
+#ifdef QWEN3_TTS_TIMING
+    t0 = clk::now();
+#endif
     if (!forward_prefill(prefill_embd.data(), prefill_len, 0, hidden_out, &logits)) {
         return false;
     }
+#ifdef QWEN3_TTS_TIMING
+    t1 = clk::now();
+    timing.t_prefill_forward_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+#endif
     
     output.clear();
     output.reserve(max_len * cfg.n_codebooks);
@@ -2095,10 +2118,17 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
         
         frame_codes[0] = next_token;
         
+#ifdef QWEN3_TTS_TIMING
+        t0 = clk::now();
+#endif
         std::vector<int32_t> codes_1_15;
         if (!predict_codes_autoregressive(last_hidden_.data(), frame_codes[0], codes_1_15)) {
             return false;
         }
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        timing.t_code_pred_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+#endif
         
         for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
             frame_codes[cb] = codes_1_15[cb - 1];
@@ -2108,6 +2138,10 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             output.push_back(frame_codes[cb]);
         }
 
+#ifdef QWEN3_TTS_TIMING
+        timing.n_frames = frame + 1;
+#endif
+
         if (frame + 1 >= max_len) {
             break;
         }
@@ -2115,6 +2149,9 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
         std::vector<float> step_embd(cfg.hidden_size, 0.0f);
         std::vector<float> embd_row;
 
+#ifdef QWEN3_TTS_TIMING
+        t0 = clk::now();
+#endif
         if (!lookup_embedding_rows(model_.codec_embd, &frame_codes[0], 1,
                                    "inp_step_cb0", "step_cb0",
                                    embd_row)) {
@@ -2135,6 +2172,10 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                 step_embd[h] += embd_row[h];
             }
         }
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        timing.t_embed_lookup_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+#endif
 
         const float * trailing_row = (frame < trailing_len)
             ? trailing_text_hidden.data() + (size_t)frame * cfg.hidden_size
@@ -2143,13 +2184,43 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             step_embd[h] += trailing_row[h];
         }
 
+#ifdef QWEN3_TTS_TIMING
+        t0 = clk::now();
+#endif
         if (!forward_step(step_embd.data(), n_past, logits)) {
             return false;
         }
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        timing.t_talker_forward_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+#endif
         
         n_past++;
     }
     
+#ifdef QWEN3_TTS_TIMING
+    timing.t_generate_total_ms = std::chrono::duration<double, std::milli>(clk::now() - t_gen_start).count();
+    fprintf(stderr, "\nDetailed Generation Timing (%d frames):\n", timing.n_frames);
+    fprintf(stderr, "  Prefill build:      %8.1f ms\n", timing.t_prefill_build_ms);
+    fprintf(stderr, "  Prefill forward:    %8.1f ms\n", timing.t_prefill_forward_ms);
+    fprintf(stderr, "  Talker forward:     %8.1f ms (%.1f ms/frame)\n",
+            timing.t_talker_forward_ms, timing.n_frames > 0 ? timing.t_talker_forward_ms / timing.n_frames : 0.0);
+    fprintf(stderr, "  Code predictor:     %8.1f ms (%.1f ms/frame)\n",
+            timing.t_code_pred_ms, timing.n_frames > 0 ? timing.t_code_pred_ms / timing.n_frames : 0.0);
+    fprintf(stderr, "  Embed lookups:      %8.1f ms (%.1f ms/frame)\n",
+            timing.t_embed_lookup_ms, timing.n_frames > 0 ? timing.t_embed_lookup_ms / timing.n_frames : 0.0);
+    double accounted = timing.t_prefill_build_ms + timing.t_prefill_forward_ms +
+                       timing.t_talker_forward_ms + timing.t_code_pred_ms + timing.t_embed_lookup_ms;
+    fprintf(stderr, "  Other/overhead:     %8.1f ms\n", timing.t_generate_total_ms - accounted);
+    fprintf(stderr, "  ─────────────────────────────\n");
+    fprintf(stderr, "  Total generate:     %8.1f ms\n", timing.t_generate_total_ms);
+    if (timing.n_frames > 0) {
+        fprintf(stderr, "  Throughput:         %8.1f ms/frame (%.1f frames/s)\n",
+                timing.t_generate_total_ms / timing.n_frames,
+                1000.0 * timing.n_frames / timing.t_generate_total_ms);
+    }
+#endif
+
     return true;
 }
 

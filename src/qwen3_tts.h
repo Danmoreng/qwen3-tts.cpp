@@ -30,6 +30,7 @@ struct tts_params {
     
     // Print timing information
     bool print_timing = true;
+    
 };
 
 // TTS generation result
@@ -53,6 +54,7 @@ struct tts_result {
     int64_t t_generate_ms = 0;
     int64_t t_decode_ms = 0;
     int64_t t_total_ms = 0;
+    
 };
 
 // Progress callback type

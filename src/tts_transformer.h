@@ -8,8 +8,23 @@
 #include <map>
 #include <vector>
 #include <memory>
+#ifdef QWEN3_TTS_TIMING
+#include <chrono>
+#endif
 
 namespace qwen3_tts {
+
+#ifdef QWEN3_TTS_TIMING
+struct tts_timing {
+    double t_prefill_build_ms = 0;
+    double t_prefill_forward_ms = 0;
+    double t_talker_forward_ms = 0;
+    double t_code_pred_ms = 0;
+    double t_embed_lookup_ms = 0;
+    int32_t n_frames = 0;
+    double t_generate_total_ms = 0;
+};
+#endif
 
 #define QWEN3_TTS_MAX_NODES 16384
 
