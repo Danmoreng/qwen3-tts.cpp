@@ -1,0 +1,40 @@
+{
+  "hardware": "Darwin / arm",
+  "python_exe": "/Users/andyye/dev/qwen3-tts.cpp/.venv/bin/python",
+  "cpp_cli": "/Users/andyye/dev/qwen3-tts.cpp/build/qwen3-tts-cli",
+  "reference_audio": "/Users/andyye/dev/qwen3-tts.cpp/examples/readme_clone_input.wav",
+  "results": {
+    "basic": {
+      "pytorch": {
+        "real_s": 55.66,
+        "max_rss_bytes": 3128328192,
+        "max_rss_gb": 2.913482666015625,
+        "output_wav": "/Users/andyye/dev/qwen3-tts.cpp/benchmarks/py_basic.wav"
+      },
+      "cpp": {
+        "real_s": 17.45,
+        "max_rss_bytes": 2533949440,
+        "max_rss_gb": 2.35992431640625,
+        "output_wav": "/Users/andyye/dev/qwen3-tts.cpp/benchmarks/cpp_basic.wav"
+      },
+      "speedup_cpp_vs_pytorch": 3.1896848137535816,
+      "memory_delta_cpp_vs_pytorch_pct": 18.99988477935246
+    },
+    "voice_clone": {
+      "pytorch": {
+        "real_s": 83.58,
+        "max_rss_bytes": 2698559488,
+        "max_rss_gb": 2.5132293701171875,
+        "output_wav": "/Users/andyye/dev/qwen3-tts.cpp/benchmarks/py_clone.wav"
+      },
+      "cpp": {
+        "real_s": 20.52,
+        "max_rss_bytes": 2491678720,
+        "max_rss_gb": 2.320556640625,
+        "output_wav": "/Users/andyye/dev/qwen3-tts.cpp/benchmarks/cpp_clone.wav"
+      },
+      "speedup_cpp_vs_pytorch": 4.073099415204679,
+      "memory_delta_cpp_vs_pytorch_pct": 7.666340835544327
+    }
+  }
+}
