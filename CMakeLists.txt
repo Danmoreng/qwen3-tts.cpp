@@ -27,9 +27,35 @@ endif()
 # Find threads
 find_package(Threads REQUIRED)
 
-# GGML library paths
-set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
-set(GGML_BUILD_DIR "${GGML_DIR}/build")
+# GGML location/build mode
+set(QWEN3_TTS_GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml" CACHE PATH "Path to GGML source directory")
+option(QWEN3_TTS_EMBED_GGML "Build GGML as a CMake subdirectory instead of linking prebuilt libs" ON)
+set(QWEN3_TTS_GGML_BUILD_DIR "${QWEN3_TTS_GGML_DIR}/build" CACHE PATH "Path to prebuilt GGML build directory (used when QWEN3_TTS_EMBED_GGML=OFF)")
+
+set(GGML_DIR "${QWEN3_TTS_GGML_DIR}")
+set(GGML_BUILD_DIR "${QWEN3_TTS_GGML_BUILD_DIR}")
+
+if(NOT EXISTS "${GGML_DIR}/include/ggml.h")
+    message(FATAL_ERROR "GGML headers not found in '${GGML_DIR}'. Set -DQWEN3_TTS_GGML_DIR=<path-to-ggml>.")
+endif()
+
+if(QWEN3_TTS_EMBED_GGML)
+    if(NOT EXISTS "${GGML_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "GGML CMakeLists.txt not found in '${GGML_DIR}'.")
+    endif()
+    set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
+endif()
+
+function(qwen3_link_ggml target_name)
+    if(QWEN3_TTS_EMBED_GGML)
+        target_link_libraries(${target_name} PUBLIC ggml ggml-base ggml-cpu)
+    else()
+        target_link_directories(${target_name} PUBLIC ${GGML_BUILD_DIR}/src)
+        target_link_libraries(${target_name} PUBLIC ggml ggml-base ggml-cpu)
+    endif()
+endfunction()
 
 # Text tokenizer library
 add_library(text_tokenizer STATIC
@@ -40,15 +66,8 @@ target_include_directories(text_tokenizer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GGML_DIR}/include
 )
-target_link_directories(text_tokenizer PUBLIC
-    ${GGML_BUILD_DIR}/src
-)
-target_link_libraries(text_tokenizer PUBLIC
-    ggml
-    ggml-base
-    ggml-cpu
-    Threads::Threads
-)
+qwen3_link_ggml(text_tokenizer)
+target_link_libraries(text_tokenizer PUBLIC Threads::Threads)
 
 # TTS Transformer library (GGML-based + optional CoreML bridge)
 set(TTS_TRANSFORMER_SOURCES
@@ -69,15 +88,8 @@ target_include_directories(tts_transformer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GGML_DIR}/include
 )
-target_link_directories(tts_transformer PUBLIC
-    ${GGML_BUILD_DIR}/src
-)
-target_link_libraries(tts_transformer PUBLIC
-    ggml
-    ggml-base
-    ggml-cpu
-    Threads::Threads
-)
+qwen3_link_ggml(tts_transformer)
+target_link_libraries(tts_transformer PUBLIC Threads::Threads)
 if(APPLE AND QWEN3_TTS_COREML)
     target_link_libraries(tts_transformer PUBLIC
         "-framework Foundation"
@@ -94,15 +106,8 @@ target_include_directories(audio_tokenizer_encoder PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GGML_DIR}/include
 )
-target_link_directories(audio_tokenizer_encoder PUBLIC
-    ${GGML_BUILD_DIR}/src
-)
-target_link_libraries(audio_tokenizer_encoder PUBLIC
-    ggml
-    ggml-base
-    ggml-cpu
-    Threads::Threads
-)
+qwen3_link_ggml(audio_tokenizer_encoder)
+target_link_libraries(audio_tokenizer_encoder PUBLIC Threads::Threads)
 
 # Audio tokenizer decoder library (GGML-based)
 add_library(audio_tokenizer_decoder STATIC
@@ -113,15 +118,8 @@ target_include_directories(audio_tokenizer_decoder PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GGML_DIR}/include
 )
-target_link_directories(audio_tokenizer_decoder PUBLIC
-    ${GGML_BUILD_DIR}/src
-)
-target_link_libraries(audio_tokenizer_decoder PUBLIC
-    ggml
-    ggml-base
-    ggml-cpu
-    Threads::Threads
-)
+qwen3_link_ggml(audio_tokenizer_decoder)
+target_link_libraries(audio_tokenizer_decoder PUBLIC Threads::Threads)
 
 # Qwen3 TTS library (full pipeline)
 add_library(qwen3_tts STATIC
@@ -138,6 +136,9 @@ target_link_libraries(qwen3_tts PUBLIC
     audio_tokenizer_decoder
     Threads::Threads
 )
+if(WIN32)
+    target_link_libraries(qwen3_tts PUBLIC Psapi)
+endif()
 
 # CLI executable
 add_executable(qwen3-tts-cli
