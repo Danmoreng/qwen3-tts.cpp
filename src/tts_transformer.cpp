@@ -9,31 +9,55 @@
 #include <numeric>
 #include <random>
 #include <unordered_set>
+#include <cstdlib>
 
 namespace qwen3_tts {
 
 TTSTransformer::TTSTransformer() = default;
 
 TTSTransformer::~TTSTransformer() {
+    unload_model();
+}
+
+void TTSTransformer::unload_model() {
     free_tts_kv_cache(state_.cache);
     free_tts_kv_cache(state_.code_pred_cache);
     free_transformer_model(model_);
-    
+
+    coreml_code_predictor_.unload();
+    use_coreml_code_predictor_ = false;
+    coreml_code_predictor_path_.clear();
+    skip_ggml_code_pred_layers_ = false;
+
     if (state_.sched) {
         ggml_backend_sched_free(state_.sched);
         state_.sched = nullptr;
     }
     if (state_.backend) {
-        ggml_backend_free(state_.backend);
+        release_preferred_backend(state_.backend);
         state_.backend = nullptr;
     }
     if (state_.backend_cpu) {
         ggml_backend_free(state_.backend_cpu);
         state_.backend_cpu = nullptr;
     }
+
+    state_.compute_meta.clear();
+    last_hidden_.clear();
+    embd_row_fp16_scratch_.clear();
 }
 
 bool TTSTransformer::load_model(const std::string & model_path) {
+    unload_model();
+
+    skip_ggml_code_pred_layers_ = false;
+#if defined(__APPLE__)
+    const char * use_coreml_env = std::getenv("QWEN3_TTS_USE_COREML");
+    if (use_coreml_env && use_coreml_env[0] != '\0' && use_coreml_env[0] != '0') {
+        skip_ggml_code_pred_layers_ = true;
+    }
+#endif
+
     struct ggml_context * meta_ctx = nullptr;
     struct gguf_init_params params = {
         /*.no_alloc =*/ true,
@@ -96,8 +120,54 @@ bool TTSTransformer::load_model(const std::string & model_path) {
     }
     
     state_.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
+
+    if (!try_init_coreml_code_predictor(model_path)) {
+        return false;
+    }
     
     return true;
+}
+
+bool TTSTransformer::try_init_coreml_code_predictor(const std::string & model_path) {
+    use_coreml_code_predictor_ = false;
+    coreml_code_predictor_path_.clear();
+
+    const char * use_coreml_env = std::getenv("QWEN3_TTS_USE_COREML");
+    if (!use_coreml_env || use_coreml_env[0] == '\0' || use_coreml_env[0] == '0') {
+        return true;
+    }
+
+#if !defined(__APPLE__)
+    fprintf(stderr, "  CoreML code predictor requested but this build is not on Apple platform\n");
+    return true;
+#else
+    std::string coreml_path;
+    const char * override_env = std::getenv("QWEN3_TTS_COREML_MODEL");
+    if (override_env && override_env[0] != '\0') {
+        coreml_path = override_env;
+    } else {
+        size_t slash = model_path.find_last_of("/\\");
+        const std::string model_dir = (slash == std::string::npos) ? "." : model_path.substr(0, slash);
+        coreml_path = model_dir + "/coreml/code_predictor.mlpackage";
+    }
+
+    if (!coreml_code_predictor_.load(coreml_path, model_.config.n_codebooks - 1)) {
+        if (skip_ggml_code_pred_layers_) {
+            error_msg_ = "CoreML code predictor load failed in strict mode: " + coreml_code_predictor_.get_error();
+            return false;
+        } else {
+            fprintf(stderr, "  CoreML code predictor load failed: %s\n",
+                    coreml_code_predictor_.get_error().c_str());
+            fprintf(stderr, "  Falling back to GGML code predictor\n");
+            return true;
+        }
+    }
+
+    use_coreml_code_predictor_ = true;
+    coreml_code_predictor_path_ = coreml_path;
+    fprintf(stderr, "  CoreML code predictor enabled: %s\n", coreml_code_predictor_path_.c_str());
+    return true;
+#endif
 }
 
 bool TTSTransformer::parse_config(struct gguf_context * ctx) {
@@ -348,6 +418,9 @@ bool TTSTransformer::create_tensors(struct gguf_context * ctx) {
                 continue;
             }
         } else if (strstr(name, "code_pred.blk.")) {
+            if (skip_ggml_code_pred_layers_) {
+                continue;
+            }
             int layer_idx = -1;
             if (sscanf(name, "code_pred.blk.%d.", &layer_idx) == 1 && 
                 layer_idx >= 0 && layer_idx < cfg.code_pred_layers) {
@@ -409,6 +482,9 @@ bool TTSTransformer::create_tensors(struct gguf_context * ctx) {
                 continue;
             }
          } else if (strstr(name, "code_pred.lm_head.")) {
+             if (skip_ggml_code_pred_layers_) {
+                 continue;
+             }
              int cb_idx = -1;
              if (sscanf(name, "code_pred.lm_head.%d.weight", &cb_idx) == 1 &&
                  cb_idx >= 0 && cb_idx < cfg.n_codebooks - 1) {
@@ -419,6 +495,9 @@ bool TTSTransformer::create_tensors(struct gguf_context * ctx) {
                  continue;
              }
          } else if (strstr(name, "code_pred.output_norm.weight")) {
+             if (skip_ggml_code_pred_layers_) {
+                 continue;
+             }
              ne[0] = cfg.hidden_size;
              n_dims = 1;
          } else {
@@ -512,14 +591,14 @@ bool TTSTransformer::load_tensor_data(const std::string & path, struct gguf_cont
     model_.buffer = ggml_backend_alloc_ctx_tensors(model_.ctx, backend);
     if (!model_.buffer) {
         error_msg_ = "Failed to allocate tensor buffer";
-        ggml_backend_free(backend);
+        release_preferred_backend(backend);
         return false;
     }
     
     FILE * f = fopen(path.c_str(), "rb");
     if (!f) {
         error_msg_ = "Failed to open file for reading: " + path;
-        ggml_backend_free(backend);
+        release_preferred_backend(backend);
         return false;
     }
     
@@ -544,14 +623,14 @@ bool TTSTransformer::load_tensor_data(const std::string & path, struct gguf_cont
         if (fseek(f, data_offset + offset, SEEK_SET) != 0) {
             error_msg_ = "Failed to seek to tensor data: " + std::string(name);
             fclose(f);
-            ggml_backend_free(backend);
+            release_preferred_backend(backend);
             return false;
         }
         
         if (fread(read_buf.data(), 1, nbytes, f) != nbytes) {
             error_msg_ = "Failed to read tensor data: " + std::string(name);
             fclose(f);
-            ggml_backend_free(backend);
+            release_preferred_backend(backend);
             return false;
         }
         
@@ -559,7 +638,7 @@ bool TTSTransformer::load_tensor_data(const std::string & path, struct gguf_cont
     }
     
     fclose(f);
-    ggml_backend_free(backend);
+    release_preferred_backend(backend);
     
     return true;
 }
@@ -688,6 +767,19 @@ bool TTSTransformer::lookup_embedding_rows(struct ggml_tensor * embedding, const
         return true;
     }
 
+    const int32_t embd_dim = (int32_t) embedding->ne[0];
+    if (n_tokens <= 32 &&
+        (embedding->type == GGML_TYPE_F16 || embedding->type == GGML_TYPE_F32)) {
+        output.resize((size_t) embd_dim * n_tokens);
+        for (int32_t t = 0; t < n_tokens; ++t) {
+            if (!lookup_single_embedding_row(embedding, token_ids[t],
+                                             output.data() + (size_t) t * embd_dim)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     struct ggml_init_params params = {
         /*.mem_size   =*/ state_.compute_meta.size(),
         /*.mem_buffer =*/ state_.compute_meta.data(),
@@ -737,6 +829,49 @@ bool TTSTransformer::lookup_embedding_rows(struct ggml_tensor * embedding, const
 
     ggml_backend_sched_reset(state_.sched);
     ggml_free(ctx0);
+    return true;
+}
+
+bool TTSTransformer::lookup_single_embedding_row(struct ggml_tensor * embedding, int32_t token_id,
+                                                 float * out_row) {
+    if (!embedding) {
+        error_msg_ = "Embedding tensor not found";
+        return false;
+    }
+    if (!out_row) {
+        error_msg_ = "Embedding output row is null";
+        return false;
+    }
+
+    const int64_t embd_dim = embedding->ne[0];
+    const int64_t vocab_size = embedding->ne[1];
+    if (token_id < 0 || token_id >= vocab_size) {
+        error_msg_ = "Embedding token ID out of range";
+        return false;
+    }
+
+    const size_t row_offset = (size_t) token_id * embedding->nb[1];
+    if (embedding->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(embedding, out_row, row_offset, (size_t) embd_dim * sizeof(float));
+        return true;
+    }
+    if (embedding->type == GGML_TYPE_F16) {
+        embd_row_fp16_scratch_.resize((size_t) embd_dim);
+        ggml_backend_tensor_get(embedding, embd_row_fp16_scratch_.data(),
+                                row_offset, (size_t) embd_dim * sizeof(ggml_fp16_t));
+        for (int64_t i = 0; i < embd_dim; ++i) {
+            out_row[i] = ggml_fp16_to_fp32(embd_row_fp16_scratch_[i]);
+        }
+        return true;
+    }
+
+    std::vector<int32_t> single_token = { token_id };
+    std::vector<float> single_out;
+    if (!lookup_embedding_rows(embedding, single_token.data(), 1,
+                               "inp_compat_embed", "out_compat_embed", single_out)) {
+        return false;
+    }
+    memcpy(out_row, single_out.data(), (size_t) embd_dim * sizeof(float));
     return true;
 }
 
@@ -1671,7 +1806,8 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
     }
     
     if (state_.cache.n_ctx == 0) {
-        if (!init_kv_cache(4096)) {
+        const int32_t min_ctx = std::max<int32_t>(256, n_past + n_tokens + 16);
+        if (!init_kv_cache(min_ctx)) {
             return false;
         }
     }
@@ -1828,7 +1964,8 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
     }
 
     if (state_.cache.n_ctx == 0) {
-        if (!init_kv_cache(4096)) {
+        const int32_t min_ctx = std::max<int32_t>(256, n_past + 1 + 16);
+        if (!init_kv_cache(min_ctx)) {
             return false;
         }
     }
@@ -2015,6 +2152,122 @@ static int32_t argmax(const float * data, int32_t n) {
     return max_idx;
 }
 
+bool TTSTransformer::predict_codes_autoregressive_coreml(const float * hidden,
+                                                         int32_t codebook_0_token,
+                                                         std::vector<int32_t> & output,
+                                                         float temperature,
+                                                         int32_t top_k) {
+    if (!use_coreml_code_predictor_ || !coreml_code_predictor_.is_loaded()) {
+        error_msg_ = "CoreML code predictor is not loaded";
+        return false;
+    }
+
+    const auto & cfg = model_.config;
+    const int32_t n_steps = cfg.n_codebooks - 1;
+
+    output.resize(n_steps);
+    std::vector<float> logits_data(cfg.code_pred_vocab_size);
+    std::vector<float> code_probs(cfg.code_pred_vocab_size);
+    std::vector<float> seq_embd((size_t)16 * cfg.hidden_size, 0.0f);
+
+#ifdef QWEN3_TTS_TIMING
+    using clk = std::chrono::high_resolution_clock;
+    auto t0 = clk::now(), t1 = t0;
+#endif
+
+    auto sample_or_argmax = [&](float * logits_ptr, int32_t vocab_size) -> int32_t {
+        if (temperature <= 0.0f) {
+            return argmax(logits_ptr, vocab_size);
+        }
+
+        for (int32_t i = 0; i < vocab_size; ++i) {
+            logits_ptr[i] /= temperature;
+        }
+
+        if (top_k > 0 && top_k < vocab_size) {
+            std::vector<std::pair<float, int32_t>> scored(vocab_size);
+            for (int32_t i = 0; i < vocab_size; ++i) {
+                scored[i] = {logits_ptr[i], i};
+            }
+            std::partial_sort(scored.begin(), scored.begin() + top_k, scored.end(),
+                [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                    return a.first > b.first;
+                });
+            float threshold = scored[top_k - 1].first;
+            for (int32_t i = 0; i < vocab_size; ++i) {
+                if (logits_ptr[i] < threshold) {
+                    logits_ptr[i] = -INFINITY;
+                }
+            }
+        }
+
+        float max_logit = *std::max_element(logits_ptr, logits_ptr + vocab_size);
+        double sum = 0.0;
+        for (int32_t i = 0; i < vocab_size; ++i) {
+            code_probs[i] = expf(logits_ptr[i] - max_logit);
+            sum += code_probs[i];
+        }
+        for (int32_t i = 0; i < vocab_size; ++i) {
+            code_probs[i] = (float)(code_probs[i] / sum);
+        }
+
+        std::discrete_distribution<int32_t> dist(code_probs.begin(), code_probs.begin() + vocab_size);
+        return dist(rng_);
+    };
+
+    memcpy(seq_embd.data(), hidden, (size_t)cfg.hidden_size * sizeof(float));
+    if (!lookup_single_embedding_row(model_.codec_embd, codebook_0_token,
+                                     seq_embd.data() + cfg.hidden_size)) {
+        return false;
+    }
+
+#ifdef QWEN3_TTS_TIMING
+    t1 = clk::now();
+    if (timing_) timing_->t_code_pred_init_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+#endif
+
+    for (int32_t step = 0; step < n_steps; ++step) {
+        if (step > 0) {
+            float * dst = seq_embd.data() + (size_t)(step + 1) * cfg.hidden_size;
+            if (!lookup_single_embedding_row(model_.code_pred_embd[step - 1], output[step - 1], dst)) {
+                return false;
+            }
+        }
+
+#ifdef QWEN3_TTS_TIMING
+        t0 = clk::now();
+#endif
+        if (!coreml_code_predictor_.predict_step(step, seq_embd.data(), step + 2, cfg.hidden_size, logits_data)) {
+            error_msg_ = "CoreML predictor step failed: " + coreml_code_predictor_.get_error();
+            return false;
+        }
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        if (timing_) timing_->t_code_pred_compute_ms += dt_ms;
+        if (timing_) timing_->t_code_pred_coreml_ms += dt_ms;
+#endif
+
+        if ((int32_t)logits_data.size() != cfg.code_pred_vocab_size) {
+            error_msg_ = "CoreML predictor returned unexpected logits size";
+            return false;
+        }
+        output[step] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+
+#ifdef QWEN3_TTS_TIMING
+        if (timing_) {
+            if (step == 0) {
+                timing_->t_code_pred_prefill_ms += dt_ms;
+            } else {
+                timing_->t_code_pred_steps_ms += dt_ms;
+            }
+        }
+#endif
+    }
+
+    return true;
+}
+
 bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t codebook_0_token,
                                                    std::vector<int32_t> & output,
                                                    float temperature, int32_t top_k) {
@@ -2029,16 +2282,28 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
     using clk = std::chrono::high_resolution_clock;
     auto t0 = clk::now(), t1 = t0;
 #endif
+
+    if (use_coreml_code_predictor_ && coreml_code_predictor_.is_loaded()) {
+        if (predict_codes_autoregressive_coreml(hidden, codebook_0_token, output, temperature, top_k)) {
+            return true;
+        }
+        if (skip_ggml_code_pred_layers_) {
+            return false;
+        }
+        fprintf(stderr, "  CoreML code predictor failed, falling back to GGML: %s\n", error_msg_.c_str());
+        use_coreml_code_predictor_ = false;
+    }
     
-    if (!init_code_pred_kv_cache(16)) {
-        return false;
+    if (state_.code_pred_cache.n_ctx < 16) {
+        if (!init_code_pred_kv_cache(16)) {
+            return false;
+        }
     }
     clear_code_pred_kv_cache();
     
     output.resize(15);
     std::vector<float> logits_data(cfg.code_pred_vocab_size);
     
-    std::mt19937 rng(std::random_device{}());
     std::vector<float> code_probs(cfg.code_pred_vocab_size);
     
     // Helper lambda: temperature + top-k sampling (or greedy if temperature <= 0)
@@ -2079,13 +2344,11 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
         // Sample
         std::discrete_distribution<int32_t> dist(code_probs.begin(), code_probs.begin() + vocab_size);
-        return dist(rng);
+        return dist(rng_);
     };
     
-    std::vector<float> cb0_embd;
-    if (!lookup_embedding_rows(model_.codec_embd, &codebook_0_token, 1,
-                                "inp_codepred_cb0", "codepred_cb0",
-                                cb0_embd)) {
+    std::vector<float> cb0_embd(cfg.hidden_size);
+    if (!lookup_single_embedding_row(model_.codec_embd, codebook_0_token, cb0_embd.data())) {
         return false;
     }
 #ifdef QWEN3_TTS_TIMING
@@ -2305,8 +2568,6 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     }
     
     const auto & cfg = model_.config;
-    
-    clear_kv_cache();
 
     std::vector<float> prefill_embd;
     std::vector<float> trailing_text_hidden;
@@ -2326,6 +2587,14 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 
     const int32_t prefill_len = (int32_t)(prefill_embd.size() / cfg.hidden_size);
     const int32_t trailing_len = (int32_t)(trailing_text_hidden.size() / cfg.hidden_size);
+
+    const int32_t required_ctx = prefill_len + max_len + 8;
+    if (state_.cache.n_ctx < required_ctx || state_.cache.n_ctx > std::max<int32_t>(required_ctx * 2, 512)) {
+        if (!init_kv_cache(required_ctx)) {
+            return false;
+        }
+    }
+    clear_kv_cache();
     
     std::vector<float> hidden_out;
     std::vector<float> logits;
@@ -2349,8 +2618,9 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     std::unordered_set<int32_t> generated_cb0_tokens;
     const int32_t suppress_start = cfg.codec_vocab_size - 1024;
     
-    std::mt19937 rng(std::random_device{}());
     std::vector<float> probs(cfg.codec_vocab_size);
+    std::vector<float> step_embd(cfg.hidden_size, 0.0f);
+    std::vector<float> embd_row(cfg.hidden_size);
     
     for (int frame = 0; frame < max_len; ++frame) {
         // Suppress tokens in [codec_vocab_size - 1024, codec_vocab_size), except codec_eos_id
@@ -2409,7 +2679,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             }
 
             std::discrete_distribution<int32_t> dist(probs.begin(), probs.end());
-            next_token = dist(rng);
+            next_token = dist(rng_);
         }
         
         if (next_token == cfg.codec_eos_id) {
@@ -2447,26 +2717,21 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             break;
         }
 
-        std::vector<float> step_embd(cfg.hidden_size, 0.0f);
-        std::vector<float> embd_row;
+        std::fill(step_embd.begin(), step_embd.end(), 0.0f);
 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        if (!lookup_embedding_rows(model_.codec_embd, &frame_codes[0], 1,
-                                   "inp_step_cb0", "step_cb0",
-                                   embd_row)) {
+        if (!lookup_single_embedding_row(model_.codec_embd, frame_codes[0], embd_row.data())) {
             return false;
         }
         for (int32_t h = 0; h < cfg.hidden_size; ++h) {
-            step_embd[h] += embd_row[h];
+            step_embd[h] = embd_row[h];
         }
 
         for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
             int32_t code_token = frame_codes[cb];
-            if (!lookup_embedding_rows(model_.code_pred_embd[cb - 1], &code_token, 1,
-                                       "inp_step_cb", "step_cb",
-                                       embd_row)) {
+            if (!lookup_single_embedding_row(model_.code_pred_embd[cb - 1], code_token, embd_row.data())) {
                 return false;
             }
             for (int32_t h = 0; h < cfg.hidden_size; ++h) {
@@ -2519,6 +2784,10 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     fprintf(stderr, "      Compute:        %8.1f ms   (%.1f ms/frame)\n", t.t_talker_compute_ms, nf > 0 ? t.t_talker_compute_ms / nf : 0.0);
     fprintf(stderr, "      Data I/O:       %8.1f ms   (%.1f ms/frame)\n", t.t_talker_data_ms, nf > 0 ? t.t_talker_data_ms / nf : 0.0);
     fprintf(stderr, "\n  Code predictor (total / per-frame):\n");
+    fprintf(stderr, "    Backend:          %s\n", use_coreml_code_predictor_ ? "CoreML (CPU+NE)" : "GGML");
+    if (use_coreml_code_predictor_ && !coreml_code_predictor_path_.empty()) {
+        fprintf(stderr, "    CoreML model:     %s\n", coreml_code_predictor_path_.c_str());
+    }
     fprintf(stderr, "    Total:            %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_ms, nf > 0 ? t.t_code_pred_ms / nf : 0.0);
     fprintf(stderr, "      Init/KV/embed:  %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_init_ms, nf > 0 ? t.t_code_pred_init_ms / nf : 0.0);
     fprintf(stderr, "      Prefill (2tok): %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_prefill_ms, nf > 0 ? t.t_code_pred_prefill_ms / nf : 0.0);
@@ -2527,6 +2796,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     fprintf(stderr, "      Graph alloc:    %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_graph_alloc_ms, nf > 0 ? t.t_code_pred_graph_alloc_ms / nf : 0.0);
     fprintf(stderr, "      Compute:        %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_compute_ms, nf > 0 ? t.t_code_pred_compute_ms / nf : 0.0);
     fprintf(stderr, "      Data I/O:       %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_data_ms, nf > 0 ? t.t_code_pred_data_ms / nf : 0.0);
+    fprintf(stderr, "      CoreML total:   %8.1f ms   (%.1f ms/frame)\n", t.t_code_pred_coreml_ms, nf > 0 ? t.t_code_pred_coreml_ms / nf : 0.0);
     fprintf(stderr, "\n  Embed lookups:      %8.1f ms   (%.1f ms/frame)\n", t.t_embed_lookup_ms, nf > 0 ? t.t_embed_lookup_ms / nf : 0.0);
     double accounted = t.t_prefill_build_ms + t.t_prefill_forward_ms + t.t_talker_forward_ms + t.t_code_pred_ms + t.t_embed_lookup_ms;
     fprintf(stderr, "  Other/overhead:     %8.1f ms\n", t.t_generate_total_ms - accounted);

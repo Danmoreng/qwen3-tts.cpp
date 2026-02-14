@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <cstdint>
 
 namespace qwen3_tts {
 
@@ -60,6 +61,14 @@ struct tts_result {
     int64_t t_generate_ms = 0;
     int64_t t_decode_ms = 0;
     int64_t t_total_ms = 0;
+
+    // Process memory snapshots (bytes)
+    uint64_t mem_rss_start_bytes = 0;
+    uint64_t mem_rss_end_bytes = 0;
+    uint64_t mem_rss_peak_bytes = 0;
+    uint64_t mem_phys_start_bytes = 0;
+    uint64_t mem_phys_end_bytes = 0;
+    uint64_t mem_phys_peak_bytes = 0;
     
 };
 
@@ -120,7 +129,13 @@ private:
     AudioTokenizerDecoder audio_decoder_;
     
     bool models_loaded_ = false;
+    bool encoder_loaded_ = false;
+    bool transformer_loaded_ = false;
+    bool decoder_loaded_ = false;
+    bool low_mem_mode_ = false;
     std::string error_msg_;
+    std::string tts_model_path_;
+    std::string decoder_model_path_;
     tts_progress_callback_t progress_callback_;
 };
 

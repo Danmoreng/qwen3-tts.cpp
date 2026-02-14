@@ -134,7 +134,7 @@ AudioTokenizerEncoder::~AudioTokenizerEncoder() {
         state_.sched = nullptr;
     }
     if (state_.backend) {
-        ggml_backend_free(state_.backend);
+        release_preferred_backend(state_.backend);
         state_.backend = nullptr;
     }
     if (state_.backend_cpu) {
@@ -707,67 +707,17 @@ bool AudioTokenizerEncoder::encode(const float * samples, int32_t n_samples,
         return false;
     }
     
-    ggml_backend_sched_free(state_.sched);
-    std::vector<ggml_backend_t> backends;
-    backends.push_back(state_.backend);
-    if (state_.backend_cpu) {
-        backends.push_back(state_.backend_cpu);
-    }
-    state_.sched = ggml_backend_sched_new(backends.data(), nullptr, (int)backends.size(), QWEN3_TTS_MAX_NODES, false, true);
-    
     std::vector<float> mel;
     int32_t n_frames;
     if (!compute_mel_spectrogram(samples, n_samples, mel, n_frames)) {
         return false;
     }
     
-    struct weight_data {
-        struct ggml_tensor * tensor;
-        void * data;
-        size_t size;
-    };
-    std::vector<weight_data> weights_to_copy;
-    
-    auto save_weight = [&weights_to_copy](struct ggml_tensor * t) {
-        if (t && t->data) {
-            weights_to_copy.push_back({t, t->data, ggml_nbytes(t)});
-        }
-    };
-    
-    save_weight(model_.conv0_w);
-    save_weight(model_.conv0_b);
-    for (int blk = 0; blk < 3; ++blk) {
-        save_weight(model_.blocks[blk].tdnn1_w);
-        save_weight(model_.blocks[blk].tdnn1_b);
-        for (int i = 0; i < 7; ++i) {
-            save_weight(model_.blocks[blk].res2net_w[i]);
-            save_weight(model_.blocks[blk].res2net_b[i]);
-        }
-        save_weight(model_.blocks[blk].tdnn2_w);
-        save_weight(model_.blocks[blk].tdnn2_b);
-        save_weight(model_.blocks[blk].se_conv1_w);
-        save_weight(model_.blocks[blk].se_conv1_b);
-        save_weight(model_.blocks[blk].se_conv2_w);
-        save_weight(model_.blocks[blk].se_conv2_b);
-    }
-    save_weight(model_.mfa_w);
-    save_weight(model_.mfa_b);
-    save_weight(model_.asp_tdnn_w);
-    save_weight(model_.asp_tdnn_b);
-    save_weight(model_.asp_conv_w);
-    save_weight(model_.asp_conv_b);
-    save_weight(model_.fc_w);
-    save_weight(model_.fc_b);
-    
     struct ggml_cgraph * gf = build_graph(n_frames);
 
     if (!ggml_backend_sched_alloc_graph(state_.sched, gf)) {
         error_msg_ = "Failed to allocate graph";
         return false;
-    }
-
-    for (const auto & w : weights_to_copy) {
-        ggml_backend_tensor_set(w.tensor, w.data, 0, w.size);
     }
     
     struct ggml_tensor * mel_tensor = ggml_graph_get_tensor(gf, "mel");

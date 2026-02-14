@@ -8,6 +8,7 @@ build/
 # Models (too large for git)
 models/*.gguf
 models/Qwen3-TTS-*/
+models/coreml/
 
 # Reference outputs (generated)
 reference/*.bin
@@ -18,6 +19,8 @@ reference/debug/
 test_output/
 test_results.txt
 *.wav
+tmp*.mlpackage/
+third_party/
 
 # IDE
 .vscode/

@@ -3,11 +3,13 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#include "coreml_code_predictor.h"
 
 #include <string>
 #include <map>
 #include <vector>
 #include <memory>
+#include <random>
 #ifdef QWEN3_TTS_TIMING
 #include <chrono>
 #endif
@@ -40,6 +42,7 @@ struct tts_timing {
     double t_code_pred_graph_alloc_ms = 0;  // sched_alloc_graph
     double t_code_pred_compute_ms = 0;      // sched_graph_compute
     double t_code_pred_data_ms = 0;         // tensor_set + tensor_get + reset
+    double t_code_pred_coreml_ms = 0;       // CoreML predictor compute + I/O
 
     // Embed lookups in generate() loop
     double t_embed_lookup_ms = 0;
@@ -191,6 +194,9 @@ public:
     
     // Load model from GGUF file
     bool load_model(const std::string & model_path);
+
+    // Release all model/runtime resources
+    void unload_model();
     
     // Initialize KV cache
     bool init_kv_cache(int32_t n_ctx);
@@ -274,6 +280,12 @@ public:
                             std::vector<float> & output);
     
 private:
+    bool try_init_coreml_code_predictor(const std::string & model_path);
+    bool predict_codes_autoregressive_coreml(const float * hidden, int32_t codebook_0_token,
+                                             std::vector<int32_t> & output,
+                                             float temperature,
+                                             int32_t top_k);
+
     bool build_prefill_graph(const int32_t * text_tokens, int32_t n_tokens,
                              const float * speaker_embd, int32_t language_id,
                              std::vector<float> & prefill_embd,
@@ -290,6 +302,8 @@ private:
     bool lookup_embedding_rows(struct ggml_tensor * embedding, const int32_t * token_ids,
                                int32_t n_tokens, const char * input_name,
                                const char * output_name, std::vector<float> & output);
+    bool lookup_single_embedding_row(struct ggml_tensor * embedding, int32_t token_id,
+                                     float * out_row);
     
     // Build computation graph for code predictor
     struct ggml_cgraph * build_code_pred_graph(int32_t n_prev_codes);
@@ -318,6 +332,12 @@ private:
     
     // Cached hidden states from last forward pass
     std::vector<float> last_hidden_;
+    std::vector<ggml_fp16_t> embd_row_fp16_scratch_;
+    std::mt19937 rng_{std::random_device{}()};
+    CoreMLCodePredictor coreml_code_predictor_;
+    bool use_coreml_code_predictor_ = false;
+    std::string coreml_code_predictor_path_;
+    bool skip_ggml_code_pred_layers_ = false;
 
 #ifdef QWEN3_TTS_TIMING
     tts_timing * timing_ = nullptr;

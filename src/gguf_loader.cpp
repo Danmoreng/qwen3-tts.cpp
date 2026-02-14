@@ -6,6 +6,18 @@
 
 namespace qwen3_tts {
 
+namespace {
+struct shared_backend_state {
+    ggml_backend_t backend = nullptr;
+    int32_t ref_count = 0;
+};
+
+shared_backend_state & get_shared_backend_state() {
+    static shared_backend_state state;
+    return state;
+}
+}
+
 GGUFLoader::GGUFLoader() = default;
 
 GGUFLoader::~GGUFLoader() {
@@ -14,6 +26,12 @@ GGUFLoader::~GGUFLoader() {
 
 ggml_backend_t init_preferred_backend(const char * component_name, std::string * error_msg) {
     if (error_msg) error_msg->clear();
+
+    auto & shared = get_shared_backend_state();
+    if (shared.backend) {
+        shared.ref_count++;
+        return shared.backend;
+    }
 
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
     if (!backend) {
@@ -31,7 +49,31 @@ ggml_backend_t init_preferred_backend(const char * component_name, std::string *
         *error_msg = "Failed to initialize backend (IGPU/GPU/ACCEL/CPU) for " + std::string(name);
     }
 
+    if (backend) {
+        shared.backend = backend;
+        shared.ref_count = 1;
+    }
+
     return backend;
+}
+
+void release_preferred_backend(ggml_backend_t backend) {
+    if (!backend) {
+        return;
+    }
+
+    auto & shared = get_shared_backend_state();
+    if (shared.backend == backend) {
+        shared.ref_count--;
+        if (shared.ref_count <= 0) {
+            ggml_backend_free(shared.backend);
+            shared.backend = nullptr;
+            shared.ref_count = 0;
+        }
+        return;
+    }
+
+    ggml_backend_free(backend);
 }
 
 bool GGUFLoader::open(const std::string & path) {

@@ -18,6 +18,12 @@ if(QWEN3_TTS_TIMING)
     add_compile_definitions(QWEN3_TTS_TIMING)
 endif()
 
+# CoreML code predictor bridge (macOS only)
+option(QWEN3_TTS_COREML "Enable CoreML code predictor bridge on macOS" ON)
+if(APPLE AND QWEN3_TTS_COREML)
+    enable_language(OBJCXX)
+endif()
+
 # Find threads
 find_package(Threads REQUIRED)
 
@@ -44,10 +50,20 @@ target_link_libraries(text_tokenizer PUBLIC
     Threads::Threads
 )
 
-# TTS Transformer library (GGML-based)
-add_library(tts_transformer STATIC
+# TTS Transformer library (GGML-based + optional CoreML bridge)
+set(TTS_TRANSFORMER_SOURCES
     src/gguf_loader.cpp
     src/tts_transformer.cpp
+)
+if(APPLE AND QWEN3_TTS_COREML)
+    list(APPEND TTS_TRANSFORMER_SOURCES src/coreml_code_predictor.mm)
+    set_source_files_properties(src/coreml_code_predictor.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+else()
+    list(APPEND TTS_TRANSFORMER_SOURCES src/coreml_code_predictor_stub.cpp)
+endif()
+
+add_library(tts_transformer STATIC
+    ${TTS_TRANSFORMER_SOURCES}
 )
 target_include_directories(tts_transformer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -62,6 +78,12 @@ target_link_libraries(tts_transformer PUBLIC
     ggml-cpu
     Threads::Threads
 )
+if(APPLE AND QWEN3_TTS_COREML)
+    target_link_libraries(tts_transformer PUBLIC
+        "-framework Foundation"
+        "-framework CoreML"
+    )
+endif()
 
 # Audio tokenizer encoder library (GGML-based)
 add_library(audio_tokenizer_encoder STATIC
@@ -170,6 +192,7 @@ install(FILES
     src/gguf_loader.h 
     src/text_tokenizer.h 
     src/tts_transformer.h 
+    src/coreml_code_predictor.h
     src/audio_tokenizer_encoder.h 
     src/audio_tokenizer_decoder.h 
     src/qwen3_tts.h

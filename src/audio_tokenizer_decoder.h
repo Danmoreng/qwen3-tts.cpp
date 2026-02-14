@@ -163,6 +163,9 @@ public:
     
     // Load model from GGUF file (tokenizer model)
     bool load_model(const std::string & model_path);
+
+    // Release all model/runtime resources
+    void unload_model();
     
     // Decode audio codes to waveform
     // codes: audio codes [n_frames, n_codebooks] as int32_t (row-major)

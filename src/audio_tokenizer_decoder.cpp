@@ -14,6 +14,10 @@ namespace qwen3_tts {
 AudioTokenizerDecoder::AudioTokenizerDecoder() = default;
 
 AudioTokenizerDecoder::~AudioTokenizerDecoder() {
+    unload_model();
+}
+
+void AudioTokenizerDecoder::unload_model() {
     free_audio_decoder_model(model_);
     
     if (state_.sched) {
@@ -21,13 +25,16 @@ AudioTokenizerDecoder::~AudioTokenizerDecoder() {
         state_.sched = nullptr;
     }
     if (state_.backend) {
-        ggml_backend_free(state_.backend);
+        release_preferred_backend(state_.backend);
         state_.backend = nullptr;
     }
     if (state_.backend_cpu) {
         ggml_backend_free(state_.backend_cpu);
         state_.backend_cpu = nullptr;
     }
+
+    state_.compute_meta.clear();
+    codes_buf_.clear();
 }
 
 void AudioTokenizerDecoder::normalize_codebooks() {
@@ -66,6 +73,8 @@ void AudioTokenizerDecoder::normalize_codebooks() {
 }
 
 bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
+    unload_model();
+
     GGUFLoader loader;
     if (!loader.open(model_path)) {
         error_msg_ = loader.get_error();
@@ -319,6 +328,16 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     }
     
     normalize_codebooks();
+    // Codebooks are normalized in host memory; sync once to backend tensors.
+    auto upload_if_present = [](struct ggml_tensor * t) {
+        if (t && t->data) {
+            ggml_backend_tensor_set(t, t->data, 0, ggml_nbytes(t));
+        }
+    };
+    upload_if_present(model_.vq_first_codebook);
+    for (int i = 0; i < 15; ++i) {
+        upload_if_present(model_.vq_rest_codebook[i]);
+    }
     
     state_.backend = init_preferred_backend("AudioTokenizerDecoder", &error_msg_);
     if (!state_.backend) {
@@ -798,92 +817,6 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
         }
     }
     
-    struct weight_data {
-        struct ggml_tensor * tensor;
-        void * data;
-        size_t nbytes;
-    };
-    std::vector<weight_data> weights_to_copy;
-    
-    auto save_weight = [&weights_to_copy](struct ggml_tensor * t) {
-        if (t && t->data) {
-            weights_to_copy.push_back({t, t->data, ggml_nbytes(t)});
-        }
-    };
-    
-    save_weight(model_.vq_first_input_proj);
-    save_weight(model_.vq_first_output_proj);
-    
-    save_weight(model_.vq_first_codebook);
-    save_weight(model_.vq_first_usage);
-    save_weight(model_.vq_rest_input_proj);
-    save_weight(model_.vq_rest_output_proj);
-    for (int i = 0; i < 15; ++i) {
-        save_weight(model_.vq_rest_codebook[i]);
-        save_weight(model_.vq_rest_usage[i]);
-    }
-    
-    for (int i = 0; i < 2; ++i) {
-        save_weight(model_.upsample[i].conv_w);
-        save_weight(model_.upsample[i].conv_b);
-        save_weight(model_.upsample[i].dwconv_w);
-        save_weight(model_.upsample[i].dwconv_b);
-        save_weight(model_.upsample[i].norm_w);
-        save_weight(model_.upsample[i].norm_b);
-        save_weight(model_.upsample[i].pwconv1_w);
-        save_weight(model_.upsample[i].pwconv1_b);
-        save_weight(model_.upsample[i].pwconv2_w);
-        save_weight(model_.upsample[i].pwconv2_b);
-        save_weight(model_.upsample[i].gamma);
-    }
-    
-    save_weight(model_.pre_tfm_input_proj_w);
-    save_weight(model_.pre_tfm_input_proj_b);
-    save_weight(model_.pre_tfm_norm_w);
-    save_weight(model_.pre_tfm_output_proj_w);
-    save_weight(model_.pre_tfm_output_proj_b);
-    
-    for (int i = 0; i < 8; ++i) {
-        save_weight(model_.pre_tfm_layers[i].attn_norm_w);
-        save_weight(model_.pre_tfm_layers[i].attn_q_w);
-        save_weight(model_.pre_tfm_layers[i].attn_k_w);
-        save_weight(model_.pre_tfm_layers[i].attn_v_w);
-        save_weight(model_.pre_tfm_layers[i].attn_output_w);
-        save_weight(model_.pre_tfm_layers[i].attn_scale);
-        save_weight(model_.pre_tfm_layers[i].ffn_norm_w);
-        save_weight(model_.pre_tfm_layers[i].ffn_gate_w);
-        save_weight(model_.pre_tfm_layers[i].ffn_up_w);
-        save_weight(model_.pre_tfm_layers[i].ffn_down_w);
-        save_weight(model_.pre_tfm_layers[i].ffn_scale);
-    }
-    
-    save_weight(model_.pre_conv_w);
-    save_weight(model_.pre_conv_b);
-    save_weight(model_.dec0_conv_w);
-    save_weight(model_.dec0_conv_b);
-    
-    for (int i = 0; i < 4; ++i) {
-        save_weight(model_.dec_blocks[i].snake_alpha);
-        save_weight(model_.dec_blocks[i].snake_beta);
-        save_weight(model_.dec_blocks[i].conv_t_w);
-        save_weight(model_.dec_blocks[i].conv_t_b);
-        for (int j = 0; j < 3; ++j) {
-            save_weight(model_.dec_blocks[i].res[j].act1_alpha);
-            save_weight(model_.dec_blocks[i].res[j].act1_beta);
-            save_weight(model_.dec_blocks[i].res[j].conv1_w);
-            save_weight(model_.dec_blocks[i].res[j].conv1_b);
-            save_weight(model_.dec_blocks[i].res[j].act2_alpha);
-            save_weight(model_.dec_blocks[i].res[j].act2_beta);
-            save_weight(model_.dec_blocks[i].res[j].conv2_w);
-            save_weight(model_.dec_blocks[i].res[j].conv2_b);
-        }
-    }
-    
-    save_weight(model_.dec5_snake_alpha);
-    save_weight(model_.dec5_snake_beta);
-    save_weight(model_.dec6_conv_w);
-    save_weight(model_.dec6_conv_b);
-    
     struct ggml_cgraph * gf = build_graph(n_frames);
     
     if (!ggml_backend_sched_alloc_graph(state_.sched, gf)) {
@@ -891,10 +824,7 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
         return false;
     }
     
-    for (const auto & w : weights_to_copy) {
-        ggml_backend_tensor_set(w.tensor, w.data, 0, w.nbytes);
-    }
-    
+    std::vector<int32_t> cb_codes(n_frames);
     for (int cb = 0; cb < 16; ++cb) {
         char name[32];
         snprintf(name, sizeof(name), "codes_cb%d", cb);
@@ -905,7 +835,6 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
             return false;
         }
         
-        std::vector<int32_t> cb_codes(n_frames);
         for (int f = 0; f < n_frames; ++f) {
             cb_codes[f] = codes_buf_[f * cfg.n_codebooks + cb];
         }
