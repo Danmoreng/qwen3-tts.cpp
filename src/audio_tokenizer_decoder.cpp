@@ -171,7 +171,7 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
             }
         }
         else {
-            int blk_idx, res_idx, cb_idx, n;
+            int blk_idx, res_idx, cb_idx, n = 0;
             char suffix[64];
             size_t name_len = strlen(name);
             
