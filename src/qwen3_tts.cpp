@@ -347,7 +347,7 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
     std::vector<int32_t> speech_codes;
     if (!transformer_.generate(text_tokens.data(), (int32_t)text_tokens.size(),
                                speaker_embedding, params.max_audio_tokens, speech_codes,
-                               2050, params.repetition_penalty,
+                               params.language_id, params.repetition_penalty,
                                params.temperature, params.top_k)) {
         result.error_msg = "Failed to generate speech codes: " + transformer_.get_error();
         return result;

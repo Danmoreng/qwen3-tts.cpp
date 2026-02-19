@@ -17,6 +17,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --top-p <val>          Top-p sampling (default: 1.0)\n");
     fprintf(stderr, "  --max-tokens <n>       Maximum audio tokens (default: 4096)\n");
     fprintf(stderr, "  --repetition-penalty <val> Repetition penalty (default: 1.05)\n");
+    fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  -j, --threads <n>      Number of threads (default: 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\n");
@@ -94,6 +95,26 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             params.repetition_penalty = std::stof(argv[i]);
+        } else if (arg == "-l" || arg == "--language") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing language value\n");
+                return 1;
+            }
+            std::string lang = argv[i];
+            if (lang == "en" || lang == "english")       params.language_id = 2050;
+            else if (lang == "ru" || lang == "russian")  params.language_id = 2069;
+            else if (lang == "zh" || lang == "chinese")  params.language_id = 2055;
+            else if (lang == "ja" || lang == "japanese")  params.language_id = 2058;
+            else if (lang == "ko" || lang == "korean")   params.language_id = 2064;
+            else if (lang == "de" || lang == "german")   params.language_id = 2053;
+            else if (lang == "fr" || lang == "french")   params.language_id = 2061;
+            else if (lang == "es" || lang == "spanish")  params.language_id = 2054;
+            else if (lang == "it" || lang == "italian")  params.language_id = 2070;
+            else if (lang == "pt" || lang == "portuguese") params.language_id = 2071;
+            else {
+                fprintf(stderr, "Error: unknown language '%s'. Supported: en,ru,zh,ja,ko,de,fr,es,it,pt\n", lang.c_str());
+                return 1;
+            }
         } else if (arg == "-j" || arg == "--threads") {
             if (++i >= argc) {
                 fprintf(stderr, "Error: missing threads value\n");
