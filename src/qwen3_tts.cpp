@@ -11,6 +11,10 @@
 
 #ifdef __APPLE__
 #include <mach/mach.h>
+#elif defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#include <psapi.h>
 #else
 #include <sys/resource.h>
 #endif
@@ -45,6 +49,16 @@ static bool get_process_memory_snapshot(process_memory_snapshot & out) {
     } else {
         out.phys_footprint_bytes = out.rss_bytes;
     }
+    return true;
+#elif defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS_EX pmc = {};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(),
+                              reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc),
+                              sizeof(pmc))) {
+        return false;
+    }
+    out.rss_bytes = (uint64_t) pmc.WorkingSetSize;
+    out.phys_footprint_bytes = (uint64_t) pmc.PrivateUsage;
     return true;
 #else
     struct rusage usage = {};

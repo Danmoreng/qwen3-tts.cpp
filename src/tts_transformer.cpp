@@ -1217,16 +1217,21 @@ struct ggml_cgraph * TTSTransformer::build_prefill_forward_graph(int32_t n_token
         K = ggml_permute(ctx0, K, 0, 2, 1, 3);
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
         
-        struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-        KQ = ggml_scale(ctx0, KQ, KQscale);
-        KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
-        KQ = ggml_soft_max(ctx0, KQ);
-        
-        V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
-        
-        struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
-        KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-        cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+        if (n_tokens == 1) {
+            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
+            cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
+        } else {
+            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+            KQ = ggml_scale(ctx0, KQ, KQscale);
+            KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
+            KQ = ggml_soft_max(ctx0, KQ);
+            
+            V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
+            
+            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
+            KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
+            cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+        }
         
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
         cur = ggml_add(ctx0, cur, inpL);
@@ -1362,16 +1367,21 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
         K = ggml_permute(ctx0, K, 0, 2, 1, 3);
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
         
-        struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-        KQ = ggml_scale(ctx0, KQ, KQscale);
-        KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
-        KQ = ggml_soft_max(ctx0, KQ);
-        
-        V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
-        
-        struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
-        KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-        cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+        if (n_tokens == 1) {
+            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
+            cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
+        } else {
+            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+            KQ = ggml_scale(ctx0, KQ, KQscale);
+            KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
+            KQ = ggml_soft_max(ctx0, KQ);
+            
+            V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
+            
+            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
+            KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
+            cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+        }
         
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
         cur = ggml_add(ctx0, cur, inpL);
@@ -1479,20 +1489,12 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_graph(int32_t n_prev_codes)
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
         
-        struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-        struct ggml_tensor * K = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
-        struct ggml_tensor * V = ggml_permute(ctx0, Vcur, 0, 2, 1, 3);
+                struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
+                struct ggml_tensor * K = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
+                struct ggml_tensor * V = ggml_permute(ctx0, Vcur, 0, 2, 1, 3);
         
-        struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-        KQ = ggml_scale(ctx0, KQ, KQscale);
-        KQ = ggml_soft_max(ctx0, KQ);
-        
-        V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
-        
-        struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
-        KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-        cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, 1);
-        
+                struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, KQscale, 0.0f, 0.0f);
+                cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, 1);        
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
         cur = ggml_add(ctx0, cur, inpL);
         struct ggml_tensor * inpFF = cur;
@@ -1622,21 +1624,25 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_prefill_graph() {
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, k_cache_view));
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, v_cache_view));
         
-        struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-        struct ggml_tensor * K = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
-        struct ggml_tensor * V = ggml_permute(ctx0, Vcur, 0, 2, 1, 3);
+                struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
+                struct ggml_tensor * K = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
+                struct ggml_tensor * V = ggml_permute(ctx0, Vcur, 0, 2, 1, 3);
         
-        struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-        KQ = ggml_scale(ctx0, KQ, KQscale);
-        KQ = ggml_diag_mask_inf(ctx0, KQ, 0);
-        KQ = ggml_soft_max(ctx0, KQ);
+                if (n_tokens == 1) {
+                    struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, KQscale, 0.0f, 0.0f);
+                    cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
+                } else {
+                    struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+                    KQ = ggml_scale(ctx0, KQ, KQscale);
+                    KQ = ggml_diag_mask_inf(ctx0, KQ, 0);
+                    KQ = ggml_soft_max(ctx0, KQ);
         
-        V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
+                    V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
         
-        struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
-        KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-        cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
-        
+                    struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
+                    KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
+                    cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+                }        
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
         cur = ggml_add(ctx0, cur, inpL);
         struct ggml_tensor * inpFF = cur;
@@ -1782,16 +1788,21 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
         K = ggml_permute(ctx0, K, 0, 2, 1, 3);
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
         
-        struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-        KQ = ggml_scale(ctx0, KQ, KQscale);
-        KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
-        KQ = ggml_soft_max(ctx0, KQ);
-        
-        V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
-        
-        struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
-        KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-        cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+        if (n_tokens == 1) {
+            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
+            cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
+        } else {
+            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+            KQ = ggml_scale(ctx0, KQ, KQscale);
+            KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
+            KQ = ggml_soft_max(ctx0, KQ);
+            
+            V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
+            
+            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
+            KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
+            cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
+        }
         
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
         cur = ggml_add(ctx0, cur, inpL);

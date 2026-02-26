@@ -115,6 +115,25 @@ cmake --build build -j4
 
 > **Note:** The top-level CMake currently expects GGML in `./ggml` with libraries under `./ggml/build/src`.
 
+### Build on Windows (Visual Studio 2022)
+
+```powershell
+# From repo root
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DQWEN3_TTS_EMBED_GGML=ON `
+  -DQWEN3_TTS_GGML_DIR=.\ggml
+
+cmake --build build --config Release --target qwen3-tts-cli
+```
+
+If your `.\ggml` directory is empty (submodule not initialized), point `QWEN3_TTS_GGML_DIR` to another local GGML checkout.
+
+Run:
+
+```powershell
+.\build\Release\qwen3-tts-cli.exe -m models -t "Hello from Windows" -o out.wav
+```
+
 ## Model Setup (Recommended)
 
 Use the one-shot setup script:
