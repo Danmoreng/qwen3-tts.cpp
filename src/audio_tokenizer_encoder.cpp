@@ -105,13 +105,6 @@ static void compute_dft(const float * input, float * real, float * imag, int n) 
     }
 }
 
-// Periodic Hann window (matches torch.hann_window with periodic=True, which is default)
-static void compute_hann_window(float * window, int n) {
-    for (int i = 0; i < n; ++i) {
-        window[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / n));
-    }
-}
-
 // Compute centered window for STFT (PyTorch centers win_length window in n_fft frame)
 static void compute_centered_window(float * window, int n_fft, int win_length) {
     // Zero-initialize
