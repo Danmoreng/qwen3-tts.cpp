@@ -157,6 +157,7 @@ bool TTSTransformer::load_model(const std::string & model_path) {
 }
 
 bool TTSTransformer::try_init_coreml_code_predictor(const std::string & model_path) {
+    (void)model_path;
     use_coreml_code_predictor_ = false;
     coreml_code_predictor_path_.clear();
 
