@@ -1189,27 +1189,24 @@ struct ggml_cgraph * TTSTransformer::build_prefill_forward_graph(int32_t n_token
         struct ggml_tensor * k_cache = state_.cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.cache.v_cache[il];
         
-        struct ggml_tensor * k_cache_view = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, n_tokens,
-            k_cache->nb[1], k_cache->nb[2],
-            n_past * k_cache->nb[2]);
+        struct ggml_tensor * k_cache_2d = ggml_view_2d(ctx0, k_cache, head_dim * n_kv_head, state_.cache.n_ctx, k_cache->nb[2], 0);
+        struct ggml_tensor * v_cache_2d = ggml_view_2d(ctx0, v_cache, head_dim * n_kv_head, state_.cache.n_ctx, v_cache->nb[2], 0);
         
-        struct ggml_tensor * v_cache_view = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, n_tokens,
-            v_cache->nb[1], v_cache->nb[2],
-            n_past * v_cache->nb[2]);
+        struct ggml_tensor * Kcur_2d = ggml_view_2d(ctx0, Kcur, head_dim * n_kv_head, n_tokens, Kcur->nb[2], 0);
+        struct ggml_tensor * Vcur_2d = ggml_view_2d(ctx0, Vcur, head_dim * n_kv_head, n_tokens, Vcur->nb[2], 0);
         
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, k_cache_view));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, v_cache_view));
+        struct ggml_tensor * k_updated = ggml_set_rows(ctx0, k_cache_2d, Kcur_2d, inp_pos);
+        struct ggml_tensor * v_updated = ggml_set_rows(ctx0, v_cache_2d, Vcur_2d, inp_pos);
         
-        int n_kv = n_past + n_tokens;
+        ggml_build_forward_expand(gf, k_updated);
+        ggml_build_forward_expand(gf, v_updated);
         
         struct ggml_tensor * K = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, n_kv,
+            head_dim, n_kv_head, state_.cache.n_ctx,
             k_cache->nb[1], k_cache->nb[2], 0);
         
         struct ggml_tensor * V = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, n_kv,
+            head_dim, n_kv_head, state_.cache.n_ctx,
             v_cache->nb[1], v_cache->nb[2], 0);
         
         struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
@@ -1217,7 +1214,8 @@ struct ggml_cgraph * TTSTransformer::build_prefill_forward_graph(int32_t n_token
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
         
         if (n_tokens == 1) {
-            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
+            struct ggml_tensor * KQ_mask = ggml_get_tensor(ctx0, "inp_mask");
+            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, KQ_mask, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
             cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
         } else {
             struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
@@ -1298,6 +1296,10 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
 
+    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, state_.cache.n_ctx, 1);
+    ggml_set_name(inp_mask, "inp_mask");
+    ggml_set_input(inp_mask);
+
     struct ggml_tensor * cur = inp_step_embd;
     
     struct ggml_tensor * inpL = cur;
@@ -1339,27 +1341,24 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
         struct ggml_tensor * k_cache = state_.cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.cache.v_cache[il];
         
-        struct ggml_tensor * k_cache_view = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, n_tokens,
-            k_cache->nb[1], k_cache->nb[2],
-            n_past * k_cache->nb[2]);
+        struct ggml_tensor * k_cache_2d = ggml_view_2d(ctx0, k_cache, head_dim * n_kv_head, state_.cache.n_ctx, k_cache->nb[2], 0);
+        struct ggml_tensor * v_cache_2d = ggml_view_2d(ctx0, v_cache, head_dim * n_kv_head, state_.cache.n_ctx, v_cache->nb[2], 0);
         
-        struct ggml_tensor * v_cache_view = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, n_tokens,
-            v_cache->nb[1], v_cache->nb[2],
-            n_past * v_cache->nb[2]);
+        struct ggml_tensor * Kcur_2d = ggml_view_2d(ctx0, Kcur, head_dim * n_kv_head, n_tokens, Kcur->nb[2], 0);
+        struct ggml_tensor * Vcur_2d = ggml_view_2d(ctx0, Vcur, head_dim * n_kv_head, n_tokens, Vcur->nb[2], 0);
         
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, k_cache_view));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, v_cache_view));
+        struct ggml_tensor * k_updated = ggml_set_rows(ctx0, k_cache_2d, Kcur_2d, inp_pos);
+        struct ggml_tensor * v_updated = ggml_set_rows(ctx0, v_cache_2d, Vcur_2d, inp_pos);
         
-        int n_kv = n_past + n_tokens;
+        ggml_build_forward_expand(gf, k_updated);
+        ggml_build_forward_expand(gf, v_updated);
         
         struct ggml_tensor * K = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, n_kv,
+            head_dim, n_kv_head, state_.cache.n_ctx,
             k_cache->nb[1], k_cache->nb[2], 0);
         
         struct ggml_tensor * V = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, n_kv,
+            head_dim, n_kv_head, state_.cache.n_ctx,
             v_cache->nb[1], v_cache->nb[2], 0);
         
         struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
@@ -1367,7 +1366,8 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
         
         if (n_tokens == 1) {
-            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
+            struct ggml_tensor * KQ_mask = ggml_get_tensor(ctx0, "inp_mask");
+            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, KQ_mask, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
             cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
         } else {
             struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
@@ -1713,6 +1713,10 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
     
+    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, state_.code_pred_cache.n_ctx, 1);
+    ggml_set_name(inp_mask, "inp_mask");
+    ggml_set_input(inp_mask);
+    
     struct ggml_tensor * cur;
     if (generation_step == 0) {
         cur = ggml_reshape_2d(ctx0, inp_hidden, hidden_size, 1);
@@ -1760,27 +1764,24 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
         struct ggml_tensor * k_cache = state_.code_pred_cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.code_pred_cache.v_cache[il];
         
-        struct ggml_tensor * k_cache_view = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, n_tokens,
-            k_cache->nb[1], k_cache->nb[2],
-            n_past * k_cache->nb[2]);
+        struct ggml_tensor * k_cache_2d = ggml_view_2d(ctx0, k_cache, head_dim * n_kv_head, state_.code_pred_cache.n_ctx, k_cache->nb[2], 0);
+        struct ggml_tensor * v_cache_2d = ggml_view_2d(ctx0, v_cache, head_dim * n_kv_head, state_.code_pred_cache.n_ctx, v_cache->nb[2], 0);
         
-        struct ggml_tensor * v_cache_view = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, n_tokens,
-            v_cache->nb[1], v_cache->nb[2],
-            n_past * v_cache->nb[2]);
+        struct ggml_tensor * Kcur_2d = ggml_view_2d(ctx0, Kcur, head_dim * n_kv_head, n_tokens, Kcur->nb[2], 0);
+        struct ggml_tensor * Vcur_2d = ggml_view_2d(ctx0, Vcur, head_dim * n_kv_head, n_tokens, Vcur->nb[2], 0);
         
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, k_cache_view));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, v_cache_view));
+        struct ggml_tensor * k_updated = ggml_set_rows(ctx0, k_cache_2d, Kcur_2d, inp_pos);
+        struct ggml_tensor * v_updated = ggml_set_rows(ctx0, v_cache_2d, Vcur_2d, inp_pos);
         
-        int n_kv = n_past + n_tokens;
+        ggml_build_forward_expand(gf, k_updated);
+        ggml_build_forward_expand(gf, v_updated);
         
         struct ggml_tensor * K = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, n_kv,
+            head_dim, n_kv_head, state_.code_pred_cache.n_ctx,
             k_cache->nb[1], k_cache->nb[2], 0);
         
         struct ggml_tensor * V = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, n_kv,
+            head_dim, n_kv_head, state_.code_pred_cache.n_ctx,
             v_cache->nb[1], v_cache->nb[2], 0);
         
         struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
@@ -1788,7 +1789,8 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
         
         if (n_tokens == 1) {
-            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
+            struct ggml_tensor * KQ_mask = ggml_get_tensor(ctx0, "inp_mask");
+            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, KQ_mask, 1.0f / sqrtf((float)head_dim), 0.0f, 0.0f);
             cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
         } else {
             struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
@@ -2064,6 +2066,15 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
     if (inp_pos) {
         int32_t pos = n_past;
         ggml_backend_tensor_set(inp_pos, &pos, 0, sizeof(int32_t));
+    }
+
+    struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
+    if (inp_mask) {
+        std::vector<ggml_fp16_t> mask(state_.cache.n_ctx, ggml_fp32_to_fp16(-INFINITY));
+        for (int i = 0; i <= n_past; i++) {
+            mask[i] = ggml_fp32_to_fp16(0.0f);
+        }
+        ggml_backend_tensor_set(inp_mask, mask.data(), 0, state_.cache.n_ctx * sizeof(ggml_fp16_t));
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
@@ -2538,6 +2549,15 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         if (inp_pos) {
             int32_t pos = n_past;
             ggml_backend_tensor_set(inp_pos, &pos, 0, sizeof(int32_t));
+        }
+
+        struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
+        if (inp_mask) {
+            std::vector<ggml_fp16_t> mask(state_.code_pred_cache.n_ctx, ggml_fp32_to_fp16(-INFINITY));
+            for (int i = 0; i <= n_past; i++) {
+                mask[i] = ggml_fp32_to_fp16(0.0f);
+            }
+            ggml_backend_tensor_set(inp_mask, mask.data(), 0, state_.code_pred_cache.n_ctx * sizeof(ggml_fp16_t));
         }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();

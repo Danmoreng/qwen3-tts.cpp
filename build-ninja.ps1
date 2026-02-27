@@ -54,6 +54,7 @@ Set-Location $BuildDir
 
 cmake .. -G Ninja `
     -DQWEN3_TTS_CUDA=ON `
+    -DGGML_CUDA_GRAPHS=ON `
     -DCMAKE_BUILD_TYPE=Release
 
 # 4. Build
