@@ -89,6 +89,8 @@ struct speaker_encoder_state {
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_sched_t sched = nullptr;
     std::vector<uint8_t> compute_meta;
+    std::vector<float> mel_filterbank;
+    std::vector<float> stft_window;
 };
 
 // Speaker encoder class (ECAPA-TDNN)

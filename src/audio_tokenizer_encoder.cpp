@@ -276,6 +276,14 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
     }
     
     state_.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
+
+    const int n_fft_bins = model_.config.n_fft / 2 + 1;
+    state_.mel_filterbank.resize((size_t) model_.config.n_mels * (size_t) n_fft_bins);
+    compute_mel_filterbank_slaney(state_.mel_filterbank.data(), model_.config.n_mels, model_.config.n_fft,
+                                   model_.config.sample_rate, model_.config.f_min, model_.config.f_max);
+
+    state_.stft_window.resize(model_.config.n_fft);
+    compute_centered_window(state_.stft_window.data(), model_.config.n_fft, model_.config.win_length);
     
     return true;
 }
@@ -315,14 +323,10 @@ bool AudioTokenizerEncoder::compute_mel_spectrogram(const float * samples, int32
     
     int n_fft_bins = cfg.n_fft / 2 + 1;
     
-    std::vector<float> filterbank(cfg.n_mels * n_fft_bins);
-    compute_mel_filterbank_slaney(filterbank.data(), cfg.n_mels, cfg.n_fft, 
-                                   cfg.sample_rate, cfg.f_min, cfg.f_max);
-    
-    // PyTorch STFT with win_length < n_fft centers the window in the n_fft frame
-    // This is critical for matching PyTorch's output
-    std::vector<float> window(cfg.n_fft);
-    compute_centered_window(window.data(), cfg.n_fft, cfg.win_length);
+    if (state_.mel_filterbank.empty() || state_.stft_window.empty()) {
+        error_msg_ = "Speaker encoder frontend cache is not initialized";
+        return false;
+    }
     
     // Output: [batch, n_mels, n_frames] but we store as [n_mels, n_frames] row-major
     // which means mel[m * n_frames + f] = value at mel bin m, frame f
@@ -338,7 +342,7 @@ bool AudioTokenizerEncoder::compute_mel_spectrogram(const float * samples, int32
         
         // Apply centered window to n_fft samples
         for (int i = 0; i < cfg.n_fft; ++i) {
-            frame[i] = padded[start + i] * window[i];
+            frame[i] = padded[start + i] * state_.stft_window[i];
         }
         
         compute_dft(frame.data(), fft_real.data(), fft_imag.data(), cfg.n_fft);
@@ -355,7 +359,7 @@ bool AudioTokenizerEncoder::compute_mel_spectrogram(const float * samples, int32
         for (int m = 0; m < cfg.n_mels; ++m) {
             float sum = 0.0f;
             for (int k = 0; k < n_fft_bins; ++k) {
-                sum += filterbank[m * n_fft_bins + k] * magnitude[k];
+                sum += state_.mel_filterbank[m * n_fft_bins + k] * magnitude[k];
             }
             // dynamic_range_compression: log(clamp(x, min=1e-5))
             mel[m * n_frames + f] = logf(std::max(sum, 1e-5f));

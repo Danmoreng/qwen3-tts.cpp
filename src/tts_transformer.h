@@ -181,6 +181,7 @@ struct tts_transformer_state {
     ggml_backend_sched_t sched = nullptr;
     
     std::vector<uint8_t> compute_meta;
+    std::vector<ggml_fp16_t> code_pred_mask;
     
     tts_kv_cache cache;           // Talker KV cache (28 layers)
     tts_kv_cache code_pred_cache; // Code predictor KV cache (5 layers)
