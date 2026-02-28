@@ -376,41 +376,7 @@ static struct ggml_tensor * apply_reflect_pad_1d(struct ggml_context * ctx,
         return x;
     }
     
-    int64_t T = x->ne[0];
-    int64_t C = x->ne[1];
-    int64_t B = x->ne[2];
-    
-    struct ggml_tensor * left_slices[16];
-    struct ggml_tensor * right_slices[16];
-    
-    for (int i = 0; i < pad && i < 16; ++i) {
-        int left_src_idx = pad - i;
-        left_slices[i] = ggml_view_3d(ctx, x, 1, C, B,
-                                       x->nb[1], x->nb[2],
-                                       left_src_idx * x->nb[0]);
-        left_slices[i] = ggml_cont(ctx, left_slices[i]);
-        
-        int right_src_idx = T - 2 - i;
-        right_slices[i] = ggml_view_3d(ctx, x, 1, C, B,
-                                        x->nb[1], x->nb[2],
-                                        right_src_idx * x->nb[0]);
-        right_slices[i] = ggml_cont(ctx, right_slices[i]);
-    }
-    
-    struct ggml_tensor * left_pad = left_slices[0];
-    for (int i = 1; i < pad && i < 16; ++i) {
-        left_pad = ggml_concat(ctx, left_pad, left_slices[i], 0);
-    }
-    
-    struct ggml_tensor * right_pad = right_slices[0];
-    for (int i = 1; i < pad && i < 16; ++i) {
-        right_pad = ggml_concat(ctx, right_pad, right_slices[i], 0);
-    }
-    
-    struct ggml_tensor * padded = ggml_concat(ctx, left_pad, x, 0);
-    padded = ggml_concat(ctx, padded, right_pad, 0);
-    
-    return padded;
+    return ggml_pad_reflect_1d(ctx, x, pad, pad);
 }
 
 static struct ggml_tensor * apply_conv1d(struct ggml_context * ctx,
@@ -424,7 +390,7 @@ static struct ggml_tensor * apply_conv1d(struct ggml_context * ctx,
     int actual_pad = pad;
     
     if (use_reflect_pad && pad > 0) {
-        input = apply_reflect_pad_1d(ctx, x, pad);
+        input = ggml_pad_reflect_1d(ctx, x, pad, pad);
         actual_pad = 0;
     }
     
