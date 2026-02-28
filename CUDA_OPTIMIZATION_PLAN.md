@@ -1,40 +1,50 @@
 # CUDA Optimization Plan for Qwen3-TTS GGML
 
 ## Overview
-This document outlines the findings and strategy for optimizing the Qwen3-TTS GGML implementation by leveraging CUDA. The goal is to significantly reduce the Real-Time Factor (RTF), which was originally at 1.94x (slower than real-time), to achieve streaming-capable performance (RTF < 1.0x).
+This document outlines the findings and strategy for optimizing the Qwen3-TTS GGML implementation by leveraging CUDA. The goal is to achieve performance parity with optimized Python implementations like `Faster-Qwen3-TTS` (target RTF > 3.5x).
 
 ## ✅ Completed Optimizations (Streaming-Capable Achieved)
 
-As of February 27, 2026, the implementation has been optimized to an RTF of **~0.92x**, making it fully streaming-capable on modern GPUs (e.g., RTX 5080 Laptop).
+As of February 28, 2026, the implementation has been optimized to an RTF of **~1.07x** (Internal Throughput) on modern GPUs (e.g., RTX 5080 Laptop).
 
 1. **Fused Snake Activation Kernel (Vocoder Decoder):**
-   - **Problem:** The Vocoder Decoder took 27.1% of pipeline time (11.6s). GGML's default element-wise operations for the Snake activation created massive memory overhead and many intermediate tensors.
-   - **Solution:** Forked `ggml`, implemented a native `GGML_OP_SNAKE` with broadcasting support for `alpha` and `beta` parameters. Added multithreaded CPU fallback and a highly optimized fused CUDA kernel.
-   - **Result:** Drastically reduced Vocoder decode times and VRAM bandwidth, achieving faster-than-realtime synthesis.
+   - **Problem:** The Vocoder Decoder took 27.1% of pipeline time. GGML's default element-wise operations for the Snake activation created massive memory overhead.
+   - **Solution:** Implemented a native `GGML_OP_SNAKE` with a highly optimized fused CUDA kernel.
+   - **Result:** Drastically reduced Vocoder decode times and VRAM bandwidth.
 
 2. **Static KV Cache & GGML CUDA Graphs (Code Generation):**
-   - **Problem:** Code Generation took 9.1% of pipeline time (3.9s). The transformer's KV cache used dynamic `ggml_view_3d` offsets based on `n_past`, forcing the CPU to re-evaluate the computation graph node-by-node on every autoregressive step, preventing CUDA graph capture.
-   - **Solution:** Refactored `tts_transformer.cpp` to use a completely static graph topology. Replaced dynamic views with `ggml_set_rows` triggered by an `inp_pos` index array. Enabled `-DGGML_CUDA_GRAPHS=ON`.
-   - **Result:** ~26.6% speedup in code generation. The GPU now captures the execution graph and replays it autonomously, reducing CPU overhead to near-zero during the 12Hz generation loop.
+   - **Problem:** Dynamic `ggml_view_3d` offsets forced node-by-node CPU evaluation on every autoregressive step.
+   - **Solution:** Refactored `tts_transformer.cpp` to use a static graph topology with `ggml_set_rows`. Enabled `GGML_CUDA_GRAPHS`.
+   - **Result:** ~26.6% speedup in code generation and near-zero CPU overhead during inference.
 
-3. **Flash Attention Validation:**
-   - **Status:** Verified that `ggml_flash_attn_ext` was already implemented and is actively working in the generation loop (using properly scaled F16 masks for the static KV cache).
+## 🚀 Road to Parity (Target: 3.5x RTF)
 
-4. **Windows MSVC Compatibility:**
-   - **Status:** Fixed Linux-specific includes (`sys/resource.h`) and missing math constants (`M_PI`), allowing the codebase and CUDA kernels to compile natively on Windows via Ninja.
+To match `Faster-Qwen3-TTS`, we must address the remaining bottlenecks in the Speaker Encoder, Vocoder, and Predictor orchestration.
 
-## 🚀 Next Steps / Future Optimizations
+### Phase 1: Optimize the Speaker Encoder (Voice Cloning Latency)
+*   **Target:** Reduce cloning latency from ~9s to < 1s.
+*   **Problem:** The ECAPA-TDNN architecture in `audio_tokenizer_encoder.cpp` relies on hundreds of sequential 1D convolutions.
+*   **Strategy:**
+    *   **Fused Res2Net Kernels:** Implement custom CUDA kernels for the Res2Net blocks to parallelize multi-scale branches.
+    *   **cuDNN Integration:** Map `ggml_conv_1d` to cuDNN/cutlass for the encoder layers to leverage specialized hardware acceleration.
 
-While standard text-to-speech is now very fast, Voice Cloning remains a significant bottleneck.
+### Phase 2: Parallelize/Batch Codebook Prediction
+*   **Target:** Increase generation throughput from 1.0x to 2.0x RTF.
+*   **Problem:** The 5-layer Predictor runs 14 times sequentially *per frame*, resulting in 14 separate GGML graph executions per 12Hz step.
+*   **Strategy (Graph Unrolling):**
+    *   **Single-Graph Prediction:** "Unroll" all 14 predictor steps into a single, static GGML graph. This reduces 14 `ggml_graph_compute` calls to one, matching the orchestration strategy of `Faster-Qwen3-TTS`.
 
-### 1. Optimize the Speaker Encoder (The "Voice Cloning" Bottleneck)
-- **Problem:** When providing a reference audio file, the Speaker Encoder takes up **~64%** of the entire pipeline time (e.g., ~27 seconds on CPU). It uses an ECAPA-TDNN architecture with Res2Net blocks that rely heavily on many small, 1D convolutions that branch and merge. GGML handles these sequentially rather than in parallel.
-- **Action Plan:** Write a custom, fused CUDA kernel designed to evaluate the Res2Net branches in parallel, or rewrite the `apply_conv1d` logic in `audio_tokenizer_encoder.cpp` to use cuDNN/im2col memory layouts for massive GPU speedups.
+### Phase 3: High-Performance Vocoder (Throughput)
+*   **Target:** Increase generation throughput from 2.0x to 3.5x+ RTF.
+*   **Problem:** The `WavTokenizer` decoder uses many small upsampling blocks that create high VRAM bandwidth pressure.
+*   **Strategy:**
+    *   **Convolution Fusing:** Fuse `Conv1D + Snake + Upsample` layers into single CUDA kernels to minimize intermediate memory transfers.
+    *   **Weight Packing:** Optimize vocoder weight layout for Blackwell/Ada Lovelace memory alignment.
 
-### 2. Parallelizing Codebook Prediction (12Hz Loop)
-- **Problem:** The generation loop works at 12Hz. In each step, it predicts the 1st codebook token autoregressively, and then predicts codebooks 2-15 sequentially based on the 1st token.
-- **Action Plan:** Since the predictions for codebooks 2-15 depend *only* on codebook 1 (and the hidden state), we can explore batching codebooks 2-15 together into a single graph execution, forcing the GPU to calculate all 14 remaining tokens simultaneously instead of evaluating the `build_code_pred_step_graph` 14 separate times per step.
+## ⚒️ Development Timeline
 
-### 3. Batching Multiple Generations
-- **Problem:** The CLI currently processes one text prompt at a time.
-- **Action Plan:** Update the Transformer and CLI to support processing a batch of prompts simultaneously (e.g., generating 4 sentences at once). This is especially powerful for Voice Cloning because the expensive Speaker Encoder only needs to run once, and the resulting speaker embedding can be broadcast across the entire batch.
+| Milestone | Task | Priority |
+| :--- | :--- | :--- |
+| **M1** | ECAPA-TDNN Fused Kernels | High (User Latency) |
+| **M2** | Unrolled Predictor Graph | Medium (Throughput) |
+| **M3** | Fused Vocoder Blocks | Medium (Throughput) |
