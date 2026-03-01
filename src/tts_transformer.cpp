@@ -344,6 +344,25 @@ bool TTSTransformer::parse_config(struct gguf_context * ctx) {
         "qwen3-tts.codec.language.english_id",
         "qwen3-tts.language_id",
     }, 2050);
+
+    fprintf(stderr, "  Codec IDs: pad=%d, bos=%d, eos=%d, think=%d, nothink=%d, think_bos=%d, think_eos=%d\n",
+            cfg.codec_pad_id, cfg.codec_bos_id, cfg.codec_eos_id,
+            cfg.codec_think_id, cfg.codec_nothink_id, cfg.codec_think_bos_id, cfg.codec_think_eos_id);
+
+    // M-RoPE sections
+    int64_t mrope_idx = gguf_find_key(ctx, "qwen3-tts.talker.rope.mrope_section");
+    if (mrope_idx < 0) {
+        mrope_idx = gguf_find_key(ctx, "qwen3-tts.rope.mrope_section");
+    }
+    if (mrope_idx >= 0) {
+        const int32_t * mrope_data = (const int32_t *)gguf_get_arr_data(ctx, mrope_idx);
+        if (mrope_data) {
+            for (int i = 0; i < 3; ++i) {
+                cfg.mrope_section[i] = mrope_data[i];
+            }
+            cfg.use_mrope = true;
+        }
+    }
     
     return true;
 }
@@ -664,7 +683,11 @@ bool TTSTransformer::load_tensor_data(const std::string & path, struct gguf_cont
         
         read_buf.resize(nbytes);
         
+#ifdef _WIN32
+        if (_fseeki64(f, (int64_t)data_offset + (int64_t)offset, SEEK_SET) != 0) {
+#else
         if (fseek(f, data_offset + offset, SEEK_SET) != 0) {
+#endif
             error_msg_ = "Failed to seek to tensor data: " + std::string(name);
             fclose(f);
             release_preferred_backend(backend);
@@ -1036,7 +1059,9 @@ bool TTSTransformer::build_prefill_graph(const int32_t * text_tokens, int32_t n_
                                          const float * speaker_embd, int32_t language_id,
                                          std::vector<float> & prefill_embd,
                                          std::vector<float> & trailing_text_hidden,
-                                         std::vector<float> & tts_pad_embed) {
+                                         std::vector<float> & tts_pad_embed,
+                                         const int32_t * instruct_tokens,
+                                         int32_t n_instruct_tokens) {
     if (!text_tokens) {
         error_msg_ = "text_tokens is null";
         return false;
@@ -1045,6 +1070,9 @@ bool TTSTransformer::build_prefill_graph(const int32_t * text_tokens, int32_t n_
         error_msg_ = "Need at least 4 text tokens for prefill";
         return false;
     }
+
+    fprintf(stderr, "  build_prefill_graph: n_tokens=%d, n_instruct=%d, has_speaker=%s\n", 
+            n_tokens, n_instruct_tokens, speaker_embd ? "yes" : "no");
 
     const auto & cfg = model_.config;
     const int32_t hidden_size = cfg.hidden_size;
@@ -1066,6 +1094,13 @@ bool TTSTransformer::build_prefill_graph(const int32_t * text_tokens, int32_t n_
     memcpy(tts_bos_embed.data(), special_proj.data() + 0 * hidden_size, hidden_size * sizeof(float));
     memcpy(tts_eos_embed.data(), special_proj.data() + 1 * hidden_size, hidden_size * sizeof(float));
     memcpy(tts_pad_embed.data(), special_proj.data() + 2 * hidden_size, hidden_size * sizeof(float));
+
+    std::vector<float> instruct_embed;
+    if (n_instruct_tokens > 0 && instruct_tokens) {
+        if (!project_text_tokens(instruct_tokens, n_instruct_tokens, instruct_embed)) {
+            return false;
+        }
+    }
 
     std::vector<float> role_embed;
     if (!project_text_tokens(text_tokens, 3, role_embed)) {
@@ -1145,25 +1180,33 @@ bool TTSTransformer::build_prefill_graph(const int32_t * text_tokens, int32_t n_
         first_text_plus_codec_bos[h] = first_text_embed[h] + codec_bos_embed[h];
     }
 
-    const int32_t prefill_len = 3 + codec_plus_overlay_len + 1;
+    const int32_t prefill_len = n_instruct_tokens + 3 + codec_plus_overlay_len + 1;
     prefill_embd.resize((size_t)prefill_len * hidden_size);
-    memcpy(prefill_embd.data(), role_embed.data(), role_embed.size() * sizeof(float));
-    memcpy(prefill_embd.data() + (size_t)3 * hidden_size,
-           codec_plus_overlay.data(), codec_plus_overlay.size() * sizeof(float));
-    memcpy(prefill_embd.data() + (size_t)(prefill_len - 1) * hidden_size,
-           first_text_plus_codec_bos.data(), hidden_size * sizeof(float));
+    
+    int32_t offset = 0;
+    if (n_instruct_tokens > 0 && instruct_tokens) {
+        memcpy(prefill_embd.data() + (size_t)offset * hidden_size, instruct_embed.data(), instruct_embed.size() * sizeof(float));
+        offset += n_instruct_tokens;
+    }
+    
+    memcpy(prefill_embd.data() + (size_t)offset * hidden_size, role_embed.data(), role_embed.size() * sizeof(float));
+    offset += 3;
+    memcpy(prefill_embd.data() + (size_t)offset * hidden_size, codec_plus_overlay.data(), codec_plus_overlay.size() * sizeof(float));
+    offset += codec_plus_overlay_len;
+    memcpy(prefill_embd.data() + (size_t)offset * hidden_size, first_text_plus_codec_bos.data(), hidden_size * sizeof(float));
 
-    const int32_t trailing_token_count = std::max(0, n_tokens - 9);
+    const int32_t suffix_len = 5;
+    const int32_t text_only_trailing_count = std::max(0, n_tokens - 4 - suffix_len);
     std::vector<float> trailing_text_proj;
-    if (trailing_token_count > 0) {
-        if (!project_text_tokens(text_tokens + 4, trailing_token_count, trailing_text_proj)) {
+    if (text_only_trailing_count > 0) {
+        if (!project_text_tokens(text_tokens + 4, text_only_trailing_count, trailing_text_proj)) {
             return false;
         }
     }
 
-    const int32_t trailing_len = trailing_token_count + 1;
+    const int32_t trailing_len = text_only_trailing_count + 1;
     trailing_text_hidden.resize((size_t)trailing_len * hidden_size);
-    if (trailing_token_count > 0) {
+    if (text_only_trailing_count > 0) {
         memcpy(trailing_text_hidden.data(), trailing_text_proj.data(), trailing_text_proj.size() * sizeof(float));
     }
     memcpy(trailing_text_hidden.data() + (size_t)(trailing_len - 1) * hidden_size,
@@ -1199,12 +1242,21 @@ struct ggml_cgraph * TTSTransformer::build_prefill_forward_graph(int32_t n_token
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
 
+    struct ggml_tensor * inp_mrope_pos = nullptr;
+    if (cfg.use_mrope) {
+        inp_mrope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4 * n_tokens);
+        ggml_set_name(inp_mrope_pos, "inp_mrope_pos");
+        ggml_set_input(inp_mrope_pos);
+    }
+
     struct ggml_tensor * cur = inp_prefill_embd;
     
     struct ggml_tensor * inpL = cur;
     
     const float KQscale = 1.0f / sqrtf(float(head_dim));
     
+    int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model_.layers[il];
         
@@ -1229,13 +1281,23 @@ struct ggml_cgraph * TTSTransformer::build_prefill_forward_graph(int32_t n_token
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
         
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        if (cfg.use_mrope) {
+            Qcur = ggml_rope_multi(ctx0, Qcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_multi(ctx0, Kcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        } else {
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        }
         
         struct ggml_tensor * k_cache = state_.cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.cache.v_cache[il];
@@ -1347,6 +1409,13 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
 
+    struct ggml_tensor * inp_mrope_pos = nullptr;
+    if (cfg.use_mrope) {
+        inp_mrope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4);
+        ggml_set_name(inp_mrope_pos, "inp_mrope_pos");
+        ggml_set_input(inp_mrope_pos);
+    }
+
     struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, state_.cache.n_ctx, 1);
     ggml_set_name(inp_mask, "inp_mask");
     ggml_set_input(inp_mask);
@@ -1357,6 +1426,8 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
     
     const float KQscale = 1.0f / sqrtf(float(head_dim));
     
+    int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model_.layers[il];
         
@@ -1381,13 +1452,23 @@ struct ggml_cgraph * TTSTransformer::build_step_graph(int32_t n_past) {
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
         
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        if (cfg.use_mrope) {
+            Qcur = ggml_rope_multi(ctx0, Qcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_multi(ctx0, Kcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        } else {
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        }
         
         struct ggml_tensor * k_cache = state_.cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.cache.v_cache[il];
@@ -1617,6 +1698,13 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_prefill_graph() {
     struct ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
+
+    struct ggml_tensor * inp_mrope_pos = nullptr;
+    if (cfg.use_mrope) {
+        inp_mrope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4 * n_tokens);
+        ggml_set_name(inp_mrope_pos, "inp_mrope_pos");
+        ggml_set_input(inp_mrope_pos);
+    }
     
     // Concatenate [past_hidden, cb0_embd] -> [2, hidden_size]
     struct ggml_tensor * hidden_2d = ggml_reshape_2d(ctx0, inp_hidden, hidden_size, 1);
@@ -1627,6 +1715,8 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_prefill_graph() {
     
     const float KQscale = 1.0f / sqrtf(float(head_dim));
     
+    int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model_.code_pred_layers[il];
         
@@ -1651,13 +1741,23 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_prefill_graph() {
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
         
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        if (cfg.use_mrope) {
+            Qcur = ggml_rope_multi(ctx0, Qcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_multi(ctx0, Kcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        } else {
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        }
         
         struct ggml_tensor * k_cache = state_.code_pred_cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.code_pred_cache.v_cache[il];
@@ -1763,6 +1863,13 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
     struct ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
+
+    struct ggml_tensor * inp_mrope_pos = nullptr;
+    if (cfg.use_mrope) {
+        inp_mrope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4);
+        ggml_set_name(inp_mrope_pos, "inp_mrope_pos");
+        ggml_set_input(inp_mrope_pos);
+    }
     
     struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, state_.code_pred_cache.n_ctx, 1);
     ggml_set_name(inp_mask, "inp_mask");
@@ -1780,6 +1887,8 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
     
     const float KQscale = 1.0f / sqrtf(float(head_dim));
     
+    int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model_.code_pred_layers[il];
         
@@ -1804,13 +1913,23 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
         
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                             head_dim, GGML_ROPE_TYPE_NEOX, 0,
-                             rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        if (cfg.use_mrope) {
+            Qcur = ggml_rope_multi(ctx0, Qcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_multi(ctx0, Kcur, inp_mrope_pos, nullptr,
+                                   head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
+                                   rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        } else {
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+                                 head_dim, GGML_ROPE_TYPE_NEOX, 0,
+                                 rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        }
         
         struct ggml_tensor * k_cache = state_.code_pred_cache.k_cache[il];
         struct ggml_tensor * v_cache = state_.code_pred_cache.v_cache[il];
@@ -1961,7 +2080,29 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
         for (int i = 0; i < n_tokens; ++i) {
             positions[i] = n_past + i;
         }
-        ggml_backend_tensor_set(inp_pos, positions.data(), 0, n_tokens * sizeof(int32_t));
+        size_t write_size = positions.size() * sizeof(int32_t);
+        fprintf(stderr, "DEBUG: forward_prefill inp_pos n_tokens=%d, write_size=%zu, nbytes=%zu\n", n_tokens, write_size, ggml_nbytes(inp_pos));
+        if (write_size > ggml_nbytes(inp_pos)) {
+            fprintf(stderr, "  ERROR: inp_pos write out of bounds! nbytes=%zu, write=%zu\n", ggml_nbytes(inp_pos), write_size);
+        }
+        ggml_backend_tensor_set(inp_pos, positions.data(), 0, write_size);
+    }
+    
+    struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
+    if (inp_mrope_pos && model_.config.use_mrope) {
+        std::vector<int32_t> positions(n_tokens * 4);
+        for (int i = 0; i < n_tokens; ++i) {
+            int32_t p = n_past + i;
+            positions[i + n_tokens * 0] = p;
+            positions[i + n_tokens * 1] = p;
+            positions[i + n_tokens * 2] = p;
+            positions[i + n_tokens * 3] = 0; // 4th dimension unused
+        }
+        size_t write_size = positions.size() * sizeof(int32_t);
+        if (write_size > ggml_nbytes(inp_mrope_pos)) {
+            fprintf(stderr, "  ERROR: inp_mrope_pos write out of bounds! nbytes=%zu, write=%zu\n", ggml_nbytes(inp_mrope_pos), write_size);
+        }
+        ggml_backend_tensor_set(inp_mrope_pos, positions.data(), 0, write_size);
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
@@ -2117,6 +2258,12 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
     if (inp_pos) {
         int32_t pos = n_past;
         ggml_backend_tensor_set(inp_pos, &pos, 0, sizeof(int32_t));
+    }
+    
+    struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
+    if (inp_mrope_pos && model_.config.use_mrope) {
+        int32_t positions[4] = {n_past, n_past, n_past, n_past};
+        ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
     }
 
     struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
@@ -2513,6 +2660,12 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
             int32_t positions[2] = {0, 1};
             ggml_backend_tensor_set(inp_pos, positions, 0, 2 * sizeof(int32_t));
         }
+        
+        struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
+        if (inp_mrope_pos && model_.config.use_mrope) {
+            int32_t positions[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+            ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 8 * sizeof(int32_t));
+        }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
         if (timing_) timing_->t_code_pred_data_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -2613,6 +2766,12 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
             int32_t pos = n_past;
             ggml_backend_tensor_set(inp_pos, &pos, 0, sizeof(int32_t));
         }
+        
+        struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
+        if (inp_mrope_pos) {
+            int32_t positions[4] = {n_past, n_past, n_past, n_past};
+            ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
+        }
 
         struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
         if (inp_mask) {
@@ -2671,7 +2830,9 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                                int32_t language_id,
                                float repetition_penalty,
                                float temperature,
-                               int32_t top_k) {
+                               int32_t top_k,
+                               const int32_t * instruct_tokens,
+                               int32_t n_instruct_tokens) {
 #ifdef QWEN3_TTS_TIMING
     using clk = std::chrono::high_resolution_clock;
     tts_timing timing = {};
@@ -2707,7 +2868,8 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     t0 = clk::now();
 #endif
     if (!build_prefill_graph(text_tokens, n_tokens, speaker_embd, language_id,
-                             prefill_embd, trailing_text_hidden, tts_pad_embed)) {
+                             prefill_embd, trailing_text_hidden, tts_pad_embed,
+                             instruct_tokens, n_instruct_tokens)) {
         return false;
     }
 #ifdef QWEN3_TTS_TIMING
@@ -2822,6 +2984,11 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
         if (next_token == cfg.codec_eos_id) {
             break;
         }
+
+        const bool is_thinking = (next_token >= cfg.codec_think_id && next_token <= cfg.codec_think_eos_id);
+        if (is_thinking) {
+            fprintf(stderr, "  [frame %d] Filtering thinking token: %d\n", frame, next_token);
+        }
         
         frame_codes[0] = next_token;
         generated_cb0_tokens.insert(next_token);
@@ -2842,8 +3009,10 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             frame_codes[cb] = codes_1_15[cb - 1];
         }
         
-        for (int cb = 0; cb < cfg.n_codebooks; ++cb) {
-            output.push_back(frame_codes[cb]);
+        if (!is_thinking) {
+            for (int cb = 0; cb < cfg.n_codebooks; ++cb) {
+                output.push_back(frame_codes[cb]);
+            }
         }
 
 #ifdef QWEN3_TTS_TIMING

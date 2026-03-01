@@ -88,7 +88,7 @@ public:
     
     // Load all models from directory
     // model_dir should contain: transformer.gguf, tokenizer.gguf, vocoder.gguf
-    bool load_models(const std::string & model_dir);
+    bool load_models(const std::string & model_dir, const std::string & model_name = "");
     
     // Generate speech from text
     // text: input text to synthesize

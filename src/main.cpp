@@ -22,6 +22,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --repetition-penalty <val> Repetition penalty (default: 1.05)\n");
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
+    fprintf(stderr, "  --instruct <text>      Voice steering instructions (e.g. \"whispering\")\n");
     fprintf(stderr, "  -j, --threads <n>      Number of threads (default: 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\n");
@@ -33,6 +34,7 @@ void print_usage(const char * program) {
 
 int main(int argc, char ** argv) {
     std::string model_dir;
+    std::string model_name;
     std::string text;
     std::string output_file = "output.wav";
     std::string reference_audio;
@@ -40,6 +42,7 @@ int main(int argc, char ** argv) {
     std::string dump_speaker_embedding_file;
     
     qwen3_tts::tts_params params;
+    params.print_progress = true;
     
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -54,6 +57,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             model_dir = argv[i];
+        } else if (arg == "--model-name") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing model name\n");
+                return 1;
+            }
+            model_name = argv[i];
         } else if (arg == "-t" || arg == "--text") {
             if (++i >= argc) {
                 fprintf(stderr, "Error: missing text\n");
@@ -134,7 +143,7 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "Error: unknown language '%s'. Supported: en,ru,zh,ja,ko,de,fr,es,it,pt\n", lang.c_str());
                 return 1;
             }
-        } else if (arg == "--instruction") {
+        } else if (arg == "--instruction" || arg == "--instruct") {
             if (++i >= argc) {
                 fprintf(stderr, "Error: missing instruction value\n");
                 return 1;
@@ -179,7 +188,7 @@ int main(int argc, char ** argv) {
     qwen3_tts::Qwen3TTS tts;
     
     fprintf(stderr, "Loading models from: %s\n", model_dir.c_str());
-    if (!tts.load_models(model_dir)) {
+    if (!tts.load_models(model_dir, model_name)) {
         fprintf(stderr, "Error: %s\n", tts.get_error().c_str());
         return 1;
     }

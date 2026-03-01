@@ -153,6 +153,11 @@ bool TextTokenizer::load_from_gguf(struct gguf_context * ctx) {
         // Try with space prefix (GPT-2 style)
         assistant_token_id_ = find_token("Ġassistant");
     }
+
+    user_token_id_ = find_token("user");
+    if (user_token_id_ < 0) {
+        user_token_id_ = find_token("Ġuser");
+    }
     
     system_token_id_ = find_token("system");
     if (system_token_id_ < 0) {
@@ -241,6 +246,11 @@ std::vector<int32_t> TextTokenizer::encode(const std::string & text) const {
         return {};
     }
     
+    // Check for special tokens first to avoid splitting them
+    if (text == "<|im_start|>") return {config_.bos_token_id};
+    if (text == "<|im_end|>")   return {config_.eos_token_id};
+    if (text == "<|im_pad|>")   return {config_.pad_token_id};
+    
     std::vector<int32_t> tokens;
     
     // Convert text to GPT-2 unicode representation
@@ -291,6 +301,36 @@ std::vector<int32_t> TextTokenizer::encode(const std::string & text) const {
             }
         }
     }
+    
+    return tokens;
+}
+
+std::vector<int32_t> TextTokenizer::encode_instruct(const std::string & instruct) const {
+    if (!loaded_ || instruct.empty()) {
+        return {};
+    }
+    
+    // Format: <|im_start|>user\n{instruct}<|im_end|>\n
+    std::vector<int32_t> tokens;
+    
+    // <|im_start|>
+    tokens.push_back(config_.bos_token_id);
+    
+    // user
+    tokens.push_back(user_token_id_);
+    
+    // \n
+    tokens.push_back(newline_token_id_);
+    
+    // Encode the instruct
+    auto text_tokens = encode(instruct);
+    tokens.insert(tokens.end(), text_tokens.begin(), text_tokens.end());
+    
+    // <|im_end|>
+    tokens.push_back(config_.eos_token_id);
+    
+    // \n
+    tokens.push_back(newline_token_id_);
     
     return tokens;
 }

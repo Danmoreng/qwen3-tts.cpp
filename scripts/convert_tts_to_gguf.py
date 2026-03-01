@@ -449,6 +449,13 @@ class Qwen3TTSConverter:
         writer.add_layer_norm_rms_eps(self.rms_norm_eps)
         writer.add_vocab_size(self.vocab_size)
 
+        # Basic architecture params (duplicated with standard names for loader compatibility)
+        writer.add_uint32(f"{arch}.block_count", self.num_hidden_layers)
+        writer.add_uint32(f"{arch}.embedding_length", self.hidden_size)
+        writer.add_uint32(f"{arch}.feed_forward_length", self.intermediate_size)
+        writer.add_uint32(f"{arch}.attention.head_count", self.num_attention_heads)
+        writer.add_uint32(f"{arch}.attention.head_count_kv", self.num_kv_heads)
+
         # TTS-specific parameters
         writer.add_uint32(f"{arch}.text_vocab_size", self.text_vocab_size)
         writer.add_uint32(f"{arch}.text_hidden_size", self.text_hidden_size)

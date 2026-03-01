@@ -124,7 +124,7 @@ Qwen3TTS::Qwen3TTS() = default;
 
 Qwen3TTS::~Qwen3TTS() = default;
 
-bool Qwen3TTS::load_models(const std::string & model_dir) {
+bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & model_name) {
     int64_t t_start = get_time_ms();
     log_memory_usage("load/start");
 
@@ -134,8 +134,48 @@ bool Qwen3TTS::load_models(const std::string & model_dir) {
     decoder_loaded_ = false;
     
     // Construct model paths
-    std::string tts_model_path = model_dir + "/qwen3-tts-0.6b-f16.gguf";
-    std::string tokenizer_model_path = model_dir + "/qwen3-tts-tokenizer-f16.gguf";
+    std::string tts_model_path;
+    std::string tokenizer_model_path;
+
+    // Search for GGUF files in model_dir
+    #ifdef _WIN32
+    std::string search_path = model_dir + "/*.gguf";
+    WIN32_FIND_DATAA find_data;
+    HANDLE hFind = FindFirstFileA(search_path.c_str(), &find_data);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            std::string filename = find_data.cFileName;
+            if (filename.find("tokenizer") != std::string::npos) {
+                tokenizer_model_path = model_dir + "/" + filename;
+            } else if (filename.find("qwen3-tts") != std::string::npos || filename.find("full") != std::string::npos) {
+                if (!model_name.empty()) {
+                    if (filename.find(model_name) != std::string::npos) {
+                        tts_model_path = model_dir + "/" + filename;
+                    }
+                } else if (tts_model_path.empty() || filename.find("0.6b") != std::string::npos) {
+                    tts_model_path = model_dir + "/" + filename;
+                }
+            }
+        } while (FindNextFileA(hFind, &find_data));
+        FindClose(hFind);
+    }
+    #else
+    // Dummy Unix fallback for search logic, if needed we can add dirent.h.
+    #endif
+
+    // Fallbacks
+    if (tts_model_path.empty()) {
+        if (!model_name.empty()) {
+            tts_model_path = model_dir + "/" + model_name;
+        } else {
+            tts_model_path = model_dir + "/qwen3-tts-0.6b-f16.gguf";
+        }
+    }
+    if (tokenizer_model_path.empty()) tokenizer_model_path = model_dir + "/qwen3-tts-tokenizer-f16.gguf";
+
+    fprintf(stderr, "  TTS model path:       %s\n", tts_model_path.c_str());
+    fprintf(stderr, "  Tokenizer model path: %s\n", tokenizer_model_path.c_str());
+    
     tts_model_path_ = tts_model_path;
     decoder_model_path_ = tokenizer_model_path;
     encoder_loaded_ = false;
@@ -409,12 +449,12 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
     std::vector<int32_t> text_tokens = tokenizer_.encode_for_tts(text, params.instruction);
     result.t_tokenize_ms = get_time_ms() - t_tokenize_start;
     sample_memory("synth/after-tokenize");
-    
+
     if (text_tokens.empty()) {
         result.error_msg = "Failed to tokenize text";
         return result;
     }
-    
+
     if (params.print_progress) {
         fprintf(stderr, "Text tokenized: %zu tokens\n", text_tokens.size());
         fprintf(stderr, "  Tokens: ");
@@ -424,7 +464,7 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
         if (text_tokens.size() > 10) fprintf(stderr, "...");
         fprintf(stderr, "\n");
     }
-    
+
     // Step 3: Generate speech codes using TTS transformer
     int64_t t_generate_start = get_time_ms();
     if (!transformer_loaded_) {
@@ -441,7 +481,7 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
         }
     }
     transformer_.clear_kv_cache();
-    
+
     std::vector<int32_t> speech_codes;
     if (!transformer_.generate(text_tokens.data(), (int32_t)text_tokens.size(),
                                speaker_embedding, params.max_audio_tokens, speech_codes,
