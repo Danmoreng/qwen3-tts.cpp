@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 #ifdef _WIN32
-#  ifdef QWEN3_TTS_EXPORT
+#  if defined(QWEN3_TTS_EXPORT) || defined(COMPILING_DLL)
 #    define QWEN3_TTS_API __declspec(dllexport)
 #  else
 #    define QWEN3_TTS_API __declspec(dllimport)

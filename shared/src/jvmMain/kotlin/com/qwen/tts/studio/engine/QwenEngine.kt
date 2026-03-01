@@ -1,9 +1,9 @@
-package com.example.qwen3tts
+package com.qwen.tts.studio.engine
 
 /**
  * JVM/Android implementation using JNI.
  */
-actual class Qwen3TTS actual constructor() {
+actual class QwenEngine actual constructor() {
     private var nativePtr: Long = 0
 
     init {
@@ -13,7 +13,8 @@ actual class Qwen3TTS actual constructor() {
 
     actual fun loadModels(modelDir: String): Boolean = nativeLoadModels(nativePtr, modelDir)
 
-    actual fun synthesize(text: String): Result = nativeSynthesize(nativePtr, text, null)
+    actual fun synthesize(text: String, referenceWav: String?): NativeResult = 
+        nativeSynthesize(nativePtr, text, referenceWav, null)
 
     actual fun close() {
         if (nativePtr != 0L) {
@@ -25,9 +26,9 @@ actual class Qwen3TTS actual constructor() {
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
     private external fun nativeLoadModels(ptr: Long, modelDir: String): Boolean
-    private external fun nativeSynthesize(ptr: Long, text: String, params: Any?): Result
+    private external fun nativeSynthesize(ptr: Long, text: String, referenceWav: String?, params: Any?): NativeResult
 
-    actual class Result actual constructor(
+    actual class NativeResult actual constructor(
         actual val audio: FloatArray?,
         actual val sampleRate: Int,
         actual val success: Boolean,

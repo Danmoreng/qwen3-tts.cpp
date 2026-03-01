@@ -152,6 +152,7 @@ target_link_libraries(qwen3_tts PUBLIC
     audio_tokenizer_decoder
     Threads::Threads
 )
+target_compile_definitions(qwen3_tts PRIVATE QWEN3_TTS_EXPORT)
 if(WIN32)
     target_link_libraries(qwen3_tts PUBLIC Psapi)
 endif()
@@ -164,9 +165,6 @@ if(QWEN3_TTS_BUILD_SHARED)
         src/qwen3_tts_jni.cpp
     )
     target_link_libraries(qwen3_tts_jni PRIVATE qwen3_tts JNI::JNI)
-    if(ANDROID)
-        target_link_libraries(qwen3_tts_jni PRIVATE log)
-    endif()
     target_compile_definitions(qwen3_tts PRIVATE QWEN3_TTS_EXPORT)
 endif()
 

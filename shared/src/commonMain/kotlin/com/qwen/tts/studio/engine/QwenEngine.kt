@@ -1,14 +1,14 @@
-package com.example.qwen3tts
+package com.qwen.tts.studio.engine
 
 /**
- * Common interface for Qwen3 TTS across all platforms.
+ * Common interface for QwenEngine across all platforms.
  */
-expect class Qwen3TTS() {
+expect class QwenEngine() {
     fun loadModels(modelDir: String): Boolean
-    fun synthesize(text: String): Result
+    fun synthesize(text: String, referenceWav: String? = null): NativeResult
     fun close()
 
-    class Result(
+    class NativeResult(
         val audio: FloatArray?,
         val sampleRate: Int,
         val success: Boolean,
