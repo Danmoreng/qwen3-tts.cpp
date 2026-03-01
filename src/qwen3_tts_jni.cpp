@@ -10,6 +10,9 @@
 static jclass g_result_class = nullptr;
 static jmethodID g_result_constructor = nullptr;
 
+static jclass g_params_class = nullptr;
+static jfieldID g_lang_id_field = nullptr;
+
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
@@ -18,18 +21,31 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
         return JNI_ERR;
     }
 
-    jclass local_class = env->FindClass("com/qwen/tts/studio/engine/QwenEngine$NativeResult");
-    if (local_class == nullptr) {
-        LOGE("Could not find NativeResult class in JNI_OnLoad");
+    jclass local_result_class = env->FindClass("com/qwen/tts/studio/engine/QwenEngine$NativeResult");
+    if (local_result_class == nullptr) {
+        LOGE("Could not find NativeResult class");
         return JNI_ERR;
     }
-
-    g_result_class = reinterpret_cast<jclass>(env->NewGlobalRef(local_class));
-    env->DeleteLocalRef(local_class);
+    g_result_class = reinterpret_cast<jclass>(env->NewGlobalRef(local_result_class));
+    env->DeleteLocalRef(local_result_class);
 
     g_result_constructor = env->GetMethodID(g_result_class, "<init>", "([FIZLjava/lang/String;J)V");
     if (g_result_constructor == nullptr) {
-        LOGE("Could not find NativeResult constructor in JNI_OnLoad");
+        LOGE("Could not find NativeResult constructor");
+        return JNI_ERR;
+    }
+
+    jclass local_params_class = env->FindClass("com/qwen/tts/studio/engine/QwenEngine$NativeParams");
+    if (local_params_class == nullptr) {
+        LOGE("Could not find NativeParams class");
+        return JNI_ERR;
+    }
+    g_params_class = reinterpret_cast<jclass>(env->NewGlobalRef(local_params_class));
+    env->DeleteLocalRef(local_params_class);
+
+    g_lang_id_field = env->GetFieldID(g_params_class, "languageId", "I");
+    if (g_lang_id_field == nullptr) {
+        LOGE("Could not find languageId field in NativeParams");
         return JNI_ERR;
     }
 
@@ -39,10 +55,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* vm, void* reserved) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
-        if (g_result_class != nullptr) {
-            env->DeleteGlobalRef(g_result_class);
-            g_result_class = nullptr;
-        }
+        if (g_result_class != nullptr) env->DeleteGlobalRef(g_result_class);
+        if (g_params_class != nullptr) env->DeleteGlobalRef(g_params_class);
     }
 }
 
@@ -93,6 +107,10 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
 
     qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050};
     
+    if (params != nullptr && g_lang_id_field != nullptr) {
+        c_params.language_id = env->GetIntField(params, g_lang_id_field);
+    }
+
     qwen3_tts_result_t c_result;
     if (c_speaker_embedding && strlen(c_speaker_embedding) > 0) {
         c_result = qwen3_tts_synthesize_with_speaker_embedding(
