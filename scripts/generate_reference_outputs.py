@@ -27,6 +27,19 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def to_repo_relative(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def to_metadata_path(value: Path | str) -> str:
+    if isinstance(value, Path):
+        return to_repo_relative(value)
+    return value
+
+
 def resolve_reference_audio_path(project_root: Path) -> Path:
     env_path = os.environ.get("QWEN3_TTS_REF_AUDIO", "").strip()
     candidates: list[Path] = []
@@ -117,8 +130,8 @@ def main():
     
     # Metadata to collect
     metadata = {
-        "model_path": str(model_path),
-        "ref_audio_path": str(ref_audio_path),
+        "model_path": to_metadata_path(model_path),
+        "ref_audio_path": to_metadata_path(ref_audio_path),
         "ref_text": ref_text,
         "synth_text": synth_text,
         "outputs": [],
@@ -132,7 +145,7 @@ def main():
     model = Qwen3TTSModel.from_pretrained(
         str(model_path),
         device_map="cpu",
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
     )
     
     print(f"  Model loaded on device: {model.device}")
@@ -326,10 +339,10 @@ def main():
     print(f"  Saved: {output_wav_path}")
     
     # Save metadata
-    metadata_path = output_dir / "metadata.json"
-    with open(metadata_path, "w") as f:
+    metadata_file_path = output_dir / "metadata.json"
+    with open(metadata_file_path, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"\n  Metadata saved: {metadata_path}")
+    print(f"\n  Metadata saved: {metadata_file_path}")
     
     # Summary
     print("\n" + "=" * 60)

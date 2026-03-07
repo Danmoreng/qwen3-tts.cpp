@@ -51,6 +51,7 @@ qwen3-tts.cpp/
 - Build with `.\build.ps1` (do not use `bash` build wrappers on Windows).
 - `build-ninja.ps1` is deprecated/removed; use `.\build.ps1 -UseNinja` instead.
 - Run regression tests with `.\scripts\run_all_tests.ps1`.
+- Install test asset Python deps via `.\scripts\prepare_test_assets.ps1 -InstallPythonDeps` (pinned in `scripts/requirements-test-assets.txt`).
 - Before finalizing any change on Windows, run the PowerShell test script and require a non-zero-on-failure result.
 
 ## Coding Conventions
@@ -165,9 +166,14 @@ bash scripts/run_all_tests.sh           # Full suite
 
 ```powershell
 .\scripts\prepare_test_assets.ps1 -GenerateMissing
+.\scripts\prepare_test_assets.ps1 -GenerateMissing -InstallPythonDeps
 .\scripts\run_all_tests.ps1             # Full suite on Windows
 .\scripts\run_all_tests.ps1 -RequireComponentTests
 .\build\Release\test_transformer.exe --ref-dir reference\
+
+# Determinism gate for tracked metadata after regeneration
+git diff --exit-code -- reference/det_metadata.json reference/metadata.json
+# (equivalent pathspec form: git diff --exit-code -- reference/*.json)
 ```
 
 ## Git Conventions

@@ -1,0 +1,6 @@
+# Keep numpy pinned per Python major/minor so 3.10 remains supported.
+numpy==2.2.6; python_version < "3.11"
+numpy==2.4.2; python_version >= "3.11"
+soundfile==0.13.1
+torch==2.10.0
+qwen-tts==0.1.1

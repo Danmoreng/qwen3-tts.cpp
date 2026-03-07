@@ -285,10 +285,14 @@ uv run python scripts/generate_deterministic_reference.py
 
 # Optional: prepare/verify deterministic reference assets first
 .\scripts\prepare_test_assets.ps1 -GenerateMissing
-# (uses local .venv by default; add -InstallPythonDeps for first-time setup)
+# (uses local .venv by default; add -InstallPythonDeps for first-time setup;
+# installs pinned deps from scripts/requirements-test-assets.txt)
 .\scripts\prepare_test_assets.ps1 -GenerateMissing -InstallPythonDeps
 # Force full regeneration even when files already exist
 .\scripts\prepare_test_assets.ps1 -ForceRegenerate
+# Determinism gate: fail if tracked metadata changed unexpectedly
+git diff --exit-code -- reference/det_metadata.json reference/metadata.json
+# (equivalent pathspec form: git diff --exit-code -- reference/*.json)
 
 # Optional: build first, then test
 .\build.ps1 -Configuration Release

@@ -112,7 +112,7 @@ function Invoke-PythonCommand([object]$runner, [string[]]$pythonArgs, [switch]$c
     return $LASTEXITCODE
 }
 
-function Ensure-PythonDependencies([object]$runner, [switch]$installDeps) {
+function Ensure-PythonDependencies([object]$runner, [switch]$installDeps, [string]$requirementsPath) {
     $requiredModules = @("numpy", "soundfile", "torch", "qwen_tts")
     $checkCode = @"
 import importlib.util
@@ -120,6 +120,15 @@ mods = ["numpy", "soundfile", "torch", "qwen_tts"]
 missing = [m for m in mods if importlib.util.find_spec(m) is None]
 print(",".join(missing))
 "@
+
+    $hasRequirements = -not [string]::IsNullOrWhiteSpace($requirementsPath) -and (Test-Path $requirementsPath)
+    if ($installDeps -and $hasRequirements) {
+        Write-Host "Installing pinned Python dependencies from: $requirementsPath" -ForegroundColor Yellow
+        Invoke-PythonCommand -runner $runner -pythonArgs @("-m", "pip", "install", "-r", $requirementsPath) | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install pinned Python dependencies from $requirementsPath"
+        }
+    }
 
     $output = Invoke-PythonCommand -runner $runner -pythonArgs @("-c", $checkCode) -captureOutput
     if ($LASTEXITCODE -ne 0) {
@@ -151,6 +160,10 @@ print(",".join(missing))
     }
     $packages = @($packages | Select-Object -Unique)
 
+    if ($installDeps -and $hasRequirements) {
+        throw "Python module probe still missing dependencies after installing ${requirementsPath}: $($missingModules -join ', ')"
+    }
+
     if ($installDeps) {
         Write-Host "Installing missing Python packages: $($packages -join ', ')" -ForegroundColor Yellow
 
@@ -162,9 +175,53 @@ print(",".join(missing))
         return
     }
 
-    $installCmd = "$($runner.Exe) $($runner.Args -join ' ') -m pip install " + ($packages -join " ")
+    $installCmd = if ($hasRequirements) {
+        "$($runner.Exe) $($runner.Args -join ' ') -m pip install -r `"$requirementsPath`""
+    } else {
+        "$($runner.Exe) $($runner.Args -join ' ') -m pip install " + ($packages -join " ")
+    }
 
     throw "Missing Python modules: $($missingModules -join ', '). Install with: $installCmd"
+}
+
+function Write-PythonOutputFiltered(
+    [object]$outputLines,
+    [bool]$suppressSoxWarnings
+) {
+    $soxNoisePatterns = @(
+        "System.Management.Automation.RemoteException",
+        "SoX could not be found!",
+        "If you do not have SoX, proceed here:",
+        "If you do (or think that you should) have SoX",
+        "sox.sourceforge.net",
+        "Der Befehl `"sox`" ist entweder falsch geschrieben oder",
+        "konnte nicht gefunden werden.",
+        "path variables."
+    )
+
+    $suppressed = 0
+    foreach ($lineObj in @($outputLines)) {
+        $line = $lineObj.ToString()
+        $isSoxNoise = $false
+        if ($suppressSoxWarnings) {
+            foreach ($pattern in $soxNoisePatterns) {
+                if ($line -like "*$pattern*") {
+                    $isSoxNoise = $true
+                    break
+                }
+            }
+        }
+
+        if ($isSoxNoise) {
+            $suppressed++
+            continue
+        }
+        Write-Host $line
+    }
+
+    if ($suppressed -gt 0) {
+        Write-Host "[INFO] Suppressed $suppressed non-fatal SoX warning line(s). Install SoX CLI to remove this note." -ForegroundColor DarkYellow
+    }
 }
 
 function Write-GroupStatus([string]$name, [string[]]$paths) {
@@ -179,14 +236,20 @@ function Write-GroupStatus([string]$name, [string[]]$paths) {
     }
 }
 
-function Invoke-PythonScript([string]$repoRoot, [string]$scriptRelativePath, [object]$runner) {
+function Invoke-PythonScript(
+    [string]$repoRoot,
+    [string]$scriptRelativePath,
+    [object]$runner,
+    [bool]$suppressSoxWarnings
+) {
     $scriptPath = Join-Path $repoRoot $scriptRelativePath
     if (-not (Test-Path $scriptPath)) {
         throw "Script not found: $scriptPath"
     }
 
     Write-Host "Running: $($runner.Name) $scriptRelativePath"
-    Invoke-PythonCommand -runner $runner -pythonArgs @($scriptPath) | Out-Null
+    $output = Invoke-PythonCommand -runner $runner -pythonArgs @($scriptPath) -captureOutput
+    Write-PythonOutputFiltered -outputLines $output -suppressSoxWarnings:$suppressSoxWarnings
     if ($LASTEXITCODE -ne 0) {
         throw "Failed while running $scriptRelativePath"
     }
@@ -240,7 +303,14 @@ if (-not $runner) {
     throw "No Python runner found. Ensure a venv exists, or install system Python."
 }
 Write-Host "Using Python runner: $($runner.Name)"
-Ensure-PythonDependencies -runner $runner -installDeps:$InstallPythonDeps
+$requirementsPath = Join-Path $repoRoot "scripts\requirements-test-assets.txt"
+Ensure-PythonDependencies -runner $runner -installDeps:$InstallPythonDeps -requirementsPath $requirementsPath
+
+$soxCmd = Get-Command sox -ErrorAction SilentlyContinue
+$suppressSoxWarnings = $null -eq $soxCmd
+if ($suppressSoxWarnings) {
+    Write-Host "SoX CLI not found on PATH. Continuing without it; known non-fatal SoX warnings will be suppressed." -ForegroundColor DarkYellow
+}
 
 if ($GenerateMissing -or $ForceRegenerate) {
     if (-not $resolvedReferenceAudio -or -not (Test-Path $resolvedReferenceAudio)) {
@@ -249,11 +319,11 @@ if ($GenerateMissing -or $ForceRegenerate) {
     $env:QWEN3_TTS_REF_AUDIO = $resolvedReferenceAudio
 
     if ($ForceRegenerate -or -not (Test-AllExist $requiredDeterministicRefs)) {
-        Invoke-PythonScript -repoRoot $repoRoot -scriptRelativePath "scripts/generate_deterministic_reference.py" -runner $runner
+        Invoke-PythonScript -repoRoot $repoRoot -scriptRelativePath "scripts/generate_deterministic_reference.py" -runner $runner -suppressSoxWarnings:$suppressSoxWarnings
     }
 
     if ($ForceRegenerate -or -not (Test-AllExist $legacyRefs)) {
-        Invoke-PythonScript -repoRoot $repoRoot -scriptRelativePath "scripts/generate_reference_outputs.py" -runner $runner
+        Invoke-PythonScript -repoRoot $repoRoot -scriptRelativePath "scripts/generate_reference_outputs.py" -runner $runner -suppressSoxWarnings:$suppressSoxWarnings
     }
 }
 

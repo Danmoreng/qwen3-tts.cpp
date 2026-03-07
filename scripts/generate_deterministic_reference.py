@@ -34,6 +34,13 @@ LANGUAGE = "English"
 MAX_NEW_TOKENS = 64
 
 
+def _to_repo_relative(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _resolve_reference_audio_path() -> Path:
     env_path = os.environ.get("QWEN3_TTS_REF_AUDIO", "").strip()
     candidates: list[Path] = []
@@ -274,7 +281,7 @@ def main() -> int:
     model = Qwen3TTSModel.from_pretrained(
         str(MODEL_PATH),
         device_map="cpu",
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
     )
     model.model = model.model.eval()
 
@@ -409,8 +416,8 @@ def main() -> int:
     num_samples = len(decoded_audio)
 
     metadata = {
-        "model_path": str(MODEL_PATH),
-        "reference_audio": str(ref_audio_path),
+        "model_path": _to_repo_relative(MODEL_PATH),
+        "reference_audio": _to_repo_relative(ref_audio_path),
         "reference_text": ref_text,
         "synthesis_text": SYNTH_TEXT,
         "language": LANGUAGE,

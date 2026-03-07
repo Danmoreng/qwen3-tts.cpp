@@ -1,6 +1,6 @@
 {
-  "model_path": "C:\\Development\\Qwen3TTSDev\\qwen3-tts.cpp\\models\\Qwen3-TTS-12Hz-0.6B-Base",
-  "reference_audio": "C:\\Development\\Qwen3TTSDev\\qwen3-tts.cpp\\examples\\readme_clone_input.wav",
+  "model_path": "models/Qwen3-TTS-12Hz-0.6B-Base",
+  "reference_audio": "examples/readme_clone_input.wav",
   "reference_text": "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.",
   "synthesis_text": "Hello.",
   "language": "English",
