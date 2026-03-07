@@ -97,6 +97,10 @@ struct tts_transformer_config {
     int32_t codec_think_eos_id = 2157;
 
     int32_t english_language_id = 2050;
+
+    // Model variant metadata (for 1.7B CustomVoice / VoiceDesign behavior)
+    std::string tts_model_type = "base";
+    std::map<std::string, int32_t> speaker_id_map;
 };
 
 // Transformer layer weights
@@ -276,6 +280,10 @@ public:
     const tts_transformer_config & get_config() const { return model_.config; }
     
     const std::string & get_error() const { return error_msg_; }
+
+    // Resolve a named speaker (CustomVoice models) into a codec embedding vector.
+    bool get_named_speaker_embedding(const std::string & speaker_name,
+                                     std::vector<float> & speaker_embedding);
     
     // Legacy interface for compatibility
     bool forward(const int32_t * tokens, int32_t n_tokens, int32_t n_past,

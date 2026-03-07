@@ -43,6 +43,9 @@ struct tts_params {
 
     // Optional style/voice instruction
     std::string instruction;
+
+    // Optional named speaker (for CustomVoice models)
+    std::string speaker;
 };
 
 // TTS generation result

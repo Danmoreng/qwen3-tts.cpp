@@ -260,11 +260,26 @@ tts_result Qwen3TTS::synthesize(const std::string & text,
         return result;
     }
     
-    // For basic synthesis without voice cloning, we use a zero speaker embedding
-    // This will use the model's default voice characteristics
-    std::vector<float> zero_embedding(transformer_.get_config().hidden_size, 0.0f);
-    
-    return synthesize_internal(text, zero_embedding.data(), params, result);
+    if (!params.speaker.empty()) {
+        std::vector<float> speaker_embedding;
+        if (!transformer_.get_named_speaker_embedding(params.speaker, speaker_embedding)) {
+            result.error_msg = "Failed to resolve speaker '" + params.speaker + "': " + transformer_.get_error();
+            return result;
+        }
+        if (params.print_progress) {
+            fprintf(stderr, "Using named speaker: %s (%zu floats)\n",
+                    params.speaker.c_str(), speaker_embedding.size());
+        }
+        return synthesize_internal(text, speaker_embedding.data(), params, result);
+    }
+
+    if (transformer_.get_config().tts_model_type == "custom_voice") {
+        result.error_msg = "CustomVoice model requires --speaker, --reference, or --speaker-embedding";
+        return result;
+    }
+
+    // Default path: no speaker conditioning.
+    return synthesize_internal(text, nullptr, params, result);
 }
 
 tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
@@ -326,6 +341,16 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         return result;
     }
     result.t_encode_ms = get_time_ms() - t_encode_start;
+
+    const int expected_dim = transformer_.get_config().hidden_size;
+    if ((int) speaker_embedding.size() != expected_dim) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "Speaker embedding dimension mismatch after extraction: got %zu, expected %d",
+                 speaker_embedding.size(), expected_dim);
+        result.error_msg = buf;
+        return result;
+    }
     
     if (params.print_progress) {
         fprintf(stderr, "Speaker embedding extracted: %zu floats\n", speaker_embedding.size());
@@ -404,6 +429,16 @@ bool Qwen3TTS::extract_speaker_embedding(const std::string & reference_audio,
     const int64_t t_encode_start = get_time_ms();
     if (!audio_encoder_.encode(ref_samples.data(), (int32_t) ref_samples.size(), speaker_embedding)) {
         error_msg_ = "Failed to extract speaker embedding: " + audio_encoder_.get_error();
+        return false;
+    }
+
+    const int expected_dim = transformer_.get_config().hidden_size;
+    if ((int) speaker_embedding.size() != expected_dim) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "Speaker embedding dimension mismatch after extraction: got %zu, expected %d",
+                 speaker_embedding.size(), expected_dim);
+        error_msg_ = buf;
         return false;
     }
 

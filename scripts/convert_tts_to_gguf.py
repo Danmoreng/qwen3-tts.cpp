@@ -155,6 +155,9 @@ class Qwen3TTSConverter:
         talker_config = self.config.get("talker_config", {})
         code_predictor_config = talker_config.get("code_predictor_config", {})
         speaker_encoder_config = self.config.get("speaker_encoder_config", {})
+        self.tts_model_type = str(self.config.get("tts_model_type", "base")).lower()
+        raw_spk_id_map = talker_config.get("spk_id", {})
+        self.spk_id_map = raw_spk_id_map if isinstance(raw_spk_id_map, dict) else {}
 
         # Talker parameters
         self.hidden_size = talker_config.get("hidden_size", 1024)
@@ -188,7 +191,11 @@ class Qwen3TTSConverter:
         self.codec_eos_id = talker_config.get("codec_eos_token_id", 2150)
 
         # Model name
-        self.model_name = "Qwen3-TTS-12Hz-0.6B"
+        model_size = str(self.config.get("tts_model_size", "0b6"))
+        if model_size == "1b7":
+            self.model_name = "Qwen3-TTS-12Hz-1.7B"
+        else:
+            self.model_name = "Qwen3-TTS-12Hz-0.6B"
 
     def _map_tensor_name(self, hf_name: str) -> str | None:
         """Map HuggingFace tensor name to GGML convention."""
@@ -460,6 +467,7 @@ class Qwen3TTSConverter:
         writer.add_uint32(f"{arch}.text_vocab_size", self.text_vocab_size)
         writer.add_uint32(f"{arch}.text_hidden_size", self.text_hidden_size)
         writer.add_uint32(f"{arch}.num_code_groups", self.num_code_groups)
+        writer.add_string(f"{arch}.tts_model_type", self.tts_model_type)
 
         # M-RoPE configuration
         writer.add_array(f"{arch}.rope.mrope_section", self.mrope_section)
@@ -476,6 +484,25 @@ class Qwen3TTSConverter:
         writer.add_uint32(f"{arch}.codec.pad_id", self.codec_pad_id)
         writer.add_uint32(f"{arch}.codec.bos_id", self.codec_bos_id)
         writer.add_uint32(f"{arch}.codec.eos_id", self.codec_eos_id)
+
+        # CustomVoice speaker metadata
+        speaker_items: list[tuple[str, int]] = []
+        for k, v in self.spk_id_map.items():
+            name = str(k).strip().lower()
+            if not name:
+                continue
+            try:
+                spk_id = int(v)
+            except (TypeError, ValueError):
+                continue
+            if spk_id < 0:
+                continue
+            speaker_items.append((name, spk_id))
+        speaker_items.sort(key=lambda x: x[0])
+        writer.add_uint32(f"{arch}.speaker.count", len(speaker_items))
+        for idx, (name, spk_id) in enumerate(speaker_items):
+            writer.add_string(f"{arch}.speaker.{idx}.name", name)
+            writer.add_uint32(f"{arch}.speaker.{idx}.id", spk_id)
 
         logger.info("Added model metadata")
 

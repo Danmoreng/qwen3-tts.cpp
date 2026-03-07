@@ -13,6 +13,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  -t, --text <text>      Text to synthesize (required)\n");
     fprintf(stderr, "  -o, --output <file>    Output WAV file (default: output.wav)\n");
     fprintf(stderr, "  -r, --reference <file> Reference audio for voice cloning\n");
+    fprintf(stderr, "  --speaker <name>       Named speaker (CustomVoice models)\n");
     fprintf(stderr, "  --speaker-embedding <file> Use precomputed speaker embedding (.json/.bin)\n");
     fprintf(stderr, "  --dump-speaker-embedding <file> Save extracted embedding from --reference\n");
     fprintf(stderr, "  --temperature <val>    Sampling temperature (default: 0.9, 0=greedy)\n");
@@ -81,6 +82,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             reference_audio = argv[i];
+        } else if (arg == "--speaker") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing speaker name\n");
+                return 1;
+            }
+            params.speaker = argv[i];
         } else if (arg == "--speaker-embedding") {
             if (++i >= argc) {
                 fprintf(stderr, "Error: missing speaker embedding file\n");
@@ -177,6 +184,14 @@ int main(int argc, char ** argv) {
 
     if (!reference_audio.empty() && !speaker_embedding_file.empty()) {
         fprintf(stderr, "Error: --reference and --speaker-embedding are mutually exclusive\n");
+        return 1;
+    }
+    if (!speaker_embedding_file.empty() && !params.speaker.empty()) {
+        fprintf(stderr, "Error: --speaker and --speaker-embedding are mutually exclusive\n");
+        return 1;
+    }
+    if (!reference_audio.empty() && !params.speaker.empty()) {
+        fprintf(stderr, "Error: --reference and --speaker are mutually exclusive\n");
         return 1;
     }
     if (!dump_speaker_embedding_file.empty() && reference_audio.empty()) {

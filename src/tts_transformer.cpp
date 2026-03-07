@@ -15,6 +15,14 @@
 
 namespace qwen3_tts {
 
+static std::string normalize_speaker_name(const std::string & name) {
+    std::string out = name;
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return (char) std::tolower(c);
+    });
+    return out;
+}
+
 TTSTransformer::TTSTransformer() = default;
 
 TTSTransformer::~TTSTransformer() {
@@ -234,6 +242,19 @@ bool TTSTransformer::parse_config(struct gguf_context * ctx) {
         }
         return default_val;
     };
+
+    auto get_str_any = [&](std::initializer_list<const char *> keys, const char * default_val) -> std::string {
+        for (const char * key : keys) {
+            int64_t idx = gguf_find_key(ctx, key);
+            if (idx >= 0 && gguf_get_kv_type(ctx, idx) == GGUF_TYPE_STRING) {
+                const char * s = gguf_get_val_str(ctx, idx);
+                if (s && s[0] != '\0') {
+                    return std::string(s);
+                }
+            }
+        }
+        return std::string(default_val ? default_val : "");
+    };
     
     auto & cfg = model_.config;
     cfg.text_vocab_size = get_u32_any({
@@ -345,9 +366,15 @@ bool TTSTransformer::parse_config(struct gguf_context * ctx) {
         "qwen3-tts.language_id",
     }, 2050);
 
+    cfg.tts_model_type = normalize_speaker_name(get_str_any({
+        "qwen3-tts.tts_model_type",
+    }, "base"));
+    cfg.speaker_id_map.clear();
+
     fprintf(stderr, "  Codec IDs: pad=%d, bos=%d, eos=%d, think=%d, nothink=%d, think_bos=%d, think_eos=%d\n",
             cfg.codec_pad_id, cfg.codec_bos_id, cfg.codec_eos_id,
             cfg.codec_think_id, cfg.codec_nothink_id, cfg.codec_think_bos_id, cfg.codec_think_eos_id);
+    fprintf(stderr, "  TTS model type: %s\n", cfg.tts_model_type.c_str());
 
     // M-RoPE sections
     int64_t mrope_idx = gguf_find_key(ctx, "qwen3-tts.talker.rope.mrope_section");
@@ -362,6 +389,56 @@ bool TTSTransformer::parse_config(struct gguf_context * ctx) {
             }
             cfg.use_mrope = true;
         }
+    }
+
+    int64_t spk_count_idx = gguf_find_key(ctx, "qwen3-tts.speaker.count");
+    int32_t spk_count = 0;
+    if (spk_count_idx >= 0) {
+        const enum gguf_type spk_count_type = gguf_get_kv_type(ctx, spk_count_idx);
+        if (spk_count_type == GGUF_TYPE_UINT32) {
+            spk_count = (int32_t) gguf_get_val_u32(ctx, spk_count_idx);
+        } else if (spk_count_type == GGUF_TYPE_INT32) {
+            spk_count = gguf_get_val_i32(ctx, spk_count_idx);
+        }
+    }
+    if (spk_count > 0) {
+        for (int32_t i = 0; i < spk_count; ++i) {
+            char name_key[64];
+            char id_key[64];
+            snprintf(name_key, sizeof(name_key), "qwen3-tts.speaker.%d.name", i);
+            snprintf(id_key, sizeof(id_key), "qwen3-tts.speaker.%d.id", i);
+            int64_t name_idx = gguf_find_key(ctx, name_key);
+            int64_t id_idx = gguf_find_key(ctx, id_key);
+            if (name_idx < 0 || id_idx < 0) {
+                continue;
+            }
+            if (gguf_get_kv_type(ctx, name_idx) != GGUF_TYPE_STRING) {
+                continue;
+            }
+            const char * raw_name = gguf_get_val_str(ctx, name_idx);
+            if (!raw_name || raw_name[0] == '\0') {
+                continue;
+            }
+
+            int32_t spk_id = -1;
+            const enum gguf_type id_type = gguf_get_kv_type(ctx, id_idx);
+            if (id_type == GGUF_TYPE_UINT32) {
+                spk_id = (int32_t) gguf_get_val_u32(ctx, id_idx);
+            } else if (id_type == GGUF_TYPE_INT32) {
+                spk_id = gguf_get_val_i32(ctx, id_idx);
+            } else {
+                continue;
+            }
+            if (spk_id < 0) {
+                continue;
+            }
+
+            cfg.speaker_id_map[normalize_speaker_name(raw_name)] = spk_id;
+        }
+    }
+
+    if (!cfg.speaker_id_map.empty()) {
+        fprintf(stderr, "  CustomVoice speakers loaded: %zu\n", cfg.speaker_id_map.size());
     }
     
     return true;
@@ -2262,7 +2339,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
     
     struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
     if (inp_mrope_pos && model_.config.use_mrope) {
-        int32_t positions[4] = {n_past, n_past, n_past, n_past};
+        int32_t positions[4] = {n_past, n_past, n_past, 0};
         ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
     }
 
@@ -2344,6 +2421,39 @@ bool TTSTransformer::get_hidden_states(std::vector<float> & hidden) const {
         return false;
     }
     hidden = last_hidden_;
+    return true;
+}
+
+bool TTSTransformer::get_named_speaker_embedding(const std::string & speaker_name,
+                                                 std::vector<float> & speaker_embedding) {
+    if (!model_.ctx) {
+        error_msg_ = "Model not loaded";
+        return false;
+    }
+    if (!model_.codec_embd) {
+        error_msg_ = "Model missing codec embedding tensor";
+        return false;
+    }
+    if (model_.config.speaker_id_map.empty()) {
+        error_msg_ = "No speaker map found in model metadata";
+        return false;
+    }
+
+    const std::string key = normalize_speaker_name(speaker_name);
+    auto it = model_.config.speaker_id_map.find(key);
+    if (it == model_.config.speaker_id_map.end()) {
+        error_msg_ = "Unknown speaker: " + speaker_name;
+        return false;
+    }
+
+    speaker_embedding.resize(model_.config.hidden_size);
+    if (!lookup_single_embedding_row(model_.codec_embd, it->second, speaker_embedding.data())) {
+        if (error_msg_.empty()) {
+            error_msg_ = "Failed to lookup speaker embedding for speaker: " + speaker_name;
+        }
+        return false;
+    }
+
     return true;
 }
 
@@ -2663,7 +2773,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         
         struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
         if (inp_mrope_pos && model_.config.use_mrope) {
-            int32_t positions[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+            int32_t positions[8] = {0, 1, 0, 1, 0, 1, 0, 0};
             ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 8 * sizeof(int32_t));
         }
 #ifdef QWEN3_TTS_TIMING
@@ -2768,8 +2878,8 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
         
         struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
-        if (inp_mrope_pos) {
-            int32_t positions[4] = {n_past, n_past, n_past, n_past};
+        if (inp_mrope_pos && model_.config.use_mrope) {
+            int32_t positions[4] = {n_past, n_past, n_past, 0};
             ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
         }
 
@@ -2915,7 +3025,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     int32_t n_past = prefill_len;
     std::vector<int32_t> frame_codes(cfg.n_codebooks);
     std::unordered_set<int32_t> generated_cb0_tokens;
-    const int32_t suppress_start = cfg.codec_vocab_size - 1024;
+    const int32_t suppress_start = std::min(cfg.code_pred_vocab_size, cfg.codec_vocab_size);
     
     std::vector<float> probs(cfg.codec_vocab_size);
     std::vector<float> step_embd(cfg.hidden_size, 0.0f);
