@@ -31,9 +31,10 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = PROJECT_ROOT / "docs"
 MODELS_DIR = PROJECT_ROOT / "models"
-HF_MODEL_DIR = MODELS_DIR / "Qwen3-TTS-12Hz-0.6B-Base"
+DEFAULT_HF_MODEL_DIR = MODELS_DIR / "Qwen3-TTS-12Hz-0.6B-Base"
 CPP_CLI = PROJECT_ROOT / "build" / "qwen3-tts-cli"
 REF_AUDIO = PROJECT_ROOT / "examples" / "readme_clone_input.wav"
+FASTER_PY_REF_ROOT = PROJECT_ROOT / "third_party" / "python_ref" / "faster-qwen3-tts"
 
 # Keep benchmark prompts aligned with the known-good quickstart examples.
 BASIC_TEXT = "Hello from qwen3-tts.cpp running on macOS with CoreML by default."
@@ -85,58 +86,138 @@ def _write_wav(path: Path, audio, sample_rate: int) -> None:
     sf.write(str(path), arr, sample_rate)
 
 
-def _run_pytorch_worker(mode: str, output: Path, max_tokens: int) -> None:
+def _run_basic_tts_qwen(model, text: str, max_tokens: int, output: Path, deterministic: bool) -> None:
+    do_sample = not deterministic
+    top_k = 50 if do_sample else None
+    top_p = 1.0 if do_sample else None
+    temperature = 0.9 if do_sample else None
+
+    input_ids = model._tokenize_texts([model._build_assistant_text(text)])
+    gen_kwargs = model._merge_generate_kwargs(
+        do_sample=do_sample,
+        top_k=top_k,
+        top_p=top_p,
+        temperature=temperature,
+        repetition_penalty=1.05,
+        max_new_tokens=max_tokens,
+    )
+    talker_codes_list, _ = model.model.generate(
+        input_ids=input_ids,
+        languages=["English"],
+        speakers=[None],
+        non_streaming_mode=False,
+        **gen_kwargs,
+    )
+    wavs, sr = model.model.speech_tokenizer.decode([{"audio_codes": talker_codes_list[0]}])
+    _write_wav(output, wavs[0], sr)
+
+
+def _run_pytorch_worker(
+    mode: str,
+    output: Path,
+    max_tokens: int,
+    hf_model_dir: Path,
+    text: str,
+    ref_audio: Path,
+    deterministic: bool,
+) -> None:
     import torch
     from qwen_tts import Qwen3TTSModel
 
-    if not HF_MODEL_DIR.exists():
-        raise FileNotFoundError(f"Missing HF model directory: {HF_MODEL_DIR}")
-    if mode == "voice_clone" and not REF_AUDIO.exists():
-        raise FileNotFoundError(f"Missing reference audio: {REF_AUDIO}")
+    if not hf_model_dir.exists():
+        raise FileNotFoundError(f"Missing HF model directory: {hf_model_dir}")
+    if mode == "voice_clone" and not ref_audio.exists():
+        raise FileNotFoundError(f"Missing reference audio: {ref_audio}")
 
     model = Qwen3TTSModel.from_pretrained(
-        str(HF_MODEL_DIR),
+        str(hf_model_dir),
         device_map="cpu",
         torch_dtype=torch.float32,
     )
     model.model = model.model.eval()
 
     if mode == "voice_clone":
+        do_sample = not deterministic
+        top_k = 50 if do_sample else None
+        top_p = 1.0 if do_sample else None
+        temperature = 0.9 if do_sample else None
+
         wavs, sr = model.generate_voice_clone(
-            text=CLONE_TEXT,
+            text=text or CLONE_TEXT,
             language="English",
-            ref_audio=str(REF_AUDIO),
+            ref_audio=str(ref_audio),
             x_vector_only_mode=True,
             non_streaming_mode=False,
-            do_sample=True,
-            top_k=50,
-            top_p=1.0,
-            temperature=0.9,
+            do_sample=do_sample,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
             repetition_penalty=1.05,
             max_new_tokens=max_tokens,
         )
         _write_wav(output, wavs[0], sr)
     elif mode == "basic":
-        input_ids = model._tokenize_texts([model._build_assistant_text(BASIC_TEXT)])
-        gen_kwargs = model._merge_generate_kwargs(
-            do_sample=True,
-            top_k=50,
-            top_p=1.0,
-            temperature=0.9,
-            repetition_penalty=1.05,
-            max_new_tokens=max_tokens,
-        )
-        talker_codes_list, _ = model.model.generate(
-            input_ids=input_ids,
-            languages=["English"],
-            speakers=[None],
-            non_streaming_mode=False,
-            **gen_kwargs,
-        )
-        wavs, sr = model.model.speech_tokenizer.decode([{"audio_codes": talker_codes_list[0]}])
-        _write_wav(output, wavs[0], sr)
+        _run_basic_tts_qwen(model, text or BASIC_TEXT, max_tokens, output, deterministic)
     else:
         raise ValueError(f"Unsupported mode: {mode}")
+
+
+def _run_faster_worker(
+    mode: str,
+    output: Path,
+    max_tokens: int,
+    faster_root: Path,
+    hf_model_dir: Path,
+    text: str,
+    ref_audio: Path,
+    deterministic: bool,
+) -> None:
+    import torch
+
+    if not hf_model_dir.exists():
+        raise FileNotFoundError(f"Missing HF model directory: {hf_model_dir}")
+    if not ref_audio.exists():
+        raise FileNotFoundError(f"Missing reference audio: {ref_audio}")
+    if not faster_root.exists():
+        raise FileNotFoundError(f"Missing faster-qwen3-tts root: {faster_root}")
+    if not torch.cuda.is_available():
+        raise RuntimeError("faster-qwen3-tts benchmark requires CUDA.")
+    if mode == "basic":
+        raise RuntimeError("Basic TTS is not implemented in faster-qwen3-tts benchmark worker.")
+
+    do_sample = not deterministic
+    top_k = 50 if do_sample else None
+    top_p = 1.0 if do_sample else None
+    temperature = 0.9 if do_sample else None
+
+    faster_root_str = str(faster_root.resolve())
+    if faster_root_str not in sys.path:
+        sys.path.insert(0, faster_root_str)
+
+    from faster_qwen3_tts import FasterQwen3TTS
+
+    model = FasterQwen3TTS.from_pretrained(
+        str(hf_model_dir),
+        device="cuda",
+        dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+    )
+
+    wavs, sr = model.generate_voice_clone(
+        text=text or CLONE_TEXT,
+        language="English",
+        ref_audio=str(ref_audio),
+        ref_text="",
+        xvec_only=True,
+        non_streaming_mode=False,
+        do_sample=do_sample,
+        top_k=top_k,
+        top_p=top_p,
+        temperature=temperature,
+        repetition_penalty=1.05,
+        max_new_tokens=max_tokens,
+    )
+    _write_wav(output, wavs[0], sr)
 
 
 def _build_plot(report: dict[str, Any], out_png: Path) -> None:
@@ -355,6 +436,22 @@ def main() -> int:
     p.add_argument("--mode", choices=["basic", "voice_clone"], help="Worker mode")
     p.add_argument("--output", type=Path, help="Worker output wav path")
     p.add_argument("--max-tokens", type=int, default=200, help="Max generated tokens")
+    p.add_argument("--deterministic", action="store_true", help="Use deterministic greedy decoding")
+    p.add_argument("--hf-model-dir", type=Path, default=DEFAULT_HF_MODEL_DIR, help="HF model directory for Python backends")
+    p.add_argument("--text", type=str, default=BASIC_TEXT, help="Text prompt for worker mode")
+    p.add_argument("--ref-audio", type=Path, default=REF_AUDIO, help="Reference audio path for voice-clone workers")
+    p.add_argument(
+        "--backend",
+        choices=["qwen_tts", "faster_qwen3_tts"],
+        default="qwen_tts",
+        help="Worker backend to benchmark",
+    )
+    p.add_argument(
+        "--faster-root",
+        type=Path,
+        default=FASTER_PY_REF_ROOT,
+        help="Path to third_party/python_ref/faster-qwen3-tts",
+    )
     p.add_argument("--out-json", type=Path, default=DOCS_DIR / "benchmark_pytorch_vs_cpp.json")
     p.add_argument("--out-png", type=Path, default=DOCS_DIR / "benchmark_pytorch_vs_cpp.png")
     p.add_argument("--update-readme", action="store_true", help="Insert graph + summary at the top of README")
@@ -363,7 +460,29 @@ def main() -> int:
     if args.worker:
         if not args.mode or not args.output:
             raise SystemExit("--worker requires --mode and --output")
-        _run_pytorch_worker(args.mode, args.output, args.max_tokens)
+        if args.backend == "qwen_tts":
+            _run_pytorch_worker(
+                args.mode,
+                args.output,
+                args.max_tokens,
+                args.hf_model_dir,
+                args.text,
+                args.ref_audio,
+                args.deterministic,
+            )
+        elif args.backend == "faster_qwen3_tts":
+            _run_faster_worker(
+                args.mode,
+                args.output,
+                args.max_tokens,
+                args.faster_root,
+                args.hf_model_dir,
+                args.text,
+                args.ref_audio,
+                args.deterministic,
+            )
+        else:
+            raise SystemExit(f"Unsupported backend: {args.backend}")
         return 0
 
     python_exe = PROJECT_ROOT / ".venv" / "bin" / "python"
