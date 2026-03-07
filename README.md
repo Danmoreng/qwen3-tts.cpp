@@ -193,6 +193,11 @@ For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_ggu
 # Voice cloning from reference audio
 ./build/qwen3-tts-cli -m models -t "Hello! How are you?" -r reference.wav -o cloned.wav
 
+# 1.7B CustomVoice with style instruction
+./build/qwen3-tts-cli -m models --model-name qwen3-tts-1.7b-f16.gguf \
+    --speaker vivian -t "Hello! How are you?" --instruct "Whispering, very soft and quiet voice." \
+    -o styled.wav
+
 # Greedy decoding with max length
 ./build/qwen3-tts-cli -m models -t "Hello!" -r ref.wav -o out.wav \
     --temperature 0 --max-tokens 2048
@@ -211,9 +216,11 @@ For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_ggu
 | `--top-p <val>` | Top-p sampling | 1.0 |
 | `--max-tokens <n>` | Maximum audio frames to generate | 4096 |
 | `--repetition-penalty <val>` | Repetition penalty on codebook-0 token generation | 1.05 |
+| `--instruction <text>`, `--instruct <text>` | Voice/style steering text (CustomVoice 1.7B) | (none) |
 | `-j, --threads <n>` | Number of compute threads | 4 |
 
 `--top-p` is currently parsed by the CLI but not yet wired into transformer sampling.
+`--instruct` now follows Python reference behavior (`instruct_ids` path): the instruction is injected as a separate user prompt, not mixed into assistant text.
 
 On macOS, CoreML code predictor is enabled by default when `models/coreml/code_predictor.mlpackage` exists.
 Set `QWEN3_TTS_USE_COREML=0` to disable it. Low-memory mode is opt-in via `QWEN3_TTS_LOW_MEM=1`.
@@ -314,6 +321,16 @@ uv run python scripts/generate_deterministic_reference.py
 ```powershell
 # Windows: use PowerShell test runner
 .\scripts\run_all_tests.ps1
+# Default CLI regression outputs (6 WAV files):
+#   regression_basic.wav
+#   regression_clone.wav
+#   regression_1p7b_basic.wav
+#   regression_1p7b_clone.wav
+#   regression_1p7b_style_whisper.wav
+#   regression_1p7b_style_angry_shout.wav
+# (1.7B style cases use the dedicated --instruct flag, not inline instruction text.)
+# (If 1.7B checks should be skipped on a local machine: -Skip17B)
+# The runner disables QWEN3_TTS_DEBUG_DUMP_* env vars during execution.
 
 # Optional: prepare/verify deterministic reference assets first
 .\scripts\prepare_test_assets.ps1 -GenerateMissing
@@ -329,6 +346,10 @@ git diff --exit-code -- reference/det_metadata.json reference/metadata.json
 # Optional: build first, then test
 .\build.ps1 -Configuration Release
 .\scripts\run_all_tests.ps1 -Configuration Release -RequireComponentTests
+
+# Optional: include 1.7B CLI regression check
+# (enabled by default; this line just shows explicit model/speaker overrides)
+.\scripts\run_all_tests.ps1 -Configuration Release -ModelName17 qwen3-tts-1.7b-f16.gguf -Model17Speaker vivian
 ```
 
 ### Test Results (F16 model)

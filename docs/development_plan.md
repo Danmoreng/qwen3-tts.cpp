@@ -26,12 +26,16 @@ Maintain a single, current plan that separates:
 | 1.7B `small_to_mtp` projection support | Implemented | GGUF conversion and C++ loading now include `code_pred.small_to_mtp.{weight,bias}` and apply projection in predictor prefill/step paths. |
 | Missing-projection safety guard | Implemented | Loader now fails fast with a clear message when a model requires `small_to_mtp` but GGUF is missing those tensors. |
 | Python vs C++ trace tooling | Implemented | `scripts/dump_python_trace.py` and `scripts/debug_trace_report.py` allow frame/step-level parity checks. |
+| Windows 1.7B CLI regression hook | Implemented | `scripts/run_all_tests.ps1` now supports optional 1.7B CLI checks (`-Require17B`, `-ModelName17`, `-Model17Speaker`). |
+| 1.7B instruction prompt parity | Implemented | C++ now routes `--instruct/--instruction` through separate instruction tokens (`encode_instruct` + transformer `instruct_tokens`), mirroring Python `instruct_ids` behavior and preventing read-aloud instruction regressions. |
+| 1.7B converter/regeneration baseline | Implemented | Team baseline now assumes regenerated `qwen3-tts-1.7b-f16.gguf` from current converter before runtime/debug comparisons. |
+| Lightweight 1.7B deterministic gate | Implemented | A lightweight 1.7B regression check is now part of the active regression workflow. |
 
 ## Current State (Open / Needs Verification)
 
 | Area | Status | Notes |
 |---|---|---|
-| 1.7B regression coverage in automated tests | Open | Current CI/regression flows are still centered on 0.6B artifacts; add at least one deterministic 1.7B gate. |
+| 1.7B regression coverage in automated tests | Partial | Lightweight 1.7B regression is in place; promote to stricter deterministic artifact-backed gate in CI where practical. |
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
 | M-RoPE position handling consistency | Partial | Remaining path consistency should still be audited and documented with explicit expected layouts per path. |
 | CUDA throughput benchmark refresh | Needs verification | Re-run and publish comparable CPU/CUDA benchmark data after the 1.7B predictor changes. |
@@ -95,14 +99,13 @@ Exit criteria:
 
 ## Immediate Next Actions
 
-1. Ensure all developers regenerate `qwen3-tts-1.7b-f16.gguf` with the current converter before debugging/runtime comparison.
-2. Add one lightweight 1.7B deterministic regression gate (trace comparison or token-level smoke check).
-3. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
-4. Re-run baseline CPU and CUDA benchmarks with identical prompts, token limits, and reporting fields.
-5. Update this document with measured results and move verified items from "Open" to "Implemented".
+1. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
+2. Re-run baseline CPU and CUDA benchmarks with identical prompts, token limits, and reporting fields.
+3. Expand 1.7B cross-speaker/perceptual validation to include instruction-heavy prompts.
+4. Update this document with measured results and move verified items from "Open" to "Implemented".
 
 ## Ownership and Update Rule
 
 - This file is the source of truth for implementation status and roadmap.
 - When status changes, update this file first, then link to supporting PRs/commits.
-- Latest major correctness milestone: commit `8880e4b` (1.7B code predictor projection fix and trace tooling).
+- Latest major correctness milestone: commit `a977208` (instruction prompt parity fix with Python reference path) on top of projection baseline `8880e4b`.
