@@ -190,6 +190,9 @@ python scripts/convert_tts_to_gguf.py \
     models/Qwen3-TTS-12Hz-0.6B-Base \
     models/qwen3-tts-0.6b-f16.gguf
 
+# Optional: Quantize the model using the native C++ tool for maximum efficiency
+./build/qwen3-tts-quantize models/qwen3-tts-0.6b-f16.gguf models/qwen3-tts-0.6b-q4_k.gguf q4_k
+
 # Convert vocoder (audio decoder)
 python scripts/convert_tokenizer_to_gguf.py \
     models/Qwen3-TTS-12Hz-0.6B-Base \
