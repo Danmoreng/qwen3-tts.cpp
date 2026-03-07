@@ -56,11 +56,22 @@ function Find-FirstExisting([string[]]$paths) {
     return $null
 }
 
+function Get-ConfiguredGenerator([string]$buildDir) {
+    $cachePath = Join-Path $buildDir "CMakeCache.txt"
+    if (-not (Test-Path $cachePath)) {
+        return $null
+    }
+
+    $line = Select-String -Path $cachePath -Pattern "^CMAKE_GENERATOR:INTERNAL=(.+)$" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($line) {
+        return $line.Matches[0].Groups[1].Value
+    }
+    return $null
+}
+
 $ScriptDir = $PSScriptRoot
 $resolvedBuildDir = if ([string]::IsNullOrWhiteSpace($BuildDir)) {
-    if ($UseNinja -and $EnableCuda) { Join-Path $ScriptDir "build-cuda-ninja" }
-    elseif ($UseNinja) { Join-Path $ScriptDir "build-ninja" }
-    else { Join-Path $ScriptDir "build" }
+    Join-Path $ScriptDir "build"
 } elseif ([System.IO.Path]::IsPathRooted($BuildDir)) {
     $BuildDir
 } else {
@@ -99,6 +110,15 @@ if ($UseNinja) {
 } else {
     $GeneratorArgs += @("-G", "Visual Studio 17 2022", "-A", "x64")
     Write-Host "Generator: Visual Studio 17 2022"
+}
+
+$configuredGenerator = Get-ConfiguredGenerator -buildDir $resolvedBuildDir
+$expectedGenerator = if ($isNinja) { "Ninja" } else { "Visual Studio 17 2022" }
+if ($configuredGenerator -and $configuredGenerator -ne $expectedGenerator) {
+    Write-Host "Build directory generator mismatch detected: '$configuredGenerator' -> '$expectedGenerator'" -ForegroundColor Yellow
+    Write-Host "Cleaning $resolvedBuildDir to keep using the same build directory..."
+    Remove-Item -Path $resolvedBuildDir -Recurse -Force
+    New-Item -Path $resolvedBuildDir -ItemType Directory -Force | Out-Null
 }
 
 $cudaFlag = if ($EnableCuda) { "ON" } else { "OFF" }

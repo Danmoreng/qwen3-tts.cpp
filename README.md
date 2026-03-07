@@ -129,6 +129,9 @@ cmake --build build -j4
 \build.ps1 -BuildAll -Configuration Release
 ```
 
+`build.ps1` always uses the same `.\build` directory by default (including Ninja mode).  
+If you switch generators (Visual Studio <-> Ninja), the script automatically cleans and reconfigures that same build directory.
+
 If your `.\ggml` directory is empty (submodule not initialized), point `QWEN3_TTS_GGML_DIR` to another local GGML checkout.
 
 Run:
