@@ -284,7 +284,7 @@ if ($BuildFirst) {
     }
 
     Write-Host "Running build step via build.ps1 ..."
-    & $buildScript -Configuration $Configuration
+    & $buildScript -Configuration $Configuration -BuildAll
     if ($LASTEXITCODE -ne 0) {
         throw "Build failed via build.ps1"
     }
