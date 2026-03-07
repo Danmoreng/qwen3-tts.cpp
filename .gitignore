@@ -19,6 +19,7 @@ reference/debug/
 # Test outputs
 test_output/
 test_results.txt
+benchmark_output/
 *.wav
 !examples/readme_clone_input.wav
 !examples/readme_example_clone.wav
