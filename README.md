@@ -182,6 +182,8 @@ python scripts/convert_tokenizer_to_gguf.py \
 
 Place both `.gguf` files in a `models/` directory.
 
+For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_gguf.py` after pulling converter updates. The converter now exports code predictor projection tensors (`code_pred.small_to_mtp.*`) required for correct 1.7B speech generation.
+
 ## Usage
 
 ```bash
@@ -223,6 +225,31 @@ At runtime, each component logs its selected backend (for example, `TTSTransform
 - Preferred order: `IGPU` -> `GPU` -> `ACCEL` -> `CPU`
 - Encoder and transformer can run on Metal/other accelerators with CPU fallback in the scheduler
 - Decoder now follows the same backend preference and will use Metal when available
+
+### Debug Trace Dumps (1.7B Investigation)
+
+You can dump frame-level logits/tokens from the C++ generator and inspect them offline.
+
+```powershell
+$env:QWEN3_TTS_DEBUG_DUMP_DIR = ".\trace_cpp_1p7"
+$env:QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES = "2"
+$env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS = "15"
+.\build\qwen3-tts-cli.exe -m models --model-name qwen3-tts-1.7b-f16.gguf --speaker "<name>" -t "Hello." --temperature 0 --top-k 1 --max-tokens 64 -o out_1p7b.wav
+```
+
+Then inspect/compare traces:
+
+```powershell
+python .\scripts\debug_trace_report.py --trace-a .\trace_cpp_1p7
+python .\scripts\debug_trace_report.py --trace-a .\trace_cpp_1p7 --trace-b .\trace_cpp_0p6
+```
+
+For Python-vs-C++ (recommended for 1.7B debugging), first dump Python traces:
+
+```powershell
+python .\scripts\dump_python_trace.py --model .\models\Qwen3-TTS-12Hz-1.7B-CustomVoice --speaker "<name>" --text "Hello." --trace-dir .\trace_py_1p7 --max-new-tokens 64 --max-frames 2 --device cuda --dtype bfloat16
+python .\scripts\debug_trace_report.py --trace-a .\trace_cpp_1p7 --trace-b .\trace_py_1p7
+```
 
 ## Architecture
 
