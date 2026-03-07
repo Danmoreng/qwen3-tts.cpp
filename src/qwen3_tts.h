@@ -80,6 +80,17 @@ struct tts_result {
     
 };
 
+// Model capabilities inferred from loaded GGUF metadata.
+struct tts_model_capabilities {
+    bool loaded = false;
+    bool supports_voice_clone = false;
+    bool supports_named_speakers = false;
+    bool supports_instruction = false;
+    int32_t speaker_embedding_dim = 0;
+    int32_t speaker_count = 0;
+    std::string model_type;
+};
+
 // Progress callback type
 using tts_progress_callback_t = std::function<void(int tokens_generated, int max_tokens)>;
 
@@ -138,6 +149,9 @@ public:
     // List named speakers exposed by the currently loaded model metadata.
     // Returns normalized (lowercase) speaker keys; empty for non-CustomVoice models.
     std::vector<std::string> get_available_speakers() const;
+
+    // Return feature flags for the currently loaded model.
+    tts_model_capabilities get_model_capabilities() const;
     
 private:
     tts_result synthesize_internal(const std::string & text,

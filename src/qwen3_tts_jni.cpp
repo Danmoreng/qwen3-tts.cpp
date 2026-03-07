@@ -9,6 +9,8 @@
 
 static jclass g_result_class = nullptr;
 static jmethodID g_result_constructor = nullptr;
+static jclass g_caps_class = nullptr;
+static jmethodID g_caps_constructor = nullptr;
 
 static jclass g_params_class = nullptr;
 static jfieldID g_lang_id_field = nullptr;
@@ -34,6 +36,20 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_result_constructor = env->GetMethodID(g_result_class, "<init>", "([FIZLjava/lang/String;J)V");
     if (g_result_constructor == nullptr) {
         LOGE("Could not find NativeResult constructor");
+        return JNI_ERR;
+    }
+
+    jclass local_caps_class = env->FindClass("com/qwen/tts/studio/engine/QwenEngine$NativeCapabilities");
+    if (local_caps_class == nullptr) {
+        LOGE("Could not find NativeCapabilities class");
+        return JNI_ERR;
+    }
+    g_caps_class = reinterpret_cast<jclass>(env->NewGlobalRef(local_caps_class));
+    env->DeleteLocalRef(local_caps_class);
+
+    g_caps_constructor = env->GetMethodID(g_caps_class, "<init>", "(ZZZZIII)V");
+    if (g_caps_constructor == nullptr) {
+        LOGE("Could not find NativeCapabilities constructor");
         return JNI_ERR;
     }
 
@@ -70,6 +86,7 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* vm, void* reserved) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
         if (g_result_class != nullptr) env->DeleteGlobalRef(g_result_class);
+        if (g_caps_class != nullptr) env->DeleteGlobalRef(g_caps_class);
         if (g_params_class != nullptr) env->DeleteGlobalRef(g_params_class);
     }
 }
@@ -241,6 +258,29 @@ JNIEXPORT jstring JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetAv
     jstring result = env->NewStringUTF(speakers);
     qwen3_tts_free_string(speakers);
     return result;
+}
+
+JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetModelCapabilities(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr
+) {
+    if (ctx_ptr == 0 || g_caps_class == nullptr || g_caps_constructor == nullptr) {
+        return nullptr;
+    }
+
+    const qwen3_tts_model_capabilities_t caps =
+        qwen3_tts_get_model_capabilities(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr));
+
+    return env->NewObject(
+        g_caps_class,
+        g_caps_constructor,
+        (jboolean)(caps.loaded != 0),
+        (jboolean)(caps.supports_voice_clone != 0),
+        (jboolean)(caps.supports_named_speakers != 0),
+        (jboolean)(caps.supports_instruction != 0),
+        (jint)caps.speaker_embedding_dim,
+        (jint)caps.model_kind,
+        (jint)caps.speaker_count
+    );
 }
 
 }

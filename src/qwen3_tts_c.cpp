@@ -15,6 +15,13 @@ struct qwen3_tts_context {
     void* user_data = nullptr;
 };
 
+static int32_t to_model_kind(const std::string & model_type) {
+    if (model_type == "base") return QWEN3_TTS_MODEL_KIND_BASE;
+    if (model_type == "custom_voice") return QWEN3_TTS_MODEL_KIND_CUSTOM_VOICE;
+    if (model_type == "voice_design") return QWEN3_TTS_MODEL_KIND_VOICE_DESIGN;
+    return QWEN3_TTS_MODEL_KIND_UNKNOWN;
+}
+
 static qwen3_tts::tts_params convert_params(qwen3_tts_params_t params) {
     qwen3_tts::tts_params p;
     p.max_audio_tokens = params.max_audio_tokens;
@@ -145,6 +152,24 @@ int32_t qwen3_tts_extract_speaker_embedding(
     }
 
     return qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding) ? 1 : 0;
+}
+
+qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(qwen3_tts_context_t* ctx) {
+    qwen3_tts_model_capabilities_t out = {0};
+    out.model_kind = QWEN3_TTS_MODEL_KIND_UNKNOWN;
+    if (!ctx) {
+        return out;
+    }
+
+    const qwen3_tts::tts_model_capabilities caps = ctx->tts.get_model_capabilities();
+    out.loaded = caps.loaded ? 1 : 0;
+    out.supports_voice_clone = caps.supports_voice_clone ? 1 : 0;
+    out.supports_named_speakers = caps.supports_named_speakers ? 1 : 0;
+    out.supports_instruction = caps.supports_instruction ? 1 : 0;
+    out.speaker_embedding_dim = caps.speaker_embedding_dim;
+    out.speaker_count = caps.speaker_count;
+    out.model_kind = to_model_kind(caps.model_type);
+    return out;
 }
 
 char* qwen3_tts_get_available_speakers(qwen3_tts_context_t* ctx) {

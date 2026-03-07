@@ -42,6 +42,23 @@ typedef struct {
     int64_t t_total_ms;
 } qwen3_tts_result_t;
 
+typedef enum {
+    QWEN3_TTS_MODEL_KIND_UNKNOWN = 0,
+    QWEN3_TTS_MODEL_KIND_BASE = 1,
+    QWEN3_TTS_MODEL_KIND_CUSTOM_VOICE = 2,
+    QWEN3_TTS_MODEL_KIND_VOICE_DESIGN = 3,
+} qwen3_tts_model_kind_t;
+
+typedef struct {
+    int32_t loaded;
+    int32_t supports_voice_clone;
+    int32_t supports_named_speakers;
+    int32_t supports_instruction;
+    int32_t speaker_embedding_dim;
+    int32_t speaker_count;
+    int32_t model_kind; // qwen3_tts_model_kind_t
+} qwen3_tts_model_capabilities_t;
+
 typedef void (*qwen3_tts_progress_callback)(int tokens_generated, int max_tokens, void* user_data);
 
 QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
@@ -78,6 +95,10 @@ QWEN3_TTS_API int32_t qwen3_tts_extract_speaker_embedding(
     qwen3_tts_context_t* ctx,
     const char* reference_audio,
     const char* output_path
+);
+
+QWEN3_TTS_API qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(
+    qwen3_tts_context_t* ctx
 );
 
 // Newline-separated speaker names (lowercase), or empty string if unavailable.

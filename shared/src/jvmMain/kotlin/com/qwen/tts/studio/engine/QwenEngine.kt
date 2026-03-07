@@ -6,6 +6,16 @@ package com.qwen.tts.studio.engine
 actual class QwenEngine actual constructor() {
     private var nativePtr: Long = 0
 
+    class NativeCapabilities(
+        val loaded: Boolean,
+        val supportsCloning: Boolean,
+        val supportsNamedSpeakers: Boolean,
+        val supportsInstruction: Boolean,
+        val speakerEmbeddingDim: Int,
+        val modelKind: Int,
+        val speakerCount: Int
+    )
+
     init {
         System.loadLibrary("qwen3_tts_jni")
         nativePtr = nativeInit()
@@ -42,6 +52,9 @@ actual class QwenEngine actual constructor() {
         }
     }
 
+    fun getModelCapabilities(): NativeCapabilities? =
+        nativeGetModelCapabilities(nativePtr)
+
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
     private external fun nativeLoadModels(ptr: Long, modelDir: String, modelName: String?): Boolean
@@ -58,6 +71,7 @@ actual class QwenEngine actual constructor() {
         outputPath: String
     ): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
+    private external fun nativeGetModelCapabilities(ptr: Long): NativeCapabilities?
 
     actual class NativeParams actual constructor(
         actual val languageId: Int = 2050,

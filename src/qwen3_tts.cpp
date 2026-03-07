@@ -261,6 +261,35 @@ std::vector<std::string> Qwen3TTS::get_available_speakers() const {
     return speakers;
 }
 
+tts_model_capabilities Qwen3TTS::get_model_capabilities() const {
+    tts_model_capabilities caps;
+    caps.loaded = models_loaded_;
+    if (!models_loaded_) {
+        return caps;
+    }
+
+    const auto & cfg = transformer_.get_config();
+    caps.model_type = cfg.tts_model_type;
+    caps.speaker_embedding_dim = cfg.hidden_size;
+    caps.speaker_count = (int32_t) cfg.speaker_id_map.size();
+    caps.supports_named_speakers = caps.speaker_count > 0;
+    caps.supports_voice_clone = (cfg.tts_model_type == "base");
+
+    // Current upstream behavior:
+    // - 1.7B CustomVoice supports instruction tokens
+    // - 0.6B CustomVoice should not expose instructions in UI
+    // - Base models focus on cloning without dedicated instruction steering
+    if (cfg.tts_model_type == "custom_voice") {
+        caps.supports_instruction = cfg.hidden_size >= 2048;
+    } else if (cfg.tts_model_type == "voice_design") {
+        caps.supports_instruction = true;
+    } else {
+        caps.supports_instruction = false;
+    }
+
+    return caps;
+}
+
 tts_result Qwen3TTS::synthesize(const std::string & text,
                                  const tts_params & params) {
     tts_result result;
