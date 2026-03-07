@@ -287,6 +287,8 @@ uv run python scripts/generate_deterministic_reference.py
 .\scripts\prepare_test_assets.ps1 -GenerateMissing
 # (uses local .venv by default; add -InstallPythonDeps for first-time setup)
 .\scripts\prepare_test_assets.ps1 -GenerateMissing -InstallPythonDeps
+# Force full regeneration even when files already exist
+.\scripts\prepare_test_assets.ps1 -ForceRegenerate
 
 # Optional: build first, then test
 .\build.ps1 -Configuration Release

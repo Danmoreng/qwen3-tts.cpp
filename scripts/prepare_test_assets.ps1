@@ -3,6 +3,7 @@ param(
     [string]$ReferenceDir = "reference",
     [string]$ReferenceAudio = "",
     [switch]$GenerateMissing,
+    [switch]$ForceRegenerate,
     [switch]$InstallPythonDeps,
     [bool]$UseVenv = $true,
     [bool]$AutoCreateVenv = $true,
@@ -241,17 +242,17 @@ if (-not $runner) {
 Write-Host "Using Python runner: $($runner.Name)"
 Ensure-PythonDependencies -runner $runner -installDeps:$InstallPythonDeps
 
-if ($GenerateMissing) {
+if ($GenerateMissing -or $ForceRegenerate) {
     if (-not $resolvedReferenceAudio -or -not (Test-Path $resolvedReferenceAudio)) {
         throw "Reference audio not found. Provide -ReferenceAudio or place examples/readme_clone_input.wav."
     }
     $env:QWEN3_TTS_REF_AUDIO = $resolvedReferenceAudio
 
-    if (-not (Test-AllExist $requiredDeterministicRefs)) {
+    if ($ForceRegenerate -or -not (Test-AllExist $requiredDeterministicRefs)) {
         Invoke-PythonScript -repoRoot $repoRoot -scriptRelativePath "scripts/generate_deterministic_reference.py" -runner $runner
     }
 
-    if (-not (Test-AllExist $legacyRefs)) {
+    if ($ForceRegenerate -or -not (Test-AllExist $legacyRefs)) {
         Invoke-PythonScript -repoRoot $repoRoot -scriptRelativePath "scripts/generate_reference_outputs.py" -runner $runner
     }
 }
@@ -270,6 +271,8 @@ if ($missingModels -or $missingDetRefs) {
     Write-Host "  1. Ensure models exist under '$resolvedModelDir'."
     Write-Host "  2. Generate references:"
     Write-Host "     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\prepare_test_assets.ps1 -GenerateMissing"
+    Write-Host "  3. Force full regeneration:"
+    Write-Host "     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\prepare_test_assets.ps1 -ForceRegenerate"
     exit 1
 }
 

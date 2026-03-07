@@ -14,6 +14,7 @@ Usage:
 
 import json
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -70,6 +71,12 @@ def main():
     print("=" * 60)
     print("Qwen3-TTS Reference Output Generator")
     print("=" * 60)
+
+    # Deterministic generation settings for stable reference artifacts.
+    torch.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
+    torch.use_deterministic_algorithms(True)
     
     # Configuration
     model_path = PROJECT_ROOT / "models" / "Qwen3-TTS-12Hz-0.6B-Base"
@@ -224,12 +231,12 @@ def main():
         ref_ids_list = [model._tokenize_texts([model._build_ref_text(prompt_item.ref_text)])[0]]
     
     gen_kwargs = model._merge_generate_kwargs(
-        do_sample=True,
-        temperature=0.9,
-        top_k=50,
-        top_p=1.0,
+        do_sample=False,
+        temperature=None,
+        top_k=None,
+        top_p=None,
         repetition_penalty=1.05,
-        max_new_tokens=64,  # Very short for faster CPU generation
+        max_new_tokens=64,  # Keep short for faster CPU generation
     )
     
     import time

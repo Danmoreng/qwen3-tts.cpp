@@ -1,6 +1,6 @@
 {
-  "model_path": "/Users/andyye/dev/qwen3-tts.cpp/models/Qwen3-TTS-12Hz-0.6B-Base",
-  "ref_audio_path": "/Users/andyye/dev/qwen3-tts.cpp/clone.wav",
+  "model_path": "C:\\Development\\Qwen3TTSDev\\qwen3-tts.cpp\\models\\Qwen3-TTS-12Hz-0.6B-Base",
+  "ref_audio_path": "C:\\Development\\Qwen3TTSDev\\qwen3-tts.cpp\\examples\\readme_clone_input.wav",
   "ref_text": "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.",
   "synth_text": "Hello.",
   "outputs": [

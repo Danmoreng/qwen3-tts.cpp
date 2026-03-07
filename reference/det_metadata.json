@@ -1,6 +1,6 @@
 {
-  "model_path": "/Users/andyye/dev/qwen3-tts.cpp/models/Qwen3-TTS-12Hz-0.6B-Base",
-  "reference_audio": "/Users/andyye/dev/qwen3-tts.cpp/clone.wav",
+  "model_path": "C:\\Development\\Qwen3TTSDev\\qwen3-tts.cpp\\models\\Qwen3-TTS-12Hz-0.6B-Base",
+  "reference_audio": "C:\\Development\\Qwen3TTSDev\\qwen3-tts.cpp\\examples\\readme_clone_input.wav",
   "reference_text": "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.",
   "synthesis_text": "Hello.",
   "language": "English",
@@ -88,7 +88,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 4096,
-      "sha256": "61b45d744253a62f1f6e7fa804cf95b1c043568a13e96663bbb15b5eebc9e610"
+      "sha256": "ceb9b83df983f0d6febd9694efba7c54baaaabab2fb8c269f7f4540e55dde62d"
     },
     "det_prefill_embedding.bin": {
       "path": "det_prefill_embedding.bin",
@@ -99,7 +99,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 40960,
-      "sha256": "4b76b0af54ffe7edb476d0e2ce97408e730446579033d28f60232264584222fc"
+      "sha256": "508c08984e9aec5240996c3b7c909816a257d77054a313e5da8358d071434195"
     },
     "det_speech_codes.bin": {
       "path": "det_speech_codes.bin",
@@ -119,7 +119,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 258048,
-      "sha256": "8bc3b19d786d084299d730ae150f87dd61eba99fef23ad2c76cb8d53c302a2fc"
+      "sha256": "4f18c5b447d8df052113b2f1506afed84d93e81703db1e84ad1b6500345b73e0"
     },
     "det_first_frame_logits.bin": {
       "path": "det_first_frame_logits.bin",
@@ -129,7 +129,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 12288,
-      "sha256": "2b7ee95bf2de54288915386f308aa1960b5d2ad14dfc4ea2c507bd80f769ba17"
+      "sha256": "ee73ee94eb8d9f6dafa1659cd103c863555b1a9d49242dd8df84076de1925a74"
     },
     "det_decoded_audio.bin": {
       "path": "det_decoded_audio.bin",
@@ -138,7 +138,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 483840,
-      "sha256": "272629dfd827d37068aede054c1c3ecb81126c199bdcdd4f5ef0f3301a340c87"
+      "sha256": "9a68b3cacbfce9aa4a4c83242d923ed16061c0bead5245d5cd21c4d4ef576d7c"
     },
     "det_trailing_text.bin": {
       "path": "det_trailing_text.bin",
@@ -149,7 +149,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 8192,
-      "sha256": "0be99c99c0607ed5c53a0a00053d3f1bc79c11c5a7147ef494d19942a493a1e7"
+      "sha256": "1f4b9d63069fe9e984b49d45b73536f56701be90a1a560fed411ffe205671a28"
     },
     "det_tts_pad_embed.bin": {
       "path": "det_tts_pad_embed.bin",
@@ -160,7 +160,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 4096,
-      "sha256": "0289fcdb42b3c45e829204dd7de66fd40e1453c00bbce21b3eb866a84d9090df"
+      "sha256": "5601144c3b8cf4875be3bcf03aa4ffe31a52466e1eb5bec01a30776eaec09a8e"
     },
     "det_role_embed.bin": {
       "path": "det_role_embed.bin",
@@ -171,7 +171,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 12288,
-      "sha256": "a86c059b76c30723e14c1db6af475d19f38e0af62256f9e7da2bbb35a4e53d14"
+      "sha256": "d0a63bdf6318fafbf8d4d967cbdd4624d3018edde348e73ae4e55676e6b78833"
     },
     "det_codec_prefill_embed.bin": {
       "path": "det_codec_prefill_embed.bin",
@@ -182,7 +182,7 @@
       ],
       "dtype": "float32",
       "size_bytes": 24576,
-      "sha256": "a500ed897cf2c50f35371bde2d77591dbf188b1887a9273cdc6c14d8756b1be5"
+      "sha256": "43fe88411e4f350e87482cff865393a35adb99efc0517adf5f28b3227a84e78a"
     },
     "det_tts_overlay.bin": {
       "path": "det_tts_overlay.bin",
@@ -193,12 +193,12 @@
       ],
       "dtype": "float32",
       "size_bytes": 24576,
-      "sha256": "807974ed068af06247d7efdf153364637d9d5973bdb6ee9e1a139e3fabe0bab3"
+      "sha256": "f69534f5378ea69190c10156d6c67c3a9f1b03e5bd99d04682cce49a8e13b6bb"
     }
   },
   "wav": {
     "path": "det_output.wav",
-    "sha256": "18422e7f86adfdffa81dd3fbfa16e7c554c37b648550409697a9007c9fed2e50",
+    "sha256": "c42960e886ac35f312dcfdd1d1c42fdf492e083f0c05b4ceb4575dcc808616b7",
     "sample_rate": 24000,
     "num_samples": 120960,
     "duration_seconds": 5.04
