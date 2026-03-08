@@ -49,11 +49,13 @@ qwen3-tts.cpp/
 
 - On Windows, always use PowerShell scripts for both build and test steps.
 - Build with `.\build.ps1` (do not use `bash` build wrappers on Windows).
+- For Codex-driven builds, prefer `.\build.ps1 -UseNinja -EnableCuda -Configuration Release` unless the task explicitly needs a different configuration.
 - `build-ninja.ps1` is deprecated/removed; use `.\build.ps1 -UseNinja` instead.
 - Run regression tests with `.\scripts\run_all_tests.ps1`.
 - Install test asset Python deps via `.\scripts\prepare_test_assets.ps1 -InstallPythonDeps` (pinned in `scripts/requirements-test-assets.txt`).
-- In this Codex CLI environment on Windows, build/test execution is not reliable; do not run build/tests from Codex.
-- The user must run Windows PowerShell build/tests locally and share results when validation is needed.
+- In this Codex CLI environment on Windows, lightweight benchmark/inference scripts can run successfully inside the sandbox.
+- CUDA-enabled Windows builds from Codex should request elevated permissions; non-elevated builds may stall or hang unexpectedly.
+- If a full Windows test run is needed and Codex execution looks unreliable, prefer asking the user to run it locally and share results.
 
 ## Coding Conventions
 
