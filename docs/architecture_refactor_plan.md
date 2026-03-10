@@ -22,16 +22,17 @@ Current branch status on `refactor/architecture-split`:
 - Completed: transformer model loading/config/tensor setup extracted into `src/transformer/transformer_loader.cpp`
 - Completed: transformer KV-cache and scheduler reservation lifecycle extracted into `src/transformer/transformer_cache.cpp`
 - Completed: transformer embedding lookup, named speaker resolution, and prefill embedding construction extracted into `src/transformer/transformer_embeddings.cpp`
+- Completed: talker graph construction extracted into `src/transformer/transformer_graph_talker.cpp`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
 
-- Still in `src/tts_transformer.cpp`: graph builders, runtime execution, sampling, and autoregressive generation
-- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction
+- Still in `src/tts_transformer.cpp`: code predictor graph builders, runtime execution, sampling, and autoregressive generation
+- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction, talker graph builders
 
 Recommended next step from this point:
 
-- Extract talker graph construction into `src/transformer/transformer_graph_talker.cpp`
+- Extract code predictor graph construction into `src/transformer/transformer_graph_code_pred.cpp`
 
 Guardrail for ongoing work:
 
