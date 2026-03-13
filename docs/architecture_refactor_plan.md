@@ -1,6 +1,6 @@
 # Architecture Refactor Plan
 
-Last updated: 2026-03-12
+Last updated: 2026-03-14
 
 ## Purpose
 
@@ -42,6 +42,12 @@ Current branch status on `refactor/architecture-split`:
 - Completed: decoder runtime execution extracted into `src/decoder/decoder_runtime.cpp`
 - Completed: decoder private model/state/scratch storage moved behind `src/decoder/decoder_state_internal.h`
 - Completed: public decoder header no longer includes `src/decoder/decoder_internal.h`
+- Completed: encoder frontend DSP helpers extracted into `src/encoder/encoder_frontend.cpp`
+- Completed: encoder graph construction extracted into `src/encoder/encoder_graph.cpp`
+- Completed: encoder model loading/backend setup extracted into `src/encoder/encoder_loader.cpp`
+- Completed: encoder runtime execution extracted into `src/encoder/encoder_runtime.cpp`
+- Completed: encoder private model/state storage moved behind `src/encoder/encoder_state_internal.h`
+- Completed: public encoder header no longer exposes GGML-heavy private storage details
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
@@ -53,8 +59,8 @@ Current transformer split status:
 
 Recommended next step from this point:
 
-- Begin the encoder split by separating frontend DSP from GGUF loading and runtime execution
-- Keep the transformer surface stable unless a small follow-up cleanup falls out naturally during encoder work
+- Keep the encoder surface stable and limit follow-up work there to small boundary polish if it falls out naturally
+- Shift the next structural pass to whichever remaining subsystem still has the largest maintenance burden
 
 Guardrail for ongoing work:
 
@@ -134,18 +140,17 @@ The runtime/logging, model-loading, and synthesis orchestration slices have been
 
 These are separable concerns that do not need to live in a single translation unit.
 
-### 4. Encoder frontend DSP and runtime graph code are coupled
+### 4. Encoder split is now structurally complete
 
-`src/audio_tokenizer_encoder.cpp` currently mixes:
+The encoder is now separated into focused units:
 
-- mel filterbank generation
-- DFT/window helpers
-- mel spectrogram frontend
-- GGUF loading
-- graph construction
-- graph execution
+- `src/encoder/encoder_frontend.cpp`
+- `src/encoder/encoder_graph.cpp`
+- `src/encoder/encoder_loader.cpp`
+- `src/encoder/encoder_runtime.cpp`
+- `src/encoder/encoder_state_internal.h`
 
-The DSP frontend should be split from model/runtime code.
+The public header no longer exposes encoder-private GGML state.
 
 ### 5. Decoder split is now structurally complete
 
@@ -160,7 +165,7 @@ The decoder is now separated into focused units:
 
 The public header no longer exposes decoder-private model/state storage.
 
-The decoder is no longer the primary refactor hotspot; the remaining major hotspots are the transformer public header and the encoder implementation file.
+The decoder and encoder are no longer the primary refactor hotspots; the remaining work is smaller boundary cleanup.
 
 ### 6. The current CMake target split is good enough
 

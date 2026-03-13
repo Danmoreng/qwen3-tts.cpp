@@ -124,6 +124,10 @@ endif()
 # Audio tokenizer encoder library (GGML-based)
 add_library(audio_tokenizer_encoder STATIC
     src/audio_tokenizer_encoder.cpp
+    src/encoder/encoder_frontend.cpp
+    src/encoder/encoder_graph.cpp
+    src/encoder/encoder_loader.cpp
+    src/encoder/encoder_runtime.cpp
     src/gguf_loader.cpp
 )
 target_include_directories(audio_tokenizer_encoder PUBLIC
