@@ -11,6 +11,9 @@
 #include <cstdint>
 
 namespace qwen3_tts {
+namespace pipeline_internal {
+struct ops;
+}
 
 // TTS generation parameters
 struct tts_params {
@@ -154,11 +157,8 @@ public:
     tts_model_capabilities get_model_capabilities() const;
     
 private:
-    tts_result synthesize_internal(const std::string & text,
-                                   const float * speaker_embedding,
-                                   const tts_params & params,
-                                   tts_result & result);
-    
+    friend struct pipeline_internal::ops;
+
     TextTokenizer tokenizer_;
     TTSTransformer transformer_;
     AudioTokenizerEncoder audio_encoder_;

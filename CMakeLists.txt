@@ -88,6 +88,17 @@ target_link_libraries(text_tokenizer PUBLIC Threads::Threads)
 set(TTS_TRANSFORMER_SOURCES
     src/gguf_loader.cpp
     src/tts_transformer.cpp
+    src/transformer/transformer_cache.cpp
+    src/transformer/transformer_debug.cpp
+    src/transformer/transformer_embeddings.cpp
+    src/transformer/transformer_graph_code_pred.cpp
+    src/transformer/transformer_graph_talker.cpp
+    src/transformer/transformer_loader.cpp
+    src/transformer/transformer_loader_metadata.cpp
+    src/transformer/transformer_loader_tensors.cpp
+    src/transformer/transformer_runtime.cpp
+    src/transformer/transformer_runtime_code_pred.cpp
+    src/transformer/transformer_generate.cpp
 )
 if(APPLE AND QWEN3_TTS_COREML)
     list(APPEND TTS_TRANSFORMER_SOURCES src/coreml_code_predictor.mm)
@@ -115,6 +126,10 @@ endif()
 # Audio tokenizer encoder library (GGML-based)
 add_library(audio_tokenizer_encoder STATIC
     src/audio_tokenizer_encoder.cpp
+    src/encoder/encoder_frontend.cpp
+    src/encoder/encoder_graph.cpp
+    src/encoder/encoder_loader.cpp
+    src/encoder/encoder_runtime.cpp
     src/gguf_loader.cpp
 )
 target_include_directories(audio_tokenizer_encoder PUBLIC
@@ -126,7 +141,11 @@ target_link_libraries(audio_tokenizer_encoder PUBLIC Threads::Threads)
 
 # Audio tokenizer decoder library (GGML-based)
 add_library(audio_tokenizer_decoder STATIC
-    src/audio_tokenizer_decoder.cpp
+    src/decoder/decoder_cache.cpp
+    src/decoder/decoder_graph.cpp
+    src/decoder/decoder_layers.cpp
+    src/decoder/decoder_loader.cpp
+    src/decoder/decoder_runtime.cpp
     src/gguf_loader.cpp
 )
 target_include_directories(audio_tokenizer_decoder PUBLIC
@@ -138,6 +157,11 @@ target_link_libraries(audio_tokenizer_decoder PUBLIC Threads::Threads)
 
 # Qwen3 TTS library (full pipeline)
 add_library(qwen3_tts STATIC
+    src/common/audio_io.cpp
+    src/common/speaker_embedding_io.cpp
+    src/pipeline/pipeline_models.cpp
+    src/pipeline/pipeline_runtime.cpp
+    src/pipeline/pipeline_synthesize.cpp
     src/qwen3_tts.cpp
     src/qwen3_tts_c.cpp
 )

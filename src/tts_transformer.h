@@ -1,58 +1,20 @@
 #pragma once
 
-#include "ggml.h"
-#include "ggml-backend.h"
-#include "gguf.h"
-#include "coreml_code_predictor.h"
-
-#include <string>
+#include <cstdint>
 #include <map>
-#include <vector>
 #include <memory>
-#include <random>
-#ifdef QWEN3_TTS_TIMING
-#include <chrono>
-#endif
+#include <string>
+#include <vector>
+
+struct ggml_tensor;
+struct ggml_cgraph;
+struct gguf_context;
 
 namespace qwen3_tts {
-
-#ifdef QWEN3_TTS_TIMING
-struct tts_timing {
-    // Prefill phase
-    double t_prefill_build_ms = 0;      // build_prefill_graph (embedding lookups, text projection)
-    double t_prefill_forward_ms = 0;    // forward_prefill total
-    double t_prefill_graph_build_ms = 0;  // build_prefill_forward_graph
-    double t_prefill_graph_alloc_ms = 0;  // sched_alloc_graph
-    double t_prefill_compute_ms = 0;      // sched_graph_compute
-    double t_prefill_data_ms = 0;         // tensor_set + tensor_get + reset
-
-    // Talker forward_step totals (accumulated across all frames)
-    double t_talker_forward_ms = 0;       // total time in forward_step()
-    double t_talker_graph_build_ms = 0;   // build_step_graph
-    double t_talker_graph_alloc_ms = 0;   // sched_alloc_graph
-    double t_talker_compute_ms = 0;       // sched_graph_compute
-    double t_talker_data_ms = 0;          // tensor_set + tensor_get + reset
-
-    // Code predictor totals (accumulated across all frames)
-    double t_code_pred_ms = 0;            // total predict_codes_autoregressive
-    double t_code_pred_init_ms = 0;       // init/clear KV cache + CB0 embed lookup
-    double t_code_pred_prefill_ms = 0;    // code pred prefill (2-token, per frame)
-    double t_code_pred_steps_ms = 0;      // code pred autoregressive steps (14 steps, per frame)
-    double t_code_pred_graph_build_ms = 0;  // graph build (prefill + steps combined)
-    double t_code_pred_graph_alloc_ms = 0;  // sched_alloc_graph
-    double t_code_pred_compute_ms = 0;      // sched_graph_compute
-    double t_code_pred_data_ms = 0;         // tensor_set + tensor_get + reset
-    double t_code_pred_coreml_ms = 0;       // CoreML predictor compute + I/O
-
-    // Embed lookups in generate() loop
-    double t_embed_lookup_ms = 0;
-
-    int32_t n_frames = 0;
-    double t_generate_total_ms = 0;
-};
-#endif
-
-#define QWEN3_TTS_MAX_NODES 16384
+struct tts_transformer_private;
+namespace transformer_internal {
+struct ops;
+}
 
 // TTS Transformer configuration (Qwen2-based Talker)
 struct tts_transformer_config {
@@ -110,104 +72,6 @@ struct tts_transformer_config {
     bool has_supports_instruction = false;
     bool supports_instruction = false;
     std::map<std::string, int32_t> speaker_id_map;
-};
-
-// Transformer layer weights
-struct transformer_layer {
-    struct ggml_tensor * attn_norm = nullptr;
-    
-    struct ggml_tensor * attn_q = nullptr;
-    struct ggml_tensor * attn_k = nullptr;
-    struct ggml_tensor * attn_v = nullptr;
-    struct ggml_tensor * attn_output = nullptr;
-    struct ggml_tensor * attn_q_norm = nullptr;
-    struct ggml_tensor * attn_k_norm = nullptr;
-    
-    struct ggml_tensor * ffn_norm = nullptr;
-    
-    struct ggml_tensor * ffn_gate = nullptr;
-    struct ggml_tensor * ffn_up = nullptr;
-    struct ggml_tensor * ffn_down = nullptr;
-};
-
-// TTS Transformer model weights
-struct tts_transformer_model {
-    tts_transformer_config config;
-    
-    // Text embedding and projection
-    struct ggml_tensor * text_embd = nullptr;      // [text_embd_dim, text_vocab_size]
-    struct ggml_tensor * text_proj_fc1 = nullptr;  // [text_embd_dim, text_embd_dim]
-    struct ggml_tensor * text_proj_fc1_bias = nullptr;
-    struct ggml_tensor * text_proj_fc2 = nullptr;  // [text_embd_dim, hidden_size]
-    struct ggml_tensor * text_proj_fc2_bias = nullptr;
-    
-    // Codec embedding (for autoregressive input)
-    struct ggml_tensor * codec_embd = nullptr;     // [hidden_size, codec_vocab_size]
-    
-    // Talker transformer layers
-    std::vector<transformer_layer> layers;
-    
-    // Final RMSNorm
-    struct ggml_tensor * output_norm = nullptr;    // [hidden_size]
-    
-    // Codec head (for first codebook prediction)
-    struct ggml_tensor * codec_head = nullptr;     // [hidden_size, codec_vocab_size]
-    
-     // Code predictor layers
-     std::vector<transformer_layer> code_pred_layers;
-     
-     // Code predictor output norm (final RMS norm before lm_head)
-     struct ggml_tensor * code_pred_output_norm = nullptr;  // [hidden_size]
-
-     // Optional projection from talker hidden -> code predictor hidden (needed for 1.7B).
-     struct ggml_tensor * code_pred_small_to_mtp_weight = nullptr;  // [talker_hidden, code_pred_hidden]
-     struct ggml_tensor * code_pred_small_to_mtp_bias = nullptr;    // [code_pred_hidden]
-     
-     // Code predictor per-codebook embeddings and heads (15 codebooks, 0 uses talker output)
-     std::vector<struct ggml_tensor *> code_pred_embd;  // [hidden_size, code_pred_vocab_size] x 15
-     std::vector<struct ggml_tensor *> code_pred_head;  // [hidden_size, code_pred_vocab_size] x 15
-    
-    // GGML context for tensor metadata
-    struct ggml_context * ctx = nullptr;
-    
-    // Backend buffer for weights
-    ggml_backend_buffer_t buffer = nullptr;
-    
-    // Tensor name to tensor mapping
-    std::map<std::string, struct ggml_tensor *> tensors;
-};
-
-// KV cache for autoregressive generation
-struct tts_kv_cache {
-    std::vector<struct ggml_tensor *> k_cache;
-    std::vector<struct ggml_tensor *> v_cache;
-    
-    struct ggml_context * ctx = nullptr;
-    ggml_backend_buffer_t buffer = nullptr;
-    
-    int32_t n_ctx = 0;
-    int32_t n_used = 0;
-    int32_t head_dim = 128;
-    int32_t n_kv_heads = 8;
-    int32_t n_layers = 28;
-};
-
-// TTS Transformer state
-struct tts_transformer_state {
-    ggml_backend_t backend = nullptr;
-    ggml_backend_t backend_cpu = nullptr;
-    ggml_backend_sched_t sched = nullptr;
-    bool sched_reserved = false;
-    bool sched_reserve_failed = false;
-    int32_t sched_reserved_ctx = 0;
-    int32_t sched_reserved_prefill_len = 0;
-    
-    std::vector<uint8_t> compute_meta; // Talker compute meta
-    std::vector<std::vector<uint8_t>> code_pred_compute_meta; // Code predictor compute meta per step [0..14]
-    std::vector<ggml_fp16_t> code_pred_mask;
-    
-    tts_kv_cache cache;           // Talker KV cache (28 layers)
-    tts_kv_cache code_pred_cache; // Code predictor KV cache (5 layers)
 };
 
 // TTS Transformer class
@@ -293,7 +157,7 @@ public:
                   const int32_t * instruct_tokens = nullptr,
                   int32_t n_instruct_tokens = 0);
     
-    const tts_transformer_config & get_config() const { return model_.config; }
+    const tts_transformer_config & get_config() const;
     
     const std::string & get_error() const { return error_msg_; }
 
@@ -311,79 +175,13 @@ public:
                             std::vector<float> & output);
     
 private:
-    bool try_init_coreml_code_predictor(const std::string & model_path);
-    bool predict_codes_autoregressive_coreml(const float * hidden, int32_t codebook_0_token,
-                                             std::vector<int32_t> & output,
-                                             float temperature,
-                                             int32_t top_k,
-                                             int32_t trace_frame);
+    friend struct transformer_internal::ops;
 
-    bool build_prefill_graph(const int32_t * text_tokens, int32_t n_tokens,
-                             const float * speaker_embd, int32_t language_id,
-                             std::vector<float> & prefill_embd,
-                             std::vector<float> & trailing_text_hidden,
-                             std::vector<float> & tts_pad_embed,
-                             const int32_t * instruct_tokens = nullptr,
-                             int32_t n_instruct_tokens = 0);
-
-    struct ggml_cgraph * build_prefill_forward_graph(int32_t n_tokens, int32_t n_past);
-
-    struct ggml_cgraph * build_step_graph(int32_t n_past);
-
-    bool project_text_tokens(const int32_t * text_tokens, int32_t n_tokens,
-                             std::vector<float> & output);
-
-    bool lookup_embedding_rows(struct ggml_tensor * embedding, const int32_t * token_ids,
-                               int32_t n_tokens, const char * input_name,
-                               const char * output_name, std::vector<float> & output);
-    bool lookup_single_embedding_row(struct ggml_tensor * embedding, int32_t token_id,
-                                     float * out_row);
-    
-    // Build computation graph for code predictor
-    struct ggml_cgraph * build_code_pred_graph(int32_t n_prev_codes);
-    
-    // Build computation graph for single-step autoregressive code predictor
-    // n_past: number of tokens already in KV cache (0-14)
-    // generation_step: which codebook we're predicting (0-14)
-    struct ggml_cgraph * build_code_pred_step_graph(int32_t n_past, int32_t generation_step);
-    
-    // Build computation graph for 2-token prefill of code predictor
-    // Processes [past_hidden, codec_embd(codebook_0_token)] together
-    struct ggml_cgraph * build_code_pred_prefill_graph();
-
-    void maybe_reserve_scheduler_graphs(int32_t prefill_len, int32_t required_ctx);
-    
-    // Parse hyperparameters from GGUF
-    bool parse_config(struct gguf_context * ctx);
-    
-    // Create tensor structures
-    bool create_tensors(struct gguf_context * ctx);
-    
-    // Load tensor data from file
-    bool load_tensor_data(const std::string & path, struct gguf_context * ctx);
-    
-    tts_transformer_model model_;
-    tts_transformer_state state_;
+    std::unique_ptr<tts_transformer_private> impl_;
     std::string error_msg_;
     
     // Cached hidden states from last forward pass
     std::vector<float> last_hidden_;
-    std::vector<ggml_fp16_t> embd_row_fp16_scratch_;
-    std::mt19937 rng_{std::random_device{}()};
-    CoreMLCodePredictor coreml_code_predictor_;
-    bool use_coreml_code_predictor_ = false;
-    std::string coreml_code_predictor_path_;
-    bool skip_ggml_code_pred_layers_ = false;
-
-#ifdef QWEN3_TTS_TIMING
-    tts_timing * timing_ = nullptr;
-#endif
 };
-
-// Free model resources
-void free_transformer_model(tts_transformer_model & model);
-
-// Free KV cache resources
-void free_tts_kv_cache(tts_kv_cache & cache);
 
 } // namespace qwen3_tts
