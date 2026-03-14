@@ -29,8 +29,6 @@ void transformer_internal::ops::release_cached_talker_step_graph(TTSTransformer 
     state.talker_step_hidden = nullptr;
     state.talker_step_logits = nullptr;
     state.talker_step_graph_n_ctx = 0;
-    state.talker_step_mask.clear();
-    state.talker_step_mask_n_past = -1;
     if (state.talker_step_graph_ctx) {
         ggml_free(state.talker_step_graph_ctx);
         state.talker_step_graph_ctx = nullptr;
@@ -127,7 +125,6 @@ bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
 
 void TTSTransformer::clear_kv_cache() {
     impl_->state.cache.n_used = 0;
-    impl_->state.talker_step_mask_n_past = -1;
 }
 
 bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
