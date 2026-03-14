@@ -43,6 +43,7 @@ struct ops {
 
     static struct ggml_cgraph * build_prefill_forward_graph(TTSTransformer & self, int32_t n_tokens, int32_t n_past);
     static struct ggml_cgraph * build_step_graph(TTSTransformer & self, int32_t n_past);
+    static struct ggml_cgraph * build_step_graph_impl(TTSTransformer & self, int32_t n_past, struct ggml_context ** graph_ctx_out);
     static bool project_text_tokens(TTSTransformer & self,
                                     const int32_t * text_tokens,
                                     int32_t n_tokens,
@@ -62,6 +63,8 @@ struct ops {
     static struct ggml_cgraph * build_code_pred_step_graph(TTSTransformer & self, int32_t n_past, int32_t generation_step);
     static struct ggml_cgraph * build_code_pred_prefill_graph(TTSTransformer & self);
     static void maybe_reserve_scheduler_graphs(TTSTransformer & self, int32_t prefill_len, int32_t required_ctx);
+    static void release_cached_talker_step_graph(TTSTransformer & self);
+    static bool ensure_cached_talker_step_graph(TTSTransformer & self);
     static bool parse_config(TTSTransformer & self, struct gguf_context * ctx);
     static bool create_tensors(TTSTransformer & self, struct gguf_context * ctx);
     static bool load_tensor_data(TTSTransformer & self, const std::string & path, struct gguf_context * ctx);
