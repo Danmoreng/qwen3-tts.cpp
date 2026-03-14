@@ -249,7 +249,7 @@ For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_ggu
 | `--repetition-penalty <val>` | Repetition penalty on codebook-0 token generation | 1.05 |
 | `-l, --language <lang>` | Language code: `en ru zh ja ko de fr es it pt` | `en` |
 | `--instruction <text>`, `--instruct <text>` | Voice/style steering text (CustomVoice 1.7B) | (none) |
-| `-j, --threads <n>` | Number of compute threads | 4 |
+| `-j, --threads <n>` | Number of compute threads | auto |
 
 `--top-p` is currently parsed by the CLI but not yet wired into transformer sampling.
 `--instruct` now follows Python reference behavior (`instruct_ids` path): the instruction is injected as a separate user prompt, not mixed into assistant text.

@@ -24,7 +24,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
     fprintf(stderr, "  --instruct <text>      Voice steering instructions (e.g. \"whispering\")\n");
-    fprintf(stderr, "  -j, --threads <n>      Number of threads (default: 4)\n");
+    fprintf(stderr, "  -j, --threads <n>      Number of threads (default: auto)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Example:\n");

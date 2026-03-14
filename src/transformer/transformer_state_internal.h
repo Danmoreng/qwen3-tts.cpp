@@ -132,6 +132,7 @@ struct tts_transformer_state {
 struct tts_transformer_private {
     tts_transformer_model model;
     tts_transformer_state state;
+    int32_t n_threads = 0;
     std::vector<ggml_fp16_t> embd_row_fp16_scratch;
     std::mt19937 rng{std::random_device{}()};
     CoreMLCodePredictor coreml_code_predictor;

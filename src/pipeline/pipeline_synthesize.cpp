@@ -16,6 +16,7 @@ using pipeline_internal::resample_linear;
 tts_result Qwen3TTS::synthesize(const std::string & text,
                                 const tts_params & params) {
     tts_result result;
+    apply_n_threads(params.n_threads);
 
     if (!models_loaded_) {
         result.error_msg = "Models not loaded";
@@ -47,6 +48,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
                                            const std::string & reference_audio,
                                            const tts_params & params) {
     tts_result result;
+    apply_n_threads(params.n_threads);
 
     std::vector<float> ref_samples;
     int ref_sample_rate;
@@ -70,6 +72,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
                                            const float * ref_samples, int32_t n_ref_samples,
                                            const tts_params & params) {
     tts_result result;
+    apply_n_threads(params.n_threads);
 
     if (!models_loaded_) {
         result.error_msg = "Models not loaded";
@@ -124,6 +127,7 @@ tts_result Qwen3TTS::synthesize_with_speaker_embedding(const std::string & text,
                                                        const std::vector<float> & speaker_embedding,
                                                        const tts_params & params) {
     tts_result result;
+    apply_n_threads(params.n_threads);
 
     if (!models_loaded_) {
         result.error_msg = "Models not loaded";

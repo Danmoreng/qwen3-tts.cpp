@@ -39,6 +39,9 @@ public:
     // Load model from GGUF file (main TTS model, not tokenizer)
     bool load_model(const std::string & model_path);
 
+    // Configure runtime thread count for CPU-capable backends.
+    void set_n_threads(int32_t n_threads);
+
     // Encode audio samples to speaker embedding
     // samples: audio samples normalized to [-1, 1], 24kHz
     // n_samples: number of samples

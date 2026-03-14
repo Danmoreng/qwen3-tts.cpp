@@ -62,6 +62,7 @@ struct speaker_encoder_state {
 struct speaker_encoder_private {
     speaker_encoder_model model;
     speaker_encoder_state state;
+    int32_t n_threads = 0;
 };
 
 } // namespace qwen3_tts

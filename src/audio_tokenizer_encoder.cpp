@@ -35,6 +35,12 @@ const speaker_encoder_config & AudioTokenizerEncoder::get_config() const {
     return impl_->model.config;
 }
 
+void AudioTokenizerEncoder::set_n_threads(int32_t n_threads) {
+    impl_->n_threads = n_threads > 0 ? n_threads : get_default_thread_count();
+    apply_backend_thread_count(impl_->state.backend, impl_->n_threads);
+    apply_backend_thread_count(impl_->state.backend_cpu, impl_->n_threads);
+}
+
 void free_speaker_encoder_model(speaker_encoder_model & model) {
     if (model.buffer) {
         ggml_backend_buffer_free(model.buffer);

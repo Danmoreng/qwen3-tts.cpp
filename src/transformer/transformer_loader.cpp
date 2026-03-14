@@ -135,6 +135,7 @@ bool TTSTransformer::load_model(const std::string & model_path) {
     if (!impl_->state.backend) {
         return false;
     }
+    apply_backend_thread_count(impl_->state.backend, impl_->n_threads);
     ggml_backend_dev_t device = ggml_backend_get_device(impl_->state.backend);
     const char * device_name = device ? ggml_backend_dev_name(device) : "Unknown";
     fprintf(stderr, "  TTSTransformer backend: %s\n", device_name);
@@ -145,6 +146,7 @@ bool TTSTransformer::load_model(const std::string & model_path) {
             error_msg_ = "Failed to initialize CPU fallback backend for TTSTransformer";
             return false;
         }
+        apply_backend_thread_count(impl_->state.backend_cpu, impl_->n_threads);
     }
 
     std::vector<ggml_backend_t> backends;

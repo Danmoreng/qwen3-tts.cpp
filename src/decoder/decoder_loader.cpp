@@ -24,6 +24,12 @@ const std::string & AudioTokenizerDecoder::get_error() const {
     return impl_->error_msg;
 }
 
+void AudioTokenizerDecoder::set_n_threads(int32_t n_threads) {
+    impl_->n_threads = n_threads > 0 ? n_threads : get_default_thread_count();
+    apply_backend_thread_count(impl_->state.backend, impl_->n_threads);
+    apply_backend_thread_count(impl_->state.backend_cpu, impl_->n_threads);
+}
+
 void AudioTokenizerDecoder::unload_model() {
     auto & model = impl_->model;
     auto & state = impl_->state;
@@ -332,6 +338,7 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     if (!state.backend) {
         return false;
     }
+    apply_backend_thread_count(state.backend, impl_->n_threads);
 
     ggml_backend_dev_t device = ggml_backend_get_device(state.backend);
     const char * device_name = device ? ggml_backend_dev_name(device) : "Unknown";
@@ -343,6 +350,7 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
             error_msg = "Failed to initialize CPU fallback backend for AudioTokenizerDecoder";
             return false;
         }
+        apply_backend_thread_count(state.backend_cpu, impl_->n_threads);
     }
 
     std::vector<ggml_backend_t> backends;

@@ -29,8 +29,8 @@ struct tts_params {
     // Top-k sampling (0 = disabled)
     int32_t top_k = 50;
     
-    // Number of threads
-    int32_t n_threads = 4;
+    // Number of threads (0 = auto-detect from hardware)
+    int32_t n_threads = 0;
     
     // Print progress during generation
     bool print_progress = false;
@@ -159,6 +159,8 @@ public:
 private:
     friend struct pipeline_internal::ops;
 
+    void apply_n_threads(int32_t n_threads);
+
     TextTokenizer tokenizer_;
     TTSTransformer transformer_;
     AudioTokenizerEncoder audio_encoder_;
@@ -173,6 +175,7 @@ private:
     std::string tts_model_path_;
     std::string decoder_model_path_;
     tts_progress_callback_t progress_callback_;
+    int32_t n_threads_ = 0;
 };
 
 // Utility: Load audio file (WAV format)

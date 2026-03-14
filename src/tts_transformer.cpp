@@ -1,5 +1,6 @@
 #include "tts_transformer.h"
 #include "transformer/transformer_state_internal.h"
+#include "gguf_loader.h"
 
 namespace qwen3_tts {
 
@@ -13,6 +14,12 @@ TTSTransformer::~TTSTransformer() {
 
 const tts_transformer_config & TTSTransformer::get_config() const {
     return impl_->model.config;
+}
+
+void TTSTransformer::set_n_threads(int32_t n_threads) {
+    impl_->n_threads = n_threads > 0 ? n_threads : get_default_thread_count();
+    apply_backend_thread_count(impl_->state.backend, impl_->n_threads);
+    apply_backend_thread_count(impl_->state.backend_cpu, impl_->n_threads);
 }
 
 bool TTSTransformer::forward(const int32_t * tokens, int32_t n_tokens, int32_t n_past,

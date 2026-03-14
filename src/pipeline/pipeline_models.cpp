@@ -19,6 +19,7 @@ using pipeline_internal::log_memory_usage;
 
 bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & model_name) {
     configure_ggml_logging_once();
+    apply_n_threads(n_threads_);
 
     int64_t t_start = get_time_ms();
     log_memory_usage("load/start");

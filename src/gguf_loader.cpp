@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 namespace qwen3_tts {
 
@@ -74,6 +75,35 @@ void release_preferred_backend(ggml_backend_t backend) {
     }
 
     ggml_backend_free(backend);
+}
+
+int32_t get_default_thread_count() {
+    const unsigned int hc = std::thread::hardware_concurrency();
+    return hc > 0 ? (int32_t) hc : 1;
+}
+
+void apply_backend_thread_count(ggml_backend_t backend, int32_t n_threads) {
+    if (!backend || n_threads <= 0) {
+        return;
+    }
+
+    ggml_backend_dev_t device = ggml_backend_get_device(backend);
+    if (!device) {
+        return;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+    if (!reg) {
+        return;
+    }
+
+    auto set_n_threads = reinterpret_cast<ggml_backend_set_n_threads_t>(
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+    if (!set_n_threads) {
+        return;
+    }
+
+    set_n_threads(backend, n_threads);
 }
 
 bool GGUFLoader::open(const std::string & path) {

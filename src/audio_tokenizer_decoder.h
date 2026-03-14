@@ -43,6 +43,9 @@ public:
     // Load model from GGUF file (tokenizer model)
     bool load_model(const std::string & model_path);
 
+    // Configure runtime thread count for CPU-capable backends.
+    void set_n_threads(int32_t n_threads);
+
     // Release all model/runtime resources
     void unload_model();
     

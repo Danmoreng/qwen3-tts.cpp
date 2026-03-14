@@ -130,6 +130,7 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
     if (!state.backend) {
         return false;
     }
+    apply_backend_thread_count(state.backend, impl_->n_threads);
     ggml_backend_dev_t device = ggml_backend_get_device(state.backend);
     const char * device_name = device ? ggml_backend_dev_name(device) : "Unknown";
     fprintf(stderr, "  AudioTokenizerEncoder backend: %s\n", device_name);
@@ -140,6 +141,7 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
             error_msg_ = "Failed to initialize CPU fallback backend for AudioTokenizerEncoder";
             return false;
         }
+        apply_backend_thread_count(state.backend_cpu, impl_->n_threads);
     }
 
     std::vector<ggml_backend_t> backends;

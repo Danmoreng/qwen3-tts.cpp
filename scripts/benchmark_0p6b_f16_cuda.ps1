@@ -9,6 +9,7 @@ param(
     [int]$MaxTokens = 128,
     [int]$TopK = 1,
     [double]$Temperature = 0.0,
+    [int]$Threads = 0,
     [switch]$DisableCudaGraphs
 )
 
@@ -209,6 +210,10 @@ $args = @(
     "-o", $wavPath
 )
 
+if ($Threads -gt 0) {
+    $args += @("-j", "$Threads")
+}
+
 $originalDisableGraphs = [Environment]::GetEnvironmentVariable("GGML_CUDA_DISABLE_GRAPHS", "Process")
 try {
     if ($DisableCudaGraphs) {
@@ -235,6 +240,7 @@ $logBody = @(
     "Timestamp: $timestamp"
     "Command: $commandLine"
     "Graphs: $(if ($graphsEnabled) { "ON" } else { "OFF" })"
+    "Threads: $(if ($Threads -gt 0) { $Threads } else { "default" })"
     "ExitCode: $($result.ExitCode)"
     ""
     $result.Output
@@ -250,6 +256,7 @@ $current = [PSCustomObject]([ordered]@{
     Commit      = $commit
     Status      = $status
     Graphs      = if ($graphsEnabled) { "ON" } else { "OFF" }
+    Threads     = if ($Threads -gt 0) { $Threads } else { $null }
     Model       = $ModelName
     TotalMs     = $timing.TotalMs
     GenerateMs  = $timing.GenerateMs
@@ -273,6 +280,7 @@ $historyRow = [PSCustomObject]@{
     Commit     = $current.Commit
     Status     = $current.Status
     Graphs     = $current.Graphs
+    Threads    = $current.Threads
     Model      = $current.Model
     TotalMs    = $current.TotalMs
     GenerateMs = $current.GenerateMs
