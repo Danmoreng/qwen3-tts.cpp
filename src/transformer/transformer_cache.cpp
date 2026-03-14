@@ -31,6 +31,22 @@ void clear_cached_code_pred_graph(tts_transformer_state::cached_code_pred_graph 
     }
 }
 
+void clear_cached_code_pred_greedy_graph(tts_transformer_state::cached_code_pred_greedy_graph & graph) {
+    graph.graph = nullptr;
+    graph.inp_hidden = nullptr;
+    graph.inp_cb0_code = nullptr;
+    graph.prefill_inp_pos = nullptr;
+    graph.prefill_inp_mrope_pos = nullptr;
+    graph.step_inp_pos.fill(nullptr);
+    graph.step_inp_mrope_pos.fill(nullptr);
+    graph.step_inp_mask.fill(nullptr);
+    graph.output_tokens.fill(nullptr);
+    if (graph.ctx) {
+        ggml_free(graph.ctx);
+        graph.ctx = nullptr;
+    }
+}
+
 } // namespace
 
 void transformer_internal::ops::release_cached_talker_step_graph(TTSTransformer & self) {
@@ -98,6 +114,12 @@ void transformer_internal::ops::release_cached_code_pred_graphs(TTSTransformer &
     state.code_pred_graph_n_ctx = 0;
 }
 
+void transformer_internal::ops::release_cached_code_pred_greedy_graph(TTSTransformer & self) {
+    auto & state = self.impl_->state;
+    clear_cached_code_pred_greedy_graph(state.code_pred_greedy_graph);
+    state.code_pred_greedy_graph_n_ctx = 0;
+}
+
 bool transformer_internal::ops::ensure_cached_code_pred_graphs(TTSTransformer & self) {
     auto & impl = self.impl_;
     auto & state = self.impl_->state;
@@ -163,6 +185,75 @@ bool transformer_internal::ops::ensure_cached_code_pred_graphs(TTSTransformer & 
     return true;
 }
 
+bool transformer_internal::ops::ensure_cached_code_pred_greedy_graph(TTSTransformer & self) {
+    auto & state = self.impl_->state;
+    auto & error_msg = self.error_msg_;
+
+    if (state.code_pred_greedy_graph.graph &&
+        state.code_pred_greedy_graph_n_ctx == state.code_pred_cache.n_ctx) {
+        return true;
+    }
+
+    release_cached_code_pred_greedy_graph(self);
+
+    auto & graph = state.code_pred_greedy_graph;
+    graph.graph = build_code_pred_greedy_graph_impl(self, &graph.ctx);
+    if (!graph.graph || !graph.ctx) {
+        error_msg = "Failed to build cached greedy code predictor graph";
+        release_cached_code_pred_greedy_graph(self);
+        return false;
+    }
+
+    graph.inp_hidden = ggml_graph_get_tensor(graph.graph, "inp_hidden");
+    graph.inp_cb0_code = ggml_graph_get_tensor(graph.graph, "inp_cb0_code");
+    graph.prefill_inp_pos = ggml_graph_get_tensor(graph.graph, "prefill_inp_pos");
+    graph.prefill_inp_mrope_pos = ggml_graph_get_tensor(graph.graph, "prefill_inp_mrope_pos");
+
+    const bool greedy_prefill_has_position_input = self.impl_->model.config.use_mrope ?
+        (graph.prefill_inp_mrope_pos != nullptr) :
+        (graph.prefill_inp_pos != nullptr);
+    if (!graph.inp_hidden || !graph.inp_cb0_code || !greedy_prefill_has_position_input) {
+        error_msg = "Failed to find cached greedy code predictor inputs";
+        release_cached_code_pred_greedy_graph(self);
+        return false;
+    }
+
+    for (int step = 0; step < 14; ++step) {
+        char name[64];
+        snprintf(name, sizeof(name), "step%02d_inp_pos", step + 1);
+        graph.step_inp_pos[(size_t) step] = ggml_graph_get_tensor(graph.graph, name);
+
+        snprintf(name, sizeof(name), "step%02d_inp_mrope_pos", step + 1);
+        graph.step_inp_mrope_pos[(size_t) step] = ggml_graph_get_tensor(graph.graph, name);
+
+        snprintf(name, sizeof(name), "step%02d_inp_mask", step + 1);
+        graph.step_inp_mask[(size_t) step] = ggml_graph_get_tensor(graph.graph, name);
+
+        const bool greedy_step_has_position_input = self.impl_->model.config.use_mrope ?
+            (graph.step_inp_mrope_pos[(size_t) step] != nullptr) :
+            (graph.step_inp_pos[(size_t) step] != nullptr);
+        if (!greedy_step_has_position_input || !graph.step_inp_mask[(size_t) step]) {
+            error_msg = "Failed to find cached greedy code predictor step inputs";
+            release_cached_code_pred_greedy_graph(self);
+            return false;
+        }
+    }
+
+    for (int cb = 0; cb < 15; ++cb) {
+        char name[32];
+        snprintf(name, sizeof(name), "token_cb%d", cb + 1);
+        graph.output_tokens[(size_t) cb] = ggml_graph_get_tensor(graph.graph, name);
+        if (!graph.output_tokens[(size_t) cb]) {
+            error_msg = "Failed to find cached greedy code predictor output";
+            release_cached_code_pred_greedy_graph(self);
+            return false;
+        }
+    }
+
+    state.code_pred_greedy_graph_n_ctx = state.code_pred_cache.n_ctx;
+    return true;
+}
+
 bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     const auto & cfg = impl_->model.config;
 
@@ -225,6 +316,7 @@ bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
 
     free_tts_kv_cache(impl_->state.code_pred_cache);
     transformer_internal::ops::release_cached_code_pred_graphs(*this);
+    transformer_internal::ops::release_cached_code_pred_greedy_graph(*this);
 
     impl_->state.code_pred_cache.n_ctx = n_ctx;
     impl_->state.code_pred_cache.n_used = 0;

@@ -126,6 +126,19 @@ struct tts_transformer_state {
         struct ggml_tensor * logits = nullptr;
     };
 
+    struct cached_code_pred_greedy_graph {
+        struct ggml_context * ctx = nullptr;
+        struct ggml_cgraph * graph = nullptr;
+        struct ggml_tensor * inp_hidden = nullptr;
+        struct ggml_tensor * inp_cb0_code = nullptr;
+        struct ggml_tensor * prefill_inp_pos = nullptr;
+        struct ggml_tensor * prefill_inp_mrope_pos = nullptr;
+        std::array<struct ggml_tensor *, 14> step_inp_pos = {};
+        std::array<struct ggml_tensor *, 14> step_inp_mrope_pos = {};
+        std::array<struct ggml_tensor *, 14> step_inp_mask = {};
+        std::array<struct ggml_tensor *, 15> output_tokens = {};
+    };
+
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_sched_t sched = nullptr;
@@ -136,6 +149,7 @@ struct tts_transformer_state {
 
     std::vector<uint8_t> compute_meta;
     std::vector<std::vector<uint8_t>> code_pred_compute_meta;
+    std::vector<uint8_t> code_pred_greedy_compute_meta;
     std::vector<ggml_fp16_t> talker_step_mask;
     std::vector<ggml_fp16_t> code_pred_mask;
     struct ggml_context * talker_step_graph_ctx = nullptr;
@@ -151,6 +165,8 @@ struct tts_transformer_state {
     cached_code_pred_graph code_pred_prefill_graph;
     std::array<cached_code_pred_graph, 15> code_pred_step_graphs;
     int32_t code_pred_graph_n_ctx = 0;
+    cached_code_pred_greedy_graph code_pred_greedy_graph;
+    int32_t code_pred_greedy_graph_n_ctx = 0;
 
     tts_kv_cache cache;
     tts_kv_cache code_pred_cache;
