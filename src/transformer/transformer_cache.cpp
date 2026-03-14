@@ -18,64 +18,10 @@ void reset_scheduler_reserve_state(tts_transformer_state & state) {
 
 } // namespace
 
-void transformer_internal::ops::release_cached_talker_step_graph(TTSTransformer & self) {
-    auto & state = self.impl_->state;
-
-    state.talker_step_graph = nullptr;
-    state.talker_step_inp_step = nullptr;
-    state.talker_step_inp_pos = nullptr;
-    state.talker_step_inp_mrope_pos = nullptr;
-    state.talker_step_inp_mask = nullptr;
-    state.talker_step_hidden = nullptr;
-    state.talker_step_logits = nullptr;
-    state.talker_step_graph_n_ctx = 0;
-    if (state.talker_step_graph_ctx) {
-        ggml_free(state.talker_step_graph_ctx);
-        state.talker_step_graph_ctx = nullptr;
-    }
-}
-
-bool transformer_internal::ops::ensure_cached_talker_step_graph(TTSTransformer & self) {
-    auto & impl = self.impl_;
-    auto & state = impl->state;
-    auto & error_msg = self.error_msg_;
-
-    if (state.talker_step_graph && state.talker_step_graph_n_ctx == state.cache.n_ctx) {
-        return true;
-    }
-
-    release_cached_talker_step_graph(self);
-
-    state.talker_step_graph = build_step_graph_impl(self, 0, &state.talker_step_graph_ctx);
-    if (!state.talker_step_graph || !state.talker_step_graph_ctx) {
-        error_msg = "Failed to build cached talker step graph";
-        release_cached_talker_step_graph(self);
-        return false;
-    }
-
-    state.talker_step_inp_step = ggml_graph_get_tensor(state.talker_step_graph, "inp_step_embd");
-    state.talker_step_inp_pos = ggml_graph_get_tensor(state.talker_step_graph, "inp_pos");
-    state.talker_step_inp_mrope_pos = ggml_graph_get_tensor(state.talker_step_graph, "inp_mrope_pos");
-    state.talker_step_inp_mask = ggml_graph_get_tensor(state.talker_step_graph, "inp_mask");
-    state.talker_step_hidden = ggml_graph_get_tensor(state.talker_step_graph, "hidden_states");
-    state.talker_step_logits = ggml_graph_get_tensor(state.talker_step_graph, "logits");
-
-    if (!state.talker_step_inp_step || !state.talker_step_inp_pos ||
-        !state.talker_step_hidden || !state.talker_step_logits) {
-        error_msg = "Failed to find cached talker step graph tensors";
-        release_cached_talker_step_graph(self);
-        return false;
-    }
-
-    state.talker_step_graph_n_ctx = state.cache.n_ctx;
-    return true;
-}
-
 bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     const auto & cfg = impl_->model.config;
 
     free_tts_kv_cache(impl_->state.cache);
-    transformer_internal::ops::release_cached_talker_step_graph(*this);
 
     impl_->state.cache.n_ctx = n_ctx;
     impl_->state.cache.n_used = 0;

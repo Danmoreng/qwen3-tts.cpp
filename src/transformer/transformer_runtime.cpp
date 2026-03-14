@@ -223,10 +223,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    if (!transformer_internal::ops::ensure_cached_talker_step_graph(*this)) {
-        return false;
-    }
-    struct ggml_cgraph * gf = impl_->state.talker_step_graph;
+    struct ggml_cgraph * gf = transformer_internal::ops::build_step_graph(*this, n_past);
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
     if (impl_->timing) impl_->timing->t_talker_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -247,25 +244,25 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    struct ggml_tensor * inp_step = impl_->state.talker_step_inp_step;
+    struct ggml_tensor * inp_step = ggml_graph_get_tensor(gf, "inp_step_embd");
     if (inp_step) {
         ggml_backend_tensor_set(inp_step, step_embd, 0,
                                 impl_->model.config.hidden_size * sizeof(float));
     }
 
-    struct ggml_tensor * inp_pos = impl_->state.talker_step_inp_pos;
+    struct ggml_tensor * inp_pos = ggml_graph_get_tensor(gf, "inp_pos");
     if (inp_pos) {
         int32_t pos = n_past;
         ggml_backend_tensor_set(inp_pos, &pos, 0, sizeof(int32_t));
     }
 
-    struct ggml_tensor * inp_mrope_pos = impl_->state.talker_step_inp_mrope_pos;
+    struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
     if (inp_mrope_pos && impl_->model.config.use_mrope) {
         int32_t positions[4] = {n_past, n_past, n_past, 0};
         ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
     }
 
-    struct ggml_tensor * inp_mask = impl_->state.talker_step_inp_mask;
+    struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
     if (inp_mask) {
         std::vector<ggml_fp16_t> mask(impl_->state.cache.n_ctx);
         const ggml_fp16_t zero_fp16 = ggml_fp32_to_fp16(0.0f);
@@ -293,7 +290,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
     if (impl_->timing) impl_->timing->t_talker_compute_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 #endif
 
-    struct ggml_tensor * hidden = impl_->state.talker_step_hidden;
+    struct ggml_tensor * hidden = ggml_graph_get_tensor(gf, "hidden_states");
     if (!hidden) {
         error_msg_ = "Failed to find hidden_states tensor";
         ggml_backend_sched_reset(impl_->state.sched);
@@ -314,7 +311,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
                                 impl_->model.config.hidden_size * sizeof(float));
     }
 
-    struct ggml_tensor * logits = impl_->state.talker_step_logits;
+    struct ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
     if (!logits) {
         error_msg_ = "Failed to find logits tensor";
         ggml_backend_sched_reset(impl_->state.sched);
