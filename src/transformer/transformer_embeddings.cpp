@@ -118,6 +118,25 @@ bool transformer_internal::ops::lookup_single_embedding_row(TTSTransformer & sel
         return false;
     }
 
+    const auto copy_host_row = [&](const std::vector<float> & host_rows) -> bool {
+        if (host_rows.size() != (size_t) embd_dim * (size_t) vocab_size) {
+            return false;
+        }
+        memcpy(out_row, host_rows.data() + (size_t) token_id * (size_t) embd_dim,
+               (size_t) embd_dim * sizeof(float));
+        return true;
+    };
+
+    if (embedding == impl->model.codec_embd && copy_host_row(impl->codec_embd_host)) {
+        return true;
+    }
+    for (size_t i = 0; i < impl->model.code_pred_embd.size(); ++i) {
+        if (embedding == impl->model.code_pred_embd[i] && i < impl->code_pred_embd_host.size() &&
+            copy_host_row(impl->code_pred_embd_host[i])) {
+            return true;
+        }
+    }
+
     const size_t row_offset = (size_t) token_id * embedding->nb[1];
     if (embedding->type == GGML_TYPE_F32) {
         ggml_backend_tensor_get(embedding, out_row, row_offset, (size_t) embd_dim * sizeof(float));

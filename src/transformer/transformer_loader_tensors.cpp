@@ -9,6 +9,67 @@
 
 namespace qwen3_tts {
 
+namespace {
+
+bool cache_embedding_tensor_host_f32(std::vector<float> & dst,
+                                     const struct ggml_tensor * tensor,
+                                     const std::vector<uint8_t> & raw) {
+    if (!tensor || ggml_n_dims(tensor) != 2) {
+        return false;
+    }
+
+    const int64_t n = ggml_nelements(tensor);
+    dst.resize((size_t) n);
+
+    if (tensor->type == GGML_TYPE_F32) {
+        const size_t expected = (size_t) n * sizeof(float);
+        if (raw.size() != expected) {
+            dst.clear();
+            return false;
+        }
+        memcpy(dst.data(), raw.data(), expected);
+        return true;
+    }
+
+    if (tensor->type == GGML_TYPE_F16) {
+        const size_t expected = (size_t) n * sizeof(ggml_fp16_t);
+        if (raw.size() != expected) {
+            dst.clear();
+            return false;
+        }
+
+        const ggml_fp16_t * src = reinterpret_cast<const ggml_fp16_t *>(raw.data());
+        for (int64_t i = 0; i < n; ++i) {
+            dst[(size_t) i] = ggml_fp16_to_fp32(src[i]);
+        }
+        return true;
+    }
+
+    dst.clear();
+    return false;
+}
+
+void maybe_cache_hot_embedding_host(tts_transformer_private & impl,
+                                    struct ggml_tensor * tensor,
+                                    const std::vector<uint8_t> & raw) {
+    if (tensor == impl.model.codec_embd) {
+        cache_embedding_tensor_host_f32(impl.codec_embd_host, tensor, raw);
+        return;
+    }
+
+    for (size_t i = 0; i < impl.model.code_pred_embd.size(); ++i) {
+        if (tensor == impl.model.code_pred_embd[i]) {
+            if (impl.code_pred_embd_host.size() != impl.model.code_pred_embd.size()) {
+                impl.code_pred_embd_host.resize(impl.model.code_pred_embd.size());
+            }
+            cache_embedding_tensor_host_f32(impl.code_pred_embd_host[i], tensor, raw);
+            return;
+        }
+    }
+}
+
+} // namespace
+
 bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct gguf_context * ctx) {
     auto & impl = self.impl_;
     auto & error_msg = self.error_msg_;
@@ -357,6 +418,7 @@ bool transformer_internal::ops::load_tensor_data(TTSTransformer & self, const st
         }
 
         ggml_backend_tensor_set(tensor, read_buf.data(), 0, nbytes);
+        maybe_cache_hot_embedding_host(*impl, tensor, read_buf);
     }
 
     fclose(f);
