@@ -343,7 +343,10 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        struct ggml_cgraph * gf = transformer_internal::ops::build_code_pred_prefill_graph(*this);
+        if (!transformer_internal::ops::ensure_cached_code_pred_graphs(*this)) {
+            return false;
+        }
+        struct ggml_cgraph * gf = impl_->state.code_pred_prefill_graph.graph;
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
         if (impl_->timing) impl_->timing->t_code_pred_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -364,23 +367,23 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        struct ggml_tensor * inp_hidden = ggml_graph_get_tensor(gf, "inp_hidden");
+        struct ggml_tensor * inp_hidden = impl_->state.code_pred_prefill_graph.inp_hidden;
         if (inp_hidden) {
             ggml_backend_tensor_set(inp_hidden, hidden, 0, cfg.hidden_size * sizeof(float));
         }
 
-        struct ggml_tensor * inp_cb0_embd = ggml_graph_get_tensor(gf, "inp_cb0_embd");
+        struct ggml_tensor * inp_cb0_embd = impl_->state.code_pred_prefill_graph.inp_cb0_embd;
         if (inp_cb0_embd) {
             ggml_backend_tensor_set(inp_cb0_embd, cb0_embd.data(), 0, cfg.hidden_size * sizeof(float));
         }
 
-        struct ggml_tensor * inp_pos = ggml_graph_get_tensor(gf, "inp_pos");
+        struct ggml_tensor * inp_pos = impl_->state.code_pred_prefill_graph.inp_pos;
         if (inp_pos) {
             int32_t positions[2] = {0, 1};
             ggml_backend_tensor_set(inp_pos, positions, 0, 2 * sizeof(int32_t));
         }
 
-        struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
+        struct ggml_tensor * inp_mrope_pos = impl_->state.code_pred_prefill_graph.inp_mrope_pos;
         if (inp_mrope_pos && impl_->model.config.use_mrope) {
             int32_t positions[8] = {0, 1, 0, 1, 0, 1, 0, 0};
             ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 8 * sizeof(int32_t));
@@ -403,7 +406,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         if (impl_->timing) impl_->timing->t_code_pred_compute_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 #endif
 
-        struct ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
+        struct ggml_tensor * logits = impl_->state.code_pred_prefill_graph.logits;
         if (!logits) {
             error_msg_ = "Failed to find logits tensor in prefill";
             ggml_backend_sched_reset(impl_->state.sched);
@@ -456,7 +459,8 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        struct ggml_cgraph * gf = transformer_internal::ops::build_code_pred_step_graph(*this, n_past, step);
+        auto & step_graph = impl_->state.code_pred_step_graphs[(size_t) step];
+        struct ggml_cgraph * gf = step_graph.graph;
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
         if (impl_->timing) impl_->timing->t_code_pred_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -477,30 +481,30 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        struct ggml_tensor * inp_hidden = ggml_graph_get_tensor(gf, "inp_hidden");
+        struct ggml_tensor * inp_hidden = step_graph.inp_hidden;
         if (inp_hidden) {
             ggml_backend_tensor_set(inp_hidden, hidden, 0, cfg.hidden_size * sizeof(float));
         }
 
-        struct ggml_tensor * inp_code = ggml_graph_get_tensor(gf, "inp_code");
+        struct ggml_tensor * inp_code = step_graph.inp_code;
         if (inp_code) {
             int32_t prev_code = output[step - 1];
             ggml_backend_tensor_set(inp_code, &prev_code, 0, sizeof(int32_t));
         }
 
-        struct ggml_tensor * inp_pos = ggml_graph_get_tensor(gf, "inp_pos");
+        struct ggml_tensor * inp_pos = step_graph.inp_pos;
         if (inp_pos) {
             int32_t pos = n_past;
             ggml_backend_tensor_set(inp_pos, &pos, 0, sizeof(int32_t));
         }
 
-        struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
+        struct ggml_tensor * inp_mrope_pos = step_graph.inp_mrope_pos;
         if (inp_mrope_pos && impl_->model.config.use_mrope) {
             int32_t positions[4] = {n_past, n_past, n_past, 0};
             ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
         }
 
-        struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
+        struct ggml_tensor * inp_mask = step_graph.inp_mask;
         if (inp_mask) {
             ggml_backend_tensor_set(inp_mask, impl_->state.code_pred_mask.data(), 0,
                                     impl_->state.code_pred_cache.n_ctx * sizeof(ggml_fp16_t));
@@ -523,7 +527,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         if (impl_->timing) impl_->timing->t_code_pred_compute_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 #endif
 
-        struct ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
+        struct ggml_tensor * logits = step_graph.logits;
         if (!logits) {
             error_msg_ = "Failed to find logits tensor";
             ggml_backend_sched_reset(impl_->state.sched);
