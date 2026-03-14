@@ -136,6 +136,7 @@ struct tts_transformer_state {
 
     std::vector<uint8_t> compute_meta;
     std::vector<std::vector<uint8_t>> code_pred_compute_meta;
+    std::vector<ggml_fp16_t> talker_step_mask;
     std::vector<ggml_fp16_t> code_pred_mask;
     struct ggml_context * talker_step_graph_ctx = nullptr;
     struct ggml_cgraph * talker_step_graph = nullptr;
@@ -146,6 +147,7 @@ struct tts_transformer_state {
     struct ggml_tensor * talker_step_hidden = nullptr;
     struct ggml_tensor * talker_step_logits = nullptr;
     int32_t talker_step_graph_n_ctx = 0;
+    int32_t talker_step_mask_n_past = -1;
     cached_code_pred_graph code_pred_prefill_graph;
     std::array<cached_code_pred_graph, 15> code_pred_step_graphs;
     int32_t code_pred_graph_n_ctx = 0;
