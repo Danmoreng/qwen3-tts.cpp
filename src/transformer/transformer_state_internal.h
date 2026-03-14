@@ -6,7 +6,6 @@
 #include "gguf.h"
 #include "coreml_code_predictor.h"
 
-#include <array>
 #include <map>
 #include <random>
 #include <string>
@@ -114,18 +113,6 @@ struct tts_kv_cache {
 };
 
 struct tts_transformer_state {
-    struct cached_code_pred_graph {
-        struct ggml_context * ctx = nullptr;
-        struct ggml_cgraph * graph = nullptr;
-        struct ggml_tensor * inp_hidden = nullptr;
-        struct ggml_tensor * inp_code = nullptr;
-        struct ggml_tensor * inp_cb0_embd = nullptr;
-        struct ggml_tensor * inp_pos = nullptr;
-        struct ggml_tensor * inp_mrope_pos = nullptr;
-        struct ggml_tensor * inp_mask = nullptr;
-        struct ggml_tensor * logits = nullptr;
-    };
-
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_sched_t sched = nullptr;
@@ -148,9 +135,6 @@ struct tts_transformer_state {
     struct ggml_tensor * talker_step_logits = nullptr;
     int32_t talker_step_graph_n_ctx = 0;
     int32_t talker_step_mask_n_past = -1;
-    cached_code_pred_graph code_pred_prefill_graph;
-    std::array<cached_code_pred_graph, 15> code_pred_step_graphs;
-    int32_t code_pred_graph_n_ctx = 0;
 
     tts_kv_cache cache;
     tts_kv_cache code_pred_cache;

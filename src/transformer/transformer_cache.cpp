@@ -16,21 +16,6 @@ void reset_scheduler_reserve_state(tts_transformer_state & state) {
     state.sched_reserved_prefill_len = 0;
 }
 
-void clear_cached_code_pred_graph(tts_transformer_state::cached_code_pred_graph & graph) {
-    graph.graph = nullptr;
-    graph.inp_hidden = nullptr;
-    graph.inp_code = nullptr;
-    graph.inp_cb0_embd = nullptr;
-    graph.inp_pos = nullptr;
-    graph.inp_mrope_pos = nullptr;
-    graph.inp_mask = nullptr;
-    graph.logits = nullptr;
-    if (graph.ctx) {
-        ggml_free(graph.ctx);
-        graph.ctx = nullptr;
-    }
-}
-
 } // namespace
 
 void transformer_internal::ops::release_cached_talker_step_graph(TTSTransformer & self) {
@@ -85,81 +70,6 @@ bool transformer_internal::ops::ensure_cached_talker_step_graph(TTSTransformer &
     }
 
     state.talker_step_graph_n_ctx = state.cache.n_ctx;
-    return true;
-}
-
-void transformer_internal::ops::release_cached_code_pred_graphs(TTSTransformer & self) {
-    auto & state = self.impl_->state;
-
-    clear_cached_code_pred_graph(state.code_pred_prefill_graph);
-    for (auto & graph : state.code_pred_step_graphs) {
-        clear_cached_code_pred_graph(graph);
-    }
-    state.code_pred_graph_n_ctx = 0;
-}
-
-bool transformer_internal::ops::ensure_cached_code_pred_graphs(TTSTransformer & self) {
-    auto & impl = self.impl_;
-    auto & state = self.impl_->state;
-    auto & error_msg = self.error_msg_;
-
-    if (state.code_pred_graph_n_ctx == state.code_pred_cache.n_ctx &&
-        state.code_pred_prefill_graph.graph) {
-        return true;
-    }
-
-    release_cached_code_pred_graphs(self);
-
-    auto & prefill = state.code_pred_prefill_graph;
-    prefill.graph = build_code_pred_prefill_graph_impl(self, &prefill.ctx);
-    if (!prefill.graph || !prefill.ctx) {
-        error_msg = "Failed to build cached code predictor prefill graph";
-        release_cached_code_pred_graphs(self);
-        return false;
-    }
-
-    prefill.inp_hidden = ggml_graph_get_tensor(prefill.graph, "inp_hidden");
-    prefill.inp_cb0_embd = ggml_graph_get_tensor(prefill.graph, "inp_cb0_embd");
-    prefill.inp_pos = ggml_graph_get_tensor(prefill.graph, "inp_pos");
-    prefill.inp_mrope_pos = ggml_graph_get_tensor(prefill.graph, "inp_mrope_pos");
-    prefill.logits = ggml_graph_get_tensor(prefill.graph, "logits");
-
-    const bool prefill_has_position_input = impl->model.config.use_mrope ?
-        (prefill.inp_mrope_pos != nullptr) :
-        (prefill.inp_pos != nullptr);
-    if (!prefill.inp_hidden || !prefill.inp_cb0_embd || !prefill.logits || !prefill_has_position_input) {
-        error_msg = "Failed to find cached code predictor prefill tensors";
-        release_cached_code_pred_graphs(self);
-        return false;
-    }
-
-    for (int step = 1; step < 15; ++step) {
-        auto & graph = state.code_pred_step_graphs[(size_t) step];
-        graph.graph = build_code_pred_step_graph_impl(self, 0, step, &graph.ctx);
-        if (!graph.graph || !graph.ctx) {
-            error_msg = "Failed to build cached code predictor step graph";
-            release_cached_code_pred_graphs(self);
-            return false;
-        }
-
-        graph.inp_hidden = ggml_graph_get_tensor(graph.graph, "inp_hidden");
-        graph.inp_code = ggml_graph_get_tensor(graph.graph, "inp_code");
-        graph.inp_pos = ggml_graph_get_tensor(graph.graph, "inp_pos");
-        graph.inp_mrope_pos = ggml_graph_get_tensor(graph.graph, "inp_mrope_pos");
-        graph.inp_mask = ggml_graph_get_tensor(graph.graph, "inp_mask");
-        graph.logits = ggml_graph_get_tensor(graph.graph, "logits");
-
-        const bool step_has_position_input = impl->model.config.use_mrope ?
-            (graph.inp_mrope_pos != nullptr) :
-            (graph.inp_pos != nullptr);
-        if (!graph.inp_code || !graph.inp_mask || !graph.logits || !step_has_position_input) {
-            error_msg = "Failed to find cached code predictor step tensors";
-            release_cached_code_pred_graphs(self);
-            return false;
-        }
-    }
-
-    state.code_pred_graph_n_ctx = state.code_pred_cache.n_ctx;
     return true;
 }
 
@@ -224,7 +134,6 @@ bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
     const auto & cfg = impl_->model.config;
 
     free_tts_kv_cache(impl_->state.code_pred_cache);
-    transformer_internal::ops::release_cached_code_pred_graphs(*this);
 
     impl_->state.code_pred_cache.n_ctx = n_ctx;
     impl_->state.code_pred_cache.n_used = 0;

@@ -61,14 +61,10 @@ struct ops {
                                             float * out_row);
     static struct ggml_cgraph * build_code_pred_graph(TTSTransformer & self, int32_t n_prev_codes);
     static struct ggml_cgraph * build_code_pred_step_graph(TTSTransformer & self, int32_t n_past, int32_t generation_step);
-    static struct ggml_cgraph * build_code_pred_step_graph_impl(TTSTransformer & self, int32_t n_past, int32_t generation_step, struct ggml_context ** graph_ctx_out);
     static struct ggml_cgraph * build_code_pred_prefill_graph(TTSTransformer & self);
-    static struct ggml_cgraph * build_code_pred_prefill_graph_impl(TTSTransformer & self, struct ggml_context ** graph_ctx_out);
     static void maybe_reserve_scheduler_graphs(TTSTransformer & self, int32_t prefill_len, int32_t required_ctx);
     static void release_cached_talker_step_graph(TTSTransformer & self);
     static bool ensure_cached_talker_step_graph(TTSTransformer & self);
-    static void release_cached_code_pred_graphs(TTSTransformer & self);
-    static bool ensure_cached_code_pred_graphs(TTSTransformer & self);
     static bool parse_config(TTSTransformer & self, struct gguf_context * ctx);
     static bool create_tensors(TTSTransformer & self, struct gguf_context * ctx);
     static bool load_tensor_data(TTSTransformer & self, const std::string & path, struct gguf_context * ctx);

@@ -14,7 +14,6 @@ namespace qwen3_tts {
 
 void TTSTransformer::unload_model() {
     transformer_internal::ops::release_cached_talker_step_graph(*this);
-    transformer_internal::ops::release_cached_code_pred_graphs(*this);
     free_tts_kv_cache(impl_->state.cache);
     free_tts_kv_cache(impl_->state.code_pred_cache);
     free_transformer_model(impl_->model);

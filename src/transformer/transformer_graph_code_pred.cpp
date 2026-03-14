@@ -129,8 +129,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
     return gf;
 }
 
-struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph_impl(TTSTransformer & self,
-                                                                                   struct ggml_context ** graph_ctx_out) {
+struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TTSTransformer & self) {
     auto & impl = self.impl_;
     const auto & cfg = impl->model.config;
     const int n_head = cfg.code_pred_n_attention_heads;
@@ -289,21 +288,11 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph_im
 
     ggml_build_forward_expand(gf, logits);
 
-    if (graph_ctx_out) {
-        *graph_ctx_out = ctx0;
-    } else {
-        ggml_free(ctx0);
-    }
+    ggml_free(ctx0);
     return gf;
 }
 
-struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TTSTransformer & self) {
-    return build_code_pred_prefill_graph_impl(self, nullptr);
-}
-
-struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph_impl(TTSTransformer & self, int32_t n_past,
-                                                                                 int32_t generation_step,
-                                                                                 struct ggml_context ** graph_ctx_out) {
+struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTransformer & self, int32_t n_past, int32_t generation_step) {
     auto & impl = self.impl_;
     const auto & cfg = impl->model.config;
     const int n_head = cfg.code_pred_n_attention_heads;
@@ -485,16 +474,8 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph_impl(
 
     ggml_build_forward_expand(gf, logits);
 
-    if (graph_ctx_out) {
-        *graph_ctx_out = ctx0;
-    } else {
-        ggml_free(ctx0);
-    }
+    ggml_free(ctx0);
     return gf;
-}
-
-struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTransformer & self, int32_t n_past, int32_t generation_step) {
-    return build_code_pred_step_graph_impl(self, n_past, generation_step, nullptr);
 }
 
 } // namespace qwen3_tts
