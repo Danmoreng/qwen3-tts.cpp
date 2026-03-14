@@ -15,7 +15,6 @@ namespace qwen3_tts {
 void TTSTransformer::unload_model() {
     transformer_internal::ops::release_cached_talker_step_graph(*this);
     transformer_internal::ops::release_cached_code_pred_graphs(*this);
-    transformer_internal::ops::release_cached_code_pred_greedy_graph(*this);
     free_tts_kv_cache(impl_->state.cache);
     free_tts_kv_cache(impl_->state.code_pred_cache);
     free_transformer_model(impl_->model);
@@ -43,7 +42,6 @@ void TTSTransformer::unload_model() {
     }
 
     impl_->state.compute_meta.clear();
-    impl_->state.code_pred_greedy_compute_meta.clear();
     impl_->state.code_pred_mask.clear();
     impl_->codec_embd_host.clear();
     impl_->code_pred_embd_host.clear();
@@ -171,7 +169,6 @@ bool TTSTransformer::load_model(const std::string & model_path) {
     for (int i = 0; i < 15; ++i) {
         impl_->state.code_pred_compute_meta[i].resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
     }
-    impl_->state.code_pred_greedy_compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
 
     if (!transformer_internal::ops::try_init_coreml_code_predictor(*this, model_path)) {
         return false;
