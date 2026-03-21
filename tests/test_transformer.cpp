@@ -351,7 +351,7 @@ int main(int argc, char ** argv) {
 
     bool gen_ok = transformer.generate(
         text_tokens.data(), n_tokens, spk_ptr, max_len,
-        generated_codes, 2050, 1.05f, 0.0f, 0);
+        generated_codes, 2050, 1.05f, 0.0f, 0, 1.0f);
 
     if (!gen_ok) {
         printf("  FAIL: generate() failed: %s\n", transformer.get_error().c_str());

@@ -88,6 +88,24 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
     };
 
     auto & cfg = impl->model.config;
+    auto load_mrope_section = [&](std::initializer_list<const char *> keys, int32_t out_section[3]) -> bool {
+        for (const char * key : keys) {
+            int64_t idx = gguf_find_key(ctx, key);
+            if (idx < 0) {
+                continue;
+            }
+            const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, idx);
+            if (!data) {
+                continue;
+            }
+            for (int i = 0; i < 3; ++i) {
+                out_section[i] = data[i];
+            }
+            return true;
+        }
+        return false;
+    };
+
     cfg.text_vocab_size = get_u32_any({
         "qwen3-tts.text.vocab_size",
         "qwen3-tts.text_vocab_size",
@@ -243,19 +261,40 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
         fprintf(stderr, "  Metadata supports_instruction: %s\n", cfg.supports_instruction ? "true" : "false");
     }
 
-    int64_t mrope_idx = gguf_find_key(ctx, "qwen3-tts.talker.rope.mrope_section");
-    if (mrope_idx < 0) {
-        mrope_idx = gguf_find_key(ctx, "qwen3-tts.rope.mrope_section");
+    cfg.use_mrope = load_mrope_section({
+        "qwen3-tts.talker.rope.mrope_section",
+        "qwen3-tts.rope.mrope_section",
+    }, cfg.mrope_section);
+
+    for (int i = 0; i < 3; ++i) {
+        cfg.code_pred_mrope_section[i] = cfg.mrope_section[i];
     }
-    if (mrope_idx >= 0) {
-        const int32_t * mrope_data = (const int32_t *) gguf_get_arr_data(ctx, mrope_idx);
-        if (mrope_data) {
-            for (int i = 0; i < 3; ++i) {
-                cfg.mrope_section[i] = mrope_data[i];
-            }
-            cfg.use_mrope = true;
-        }
+    cfg.code_pred_use_mrope = cfg.use_mrope;
+
+    const bool code_pred_has_mrope = load_mrope_section({
+        "qwen3-tts.code_predictor.rope.mrope_section",
+        "qwen3-tts.code_pred.rope.mrope_section",
+        "qwen3-tts.mtp.rope.mrope_section",
+    }, cfg.code_pred_mrope_section);
+    if (code_pred_has_mrope) {
+        cfg.code_pred_use_mrope = true;
     }
+
+    const int32_t code_pred_mrope_override = transformer_internal::parse_env_i32(
+        "QWEN3_TTS_CODE_PRED_MROPE", -1, -1, 1);
+    if (code_pred_mrope_override >= 0) {
+        cfg.code_pred_use_mrope = code_pred_mrope_override != 0;
+    }
+
+    fprintf(stderr, "  Talker M-RoPE: %s [%d, %d, %d]\n",
+            cfg.use_mrope ? "enabled" : "disabled",
+            cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2]);
+    fprintf(stderr, "  Code predictor M-RoPE: %s [%d, %d, %d]%s\n",
+            cfg.code_pred_use_mrope ? "enabled" : "disabled",
+            cfg.code_pred_mrope_section[0], cfg.code_pred_mrope_section[1], cfg.code_pred_mrope_section[2],
+            code_pred_mrope_override >= 0 ? " (env override)" :
+            (code_pred_has_mrope ? " (predictor metadata)" :
+             (cfg.use_mrope ? " (inherited from talker)" : "")));
 
     int64_t spk_count_idx = gguf_find_key(ctx, "qwen3-tts.speaker.count");
     int32_t spk_count = 0;

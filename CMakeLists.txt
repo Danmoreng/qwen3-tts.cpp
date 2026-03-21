@@ -98,6 +98,7 @@ set(TTS_TRANSFORMER_SOURCES
     src/transformer/transformer_loader_tensors.cpp
     src/transformer/transformer_runtime.cpp
     src/transformer/transformer_runtime_code_pred.cpp
+    src/transformer/transformer_sampling.cpp
     src/transformer/transformer_generate.cpp
 )
 if(APPLE AND QWEN3_TTS_COREML)

@@ -6,27 +6,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <random>
-#include <utility>
 #include <vector>
 
 namespace qwen3_tts {
-
-namespace {
-
-int32_t argmax_code_pred(const float * data, int32_t n) {
-    int32_t max_idx = 0;
-    float max_val = data[0];
-    for (int32_t i = 1; i < n; ++i) {
-        if (data[i] > max_val) {
-            max_val = data[i];
-            max_idx = i;
-        }
-    }
-    return max_idx;
-}
-
-} // namespace
 
 bool TTSTransformer::get_hidden_states(std::vector<float> & hidden) const {
     if (last_hidden_.empty()) {
@@ -94,6 +76,7 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
                                                                     std::vector<int32_t> & output,
                                                                     float temperature,
                                                                     int32_t top_k,
+                                                                    float top_p,
                                                                     int32_t trace_frame) {
     auto & impl = self.impl_;
     auto & error_msg = self.error_msg_;
@@ -110,52 +93,13 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
     output.resize(n_steps);
     std::vector<float> logits_data(cfg.code_pred_vocab_size);
     std::vector<float> code_probs(cfg.code_pred_vocab_size);
+    std::vector<int32_t> sorted_indices(cfg.code_pred_vocab_size);
     std::vector<float> seq_embd((size_t) 16 * cfg.hidden_size, 0.0f);
 
 #ifdef QWEN3_TTS_TIMING
     using clk = std::chrono::high_resolution_clock;
     auto t0 = clk::now(), t1 = t0;
 #endif
-
-    auto sample_or_argmax = [&](float * logits_ptr, int32_t vocab_size) -> int32_t {
-        if (temperature <= 0.0f) {
-            return argmax_code_pred(logits_ptr, vocab_size);
-        }
-
-        for (int32_t i = 0; i < vocab_size; ++i) {
-            logits_ptr[i] /= temperature;
-        }
-
-        if (top_k > 0 && top_k < vocab_size) {
-            std::vector<std::pair<float, int32_t>> scored(vocab_size);
-            for (int32_t i = 0; i < vocab_size; ++i) {
-                scored[i] = {logits_ptr[i], i};
-            }
-            std::partial_sort(scored.begin(), scored.begin() + top_k, scored.end(),
-                [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
-                    return a.first > b.first;
-                });
-            float threshold = scored[top_k - 1].first;
-            for (int32_t i = 0; i < vocab_size; ++i) {
-                if (logits_ptr[i] < threshold) {
-                    logits_ptr[i] = -INFINITY;
-                }
-            }
-        }
-
-        float max_logit = *std::max_element(logits_ptr, logits_ptr + vocab_size);
-        double sum = 0.0;
-        for (int32_t i = 0; i < vocab_size; ++i) {
-            code_probs[i] = expf(logits_ptr[i] - max_logit);
-            sum += code_probs[i];
-        }
-        for (int32_t i = 0; i < vocab_size; ++i) {
-            code_probs[i] = (float) (code_probs[i] / sum);
-        }
-
-        std::discrete_distribution<int32_t> dist(code_probs.begin(), code_probs.begin() + vocab_size);
-        return dist(impl->rng);
-    };
 
     memcpy(seq_embd.data(), hidden, (size_t) cfg.hidden_size * sizeof(float));
     if (!lookup_single_embedding_row(self, impl->model.codec_embd, codebook_0_token,
@@ -211,7 +155,14 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
                                                         "f32", {(int64_t) cfg.code_pred_vocab_size});
         }
 
-        output[step] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        output[step] = transformer_internal::sample_token_inplace(logits_data.data(),
+                                                                  cfg.code_pred_vocab_size,
+                                                                  temperature,
+                                                                  top_k,
+                                                                  top_p,
+                                                                  code_probs,
+                                                                  sorted_indices,
+                                                                  impl->rng);
 
 #ifdef QWEN3_TTS_TIMING
         if (impl->timing) {
@@ -237,7 +188,7 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
 
 bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t codebook_0_token,
                                                   std::vector<int32_t> & output,
-                                                  float temperature, int32_t top_k,
+                                                  float temperature, int32_t top_k, float top_p,
                                                   int32_t trace_frame) {
     if (!impl_->model.ctx) {
         error_msg_ = "Model not loaded";
@@ -254,7 +205,8 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #endif
 
     if (impl_->use_coreml_code_predictor && impl_->coreml_code_predictor.is_loaded()) {
-        if (transformer_internal::ops::predict_codes_autoregressive_coreml(*this, hidden, codebook_0_token, output, temperature, top_k, trace_frame)) {
+        if (transformer_internal::ops::predict_codes_autoregressive_coreml(*this, hidden, codebook_0_token, output,
+                                                                           temperature, top_k, top_p, trace_frame)) {
             return true;
         }
         if (impl_->skip_ggml_code_pred_layers) {
@@ -274,42 +226,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
     output.resize(15);
     std::vector<float> logits_data(cfg.code_pred_vocab_size);
     std::vector<float> code_probs(cfg.code_pred_vocab_size);
-
-    auto sample_or_argmax = [&](float * logits_ptr, int32_t vocab_size) -> int32_t {
-        if (temperature <= 0.0f) {
-            return argmax_code_pred(logits_ptr, vocab_size);
-        }
-        for (int32_t i = 0; i < vocab_size; ++i) {
-            logits_ptr[i] /= temperature;
-        }
-        if (top_k > 0 && top_k < vocab_size) {
-            std::vector<std::pair<float, int32_t>> scored(vocab_size);
-            for (int32_t i = 0; i < vocab_size; ++i) {
-                scored[i] = {logits_ptr[i], i};
-            }
-            std::partial_sort(scored.begin(), scored.begin() + top_k, scored.end(),
-                [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
-                    return a.first > b.first;
-                });
-            float threshold = scored[top_k - 1].first;
-            for (int32_t i = 0; i < vocab_size; ++i) {
-                if (logits_ptr[i] < threshold) {
-                    logits_ptr[i] = -INFINITY;
-                }
-            }
-        }
-        float max_logit = *std::max_element(logits_ptr, logits_ptr + vocab_size);
-        double sum = 0.0;
-        for (int32_t i = 0; i < vocab_size; ++i) {
-            code_probs[i] = expf(logits_ptr[i] - max_logit);
-            sum += code_probs[i];
-        }
-        for (int32_t i = 0; i < vocab_size; ++i) {
-            code_probs[i] = (float) (code_probs[i] / sum);
-        }
-        std::discrete_distribution<int32_t> dist(code_probs.begin(), code_probs.begin() + vocab_size);
-        return dist(impl_->rng);
-    };
+    std::vector<int32_t> sorted_indices(cfg.code_pred_vocab_size);
 
     std::vector<float> cb0_embd(cfg.hidden_size);
     if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.codec_embd, codebook_0_token, cb0_embd.data())) {
@@ -381,7 +298,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
 
         struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
-        if (inp_mrope_pos && impl_->model.config.use_mrope) {
+        if (inp_mrope_pos && impl_->model.config.code_pred_use_mrope) {
             int32_t positions[8] = {0, 1, 0, 1, 0, 1, 0, 0};
             ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 8 * sizeof(int32_t));
         }
@@ -425,7 +342,14 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                                         {(int64_t) cfg.code_pred_vocab_size});
         }
 
-        output[0] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        output[0] = transformer_internal::sample_token_inplace(logits_data.data(),
+                                                               cfg.code_pred_vocab_size,
+                                                               temperature,
+                                                               top_k,
+                                                               top_p,
+                                                               code_probs,
+                                                               sorted_indices,
+                                                               impl_->rng);
 
         ggml_backend_sched_reset(impl_->state.sched);
 #ifdef QWEN3_TTS_TIMING
@@ -495,7 +419,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
 
         struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
-        if (inp_mrope_pos && impl_->model.config.use_mrope) {
+        if (inp_mrope_pos && impl_->model.config.code_pred_use_mrope) {
             int32_t positions[4] = {n_past, n_past, n_past, 0};
             ggml_backend_tensor_set(inp_mrope_pos, positions, 0, 4 * sizeof(int32_t));
         }
@@ -545,7 +469,14 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                                         {(int64_t) cfg.code_pred_vocab_size});
         }
 
-        output[step] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        output[step] = transformer_internal::sample_token_inplace(logits_data.data(),
+                                                                  cfg.code_pred_vocab_size,
+                                                                  temperature,
+                                                                  top_k,
+                                                                  top_p,
+                                                                  code_probs,
+                                                                  sorted_indices,
+                                                                  impl_->rng);
 
         ggml_backend_sched_reset(impl_->state.sched);
 #ifdef QWEN3_TTS_TIMING

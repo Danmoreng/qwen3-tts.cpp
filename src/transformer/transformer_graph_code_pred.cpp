@@ -164,7 +164,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
     ggml_set_input(inp_pos);
 
     struct ggml_tensor * inp_mrope_pos = nullptr;
-    if (cfg.use_mrope) {
+    if (cfg.code_pred_use_mrope) {
         inp_mrope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4 * n_tokens);
         ggml_set_name(inp_mrope_pos, "inp_mrope_pos");
         ggml_set_input(inp_mrope_pos);
@@ -185,7 +185,9 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
 
     struct ggml_tensor * inpL = cur;
     const float KQscale = 1.0f / sqrtf((float) head_dim);
-    int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
+    int mrope_sections[GGML_MROPE_SECTIONS] = {
+        cfg.code_pred_mrope_section[0], cfg.code_pred_mrope_section[1], cfg.code_pred_mrope_section[2], 0
+    };
 
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = impl->model.code_pred_layers[il];
@@ -211,7 +213,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
 
-        if (cfg.use_mrope) {
+        if (cfg.code_pred_use_mrope) {
             Qcur = ggml_rope_multi(ctx0, Qcur, inp_mrope_pos, nullptr,
                                    head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
                                    rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
@@ -327,7 +329,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
     ggml_set_input(inp_pos);
 
     struct ggml_tensor * inp_mrope_pos = nullptr;
-    if (cfg.use_mrope) {
+    if (cfg.code_pred_use_mrope) {
         inp_mrope_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4);
         ggml_set_name(inp_mrope_pos, "inp_mrope_pos");
         ggml_set_input(inp_mrope_pos);
@@ -356,7 +358,9 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
 
     struct ggml_tensor * inpL = cur;
     const float KQscale = 1.0f / sqrtf((float) head_dim);
-    int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
+    int mrope_sections[GGML_MROPE_SECTIONS] = {
+        cfg.code_pred_mrope_section[0], cfg.code_pred_mrope_section[1], cfg.code_pred_mrope_section[2], 0
+    };
 
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = impl->model.code_pred_layers[il];
@@ -382,7 +386,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
             Kcur = ggml_mul(ctx0, Kcur, layer.attn_k_norm);
         }
 
-        if (cfg.use_mrope) {
+        if (cfg.code_pred_use_mrope) {
             Qcur = ggml_rope_multi(ctx0, Qcur, inp_mrope_pos, nullptr,
                                    head_dim, mrope_sections, GGML_ROPE_TYPE_MROPE, 0,
                                    rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);

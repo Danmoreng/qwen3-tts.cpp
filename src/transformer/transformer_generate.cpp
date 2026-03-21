@@ -2,28 +2,10 @@
 #include "transformer/transformer_state_internal.h"
 #include "transformer/transformer_internal.h"
 
-#include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <unordered_set>
 
 namespace qwen3_tts {
-
-namespace {
-
-int32_t argmax_generate(const float * data, int32_t n) {
-    int32_t max_idx = 0;
-    float max_val = data[0];
-    for (int32_t i = 1; i < n; ++i) {
-        if (data[i] > max_val) {
-            max_val = data[i];
-            max_idx = i;
-        }
-    }
-    return max_idx;
-}
-
-} // namespace
 
 bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                               const float * speaker_embd, int32_t max_len,
@@ -32,6 +14,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                               float repetition_penalty,
                               float temperature,
                               int32_t top_k,
+                              float top_p,
                               const int32_t * instruct_tokens,
                               int32_t n_instruct_tokens) {
 #ifdef QWEN3_TTS_TIMING
@@ -145,6 +128,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     const int32_t suppress_start = std::min(cfg.code_pred_vocab_size, cfg.codec_vocab_size);
 
     std::vector<float> probs(cfg.codec_vocab_size);
+    std::vector<int32_t> sorted_indices(cfg.codec_vocab_size);
     std::vector<float> step_embd(cfg.hidden_size, 0.0f);
     std::vector<float> embd_row(cfg.hidden_size);
 
@@ -184,44 +168,14 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                                                         {(int64_t) cfg.codec_vocab_size});
         }
 
-        int32_t next_token;
-        if (temperature <= 0.0f) {
-            next_token = argmax_generate(logits.data(), cfg.codec_vocab_size);
-        } else {
-            for (int32_t i = 0; i < cfg.codec_vocab_size; ++i) {
-                logits[i] /= temperature;
-            }
-
-            if (top_k > 0 && top_k < cfg.codec_vocab_size) {
-                std::vector<std::pair<float, int32_t>> scored(cfg.codec_vocab_size);
-                for (int32_t i = 0; i < cfg.codec_vocab_size; ++i) {
-                    scored[i] = {logits[i], i};
-                }
-                std::partial_sort(scored.begin(), scored.begin() + top_k, scored.end(),
-                    [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
-                        return a.first > b.first;
-                    });
-                float threshold = scored[top_k - 1].first;
-                for (int32_t i = 0; i < cfg.codec_vocab_size; ++i) {
-                    if (logits[i] < threshold) {
-                        logits[i] = -INFINITY;
-                    }
-                }
-            }
-
-            float max_logit = *std::max_element(logits.data(), logits.data() + cfg.codec_vocab_size);
-            double sum = 0.0;
-            for (int32_t i = 0; i < cfg.codec_vocab_size; ++i) {
-                probs[i] = expf(logits[i] - max_logit);
-                sum += probs[i];
-            }
-            for (int32_t i = 0; i < cfg.codec_vocab_size; ++i) {
-                probs[i] = (float) (probs[i] / sum);
-            }
-
-            std::discrete_distribution<int32_t> dist(probs.begin(), probs.end());
-            next_token = dist(impl_->rng);
-        }
+        const int32_t next_token = transformer_internal::sample_token_inplace(logits.data(),
+                                                                               cfg.codec_vocab_size,
+                                                                               temperature,
+                                                                               top_k,
+                                                                               top_p,
+                                                                               probs,
+                                                                               sorted_indices,
+                                                                               impl_->rng);
 
         if (next_token == cfg.codec_eos_id) {
             if (trace_frame) {
@@ -257,7 +211,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 #endif
         std::vector<int32_t> codes_1_15;
         if (!predict_codes_autoregressive(last_hidden_.data(), frame_codes[0], codes_1_15,
-                                          temperature, top_k, frame)) {
+                                          temperature, top_k, top_p, frame)) {
             return false;
         }
 #ifdef QWEN3_TTS_TIMING

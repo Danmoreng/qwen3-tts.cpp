@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,7 @@ struct ops {
                                                     std::vector<int32_t> & output,
                                                     float temperature,
                                                     int32_t top_k,
+                                                    float top_p,
                                                     int32_t trace_frame);
 
     static bool build_prefill_graph(TTSTransformer & self,
@@ -85,6 +87,14 @@ void debug_trace_write_bin(const debug_trace_config & cfg,
                            const char * dtype,
                            const std::vector<int64_t> & shape);
 void debug_trace_write_text_line(const debug_trace_config & cfg, const std::string & line);
+int32_t sample_token_inplace(float * logits,
+                             int32_t vocab_size,
+                             float temperature,
+                             int32_t top_k,
+                             float top_p,
+                             std::vector<float> & probs,
+                             std::vector<int32_t> & sorted_indices,
+                             std::mt19937 & rng);
 
 } // namespace transformer_internal
 } // namespace qwen3_tts

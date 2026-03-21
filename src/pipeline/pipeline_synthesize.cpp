@@ -296,7 +296,7 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
     if (!self.transformer_.generate(text_tokens.data(), (int32_t) text_tokens.size(),
                                     speaker_embedding, params.max_audio_tokens, speech_codes,
                                     params.language_id, params.repetition_penalty,
-                                    params.temperature, params.top_k,
+                                    params.temperature, params.top_k, params.top_p,
                                     instruct_tokens.empty() ? nullptr : instruct_tokens.data(),
                                     (int32_t) instruct_tokens.size())) {
         result.error_msg = "Failed to generate speech codes: " + self.transformer_.get_error();
