@@ -15,6 +15,30 @@ namespace pipeline_internal {
 struct ops;
 }
 
+enum class voice_clone_prompt_mode {
+    audio_only = 0,
+    reference_aware = 1,
+};
+
+struct voice_clone_prompt_asset {
+    int32_t format_version = 1;
+    voice_clone_prompt_mode prompt_mode = voice_clone_prompt_mode::audio_only;
+    std::string model_kind;
+    std::string model_name;
+    int32_t speaker_embedding_dim = 0;
+    std::vector<float> speaker_embedding;
+    std::string reference_text;
+    int32_t reference_codebooks = 0;
+    int32_t reference_frames = 0;
+    std::vector<int32_t> reference_codes;
+};
+
+struct voice_clone_prompt_validation {
+    bool valid = false;
+    bool model_compatible = false;
+    std::string error_msg;
+};
+
 // TTS generation parameters
 struct tts_params {
     // Maximum number of audio tokens to generate
@@ -135,10 +159,24 @@ public:
                                                  const std::vector<float> & speaker_embedding,
                                                  const tts_params & params = tts_params());
 
+    // Generate speech from a reusable voice clone prompt asset.
+    tts_result synthesize_with_voice_clone_prompt(const std::string & text,
+                                                  const voice_clone_prompt_asset & asset,
+                                                  const tts_params & params = tts_params());
+
+    // Create a reusable voice clone prompt asset. Audio-only mode stays native.
+    // Reference-aware mode requires the helper script and upstream Python stack.
+    bool create_voice_clone_prompt(const std::string & reference_audio,
+                                   const std::string & reference_text,
+                                   voice_clone_prompt_asset & asset);
+
     // Extract speaker embedding from reference audio file (WAV)
     bool extract_speaker_embedding(const std::string & reference_audio,
                                    std::vector<float> & speaker_embedding,
                                    int64_t * encode_time_ms = nullptr);
+
+    bool validate_voice_clone_prompt(const voice_clone_prompt_asset & asset,
+                                     voice_clone_prompt_validation * out = nullptr) const;
     
     // Set progress callback
     void set_progress_callback(tts_progress_callback_t callback);
@@ -190,5 +228,13 @@ bool load_speaker_embedding_file(const std::string & path,
 // Utility: Save speaker embedding as JSON (.json) or float32 binary
 bool save_speaker_embedding_file(const std::string & path,
                                  const std::vector<float> & embedding);
+
+bool load_voice_clone_prompt_file(const std::string & path,
+                                  voice_clone_prompt_asset & asset,
+                                  std::string * error_msg = nullptr);
+
+bool save_voice_clone_prompt_file(const std::string & path,
+                                  const voice_clone_prompt_asset & asset,
+                                  std::string * error_msg = nullptr);
 
 } // namespace qwen3_tts

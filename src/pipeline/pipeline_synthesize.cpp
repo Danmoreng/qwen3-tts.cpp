@@ -32,7 +32,7 @@ tts_result Qwen3TTS::synthesize(const std::string & text,
             fprintf(stderr, "Using named speaker: %s (%zu floats)\n",
                     params.speaker.c_str(), speaker_embedding.size());
         }
-        return ops::synthesize_internal(*this, text, speaker_embedding.data(), params, result);
+        return ops::synthesize_internal(*this, text, speaker_embedding.data(), nullptr, params, result);
     }
 
     if (transformer_.get_config().tts_model_type == "custom_voice") {
@@ -40,7 +40,7 @@ tts_result Qwen3TTS::synthesize(const std::string & text,
         return result;
     }
 
-    return ops::synthesize_internal(*this, text, nullptr, params, result);
+    return ops::synthesize_internal(*this, text, nullptr, nullptr, params, result);
 }
 
 tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
@@ -117,7 +117,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         fprintf(stderr, "Speaker embedding extracted: %zu floats\n", speaker_embedding.size());
     }
 
-    return ops::synthesize_internal(*this, text, speaker_embedding.data(), params, result);
+    return ops::synthesize_internal(*this, text, speaker_embedding.data(), nullptr, params, result);
 }
 
 tts_result Qwen3TTS::synthesize_with_speaker_embedding(const std::string & text,
@@ -145,7 +145,34 @@ tts_result Qwen3TTS::synthesize_with_speaker_embedding(const std::string & text,
     }
 
     result.t_encode_ms = 0;
-    return ops::synthesize_internal(*this, text, speaker_embedding.data(), params, result);
+    return ops::synthesize_internal(*this, text, speaker_embedding.data(), nullptr, params, result);
+}
+
+tts_result Qwen3TTS::synthesize_with_voice_clone_prompt(const std::string & text,
+                                                        const voice_clone_prompt_asset & asset,
+                                                        const tts_params & params) {
+    tts_result result;
+
+    if (!models_loaded_) {
+        result.error_msg = "Models not loaded";
+        return result;
+    }
+
+    voice_clone_prompt_validation validation;
+    if (!validate_voice_clone_prompt(asset, &validation)) {
+        result.error_msg = validation.error_msg;
+        return result;
+    }
+
+    if (params.print_progress) {
+        fprintf(stderr, "Using voice clone prompt: mode=%s, speaker_embedding=%zu floats, ref_frames=%d\n",
+                asset.prompt_mode == voice_clone_prompt_mode::reference_aware ? "reference_aware" : "audio_only",
+                asset.speaker_embedding.size(),
+                asset.reference_frames);
+    }
+
+    result.t_encode_ms = 0;
+    return ops::synthesize_internal(*this, text, asset.speaker_embedding.data(), &asset, params, result);
 }
 
 bool Qwen3TTS::extract_speaker_embedding(const std::string & reference_audio,
@@ -212,6 +239,7 @@ bool Qwen3TTS::extract_speaker_embedding(const std::string & reference_audio,
 tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
                                                        const std::string & text,
                                                        const float * speaker_embedding,
+                                                       const voice_clone_prompt_asset * prompt_asset,
                                                        const tts_params & params,
                                                        tts_result & result) {
     int64_t t_total_start = get_time_ms();
@@ -338,12 +366,36 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
         }
     }
 
-    if (!self.audio_decoder_.decode(speech_codes.data(), n_frames, result.audio)) {
+    std::vector<int32_t> decode_codes = speech_codes;
+    int32_t decode_frames = n_frames;
+    int32_t trim_ref_frames = 0;
+    if (prompt_asset &&
+        prompt_asset->prompt_mode == voice_clone_prompt_mode::reference_aware &&
+        !prompt_asset->reference_codes.empty()) {
+        trim_ref_frames = prompt_asset->reference_frames;
+        decode_codes.reserve(prompt_asset->reference_codes.size() + speech_codes.size());
+        decode_codes.insert(decode_codes.begin(),
+                            prompt_asset->reference_codes.begin(),
+                            prompt_asset->reference_codes.end());
+        decode_frames += trim_ref_frames;
+        if (params.print_progress) {
+            fprintf(stderr, "Prepending %d reference frames to vocoder decode\n", trim_ref_frames);
+        }
+    }
+
+    if (!self.audio_decoder_.decode(decode_codes.data(), decode_frames, result.audio)) {
         result.error_msg = "Failed to decode speech codes: " + self.audio_decoder_.get_error();
         return result;
     }
     result.t_decode_ms = get_time_ms() - t_decode_start;
     sample_memory("synth/after-decode");
+
+    if (trim_ref_frames > 0 && !result.audio.empty()) {
+        const size_t trim_samples = std::min(
+            result.audio.size(),
+            (size_t) ((double) trim_ref_frames * result.audio.size() / std::max(decode_frames, 1)));
+        result.audio.erase(result.audio.begin(), result.audio.begin() + (std::ptrdiff_t) trim_samples);
+    }
 
     if (self.low_mem_mode_) {
         self.audio_decoder_.unload_model();

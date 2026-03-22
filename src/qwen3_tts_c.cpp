@@ -62,6 +62,16 @@ static qwen3_tts_result_t convert_result(const qwen3_tts::tts_result& res) {
     return r;
 }
 
+static qwen3_tts_voice_clone_prompt_validation_t convert_validation(
+    const qwen3_tts::voice_clone_prompt_validation & validation
+) {
+    qwen3_tts_voice_clone_prompt_validation_t out = {0};
+    out.valid = validation.valid ? 1 : 0;
+    out.model_compatible = validation.model_compatible ? 1 : 0;
+    out.error_msg = validation.error_msg.empty() ? nullptr : strdup(validation.error_msg.c_str());
+    return out;
+}
+
 qwen3_tts_context_t* qwen3_tts_init() {
     return new qwen3_tts_context();
 }
@@ -139,6 +149,76 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     return convert_result(result);
 }
 
+qwen3_tts_result_t qwen3_tts_synthesize_with_voice_clone_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* voice_clone_prompt_file,
+    qwen3_tts_params_t params
+) {
+    if (!ctx || !text || !voice_clone_prompt_file) {
+        qwen3_tts_result_t res = {0};
+        res.success = 0;
+        res.error_msg = strdup("Invalid context, text, or voice clone prompt file");
+        return res;
+    }
+
+    qwen3_tts::voice_clone_prompt_asset asset;
+    std::string load_error;
+    if (!qwen3_tts::load_voice_clone_prompt_file(voice_clone_prompt_file, asset, &load_error)) {
+        qwen3_tts_result_t res = {0};
+        res.success = 0;
+        res.error_msg = strdup(load_error.c_str());
+        return res;
+    }
+
+    auto result = ctx->tts.synthesize_with_voice_clone_prompt(text, asset, convert_params(params));
+    return convert_result(result);
+}
+
+int32_t qwen3_tts_create_voice_clone_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* reference_audio,
+    const char* reference_text,
+    const char* output_path
+) {
+    if (!ctx || !reference_audio || !output_path) return 0;
+
+    qwen3_tts::voice_clone_prompt_asset asset;
+    if (!ctx->tts.create_voice_clone_prompt(reference_audio, reference_text ? reference_text : "", asset)) {
+        return 0;
+    }
+
+    std::string save_error;
+    return qwen3_tts::save_voice_clone_prompt_file(output_path, asset, &save_error) ? 1 : 0;
+}
+
+qwen3_tts_voice_clone_prompt_validation_t qwen3_tts_validate_voice_clone_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* voice_clone_prompt_file
+) {
+    qwen3_tts_voice_clone_prompt_validation_t out = {0};
+    if (!voice_clone_prompt_file) {
+        out.error_msg = strdup("Missing voice clone prompt file");
+        return out;
+    }
+
+    qwen3_tts::voice_clone_prompt_asset asset;
+    std::string load_error;
+    if (!qwen3_tts::load_voice_clone_prompt_file(voice_clone_prompt_file, asset, &load_error)) {
+        out.error_msg = strdup(load_error.c_str());
+        return out;
+    }
+
+    qwen3_tts::voice_clone_prompt_validation validation;
+    if (ctx) {
+        ctx->tts.validate_voice_clone_prompt(asset, &validation);
+    } else {
+        qwen3_tts::Qwen3TTS dummy;
+        dummy.validate_voice_clone_prompt(asset, &validation);
+    }
+    return convert_validation(validation);
+}
+
 int32_t qwen3_tts_extract_speaker_embedding(
     qwen3_tts_context_t* ctx,
     const char* reference_audio,
@@ -198,6 +278,12 @@ void qwen3_tts_free_string(char* value) {
 void qwen3_tts_free_result(qwen3_tts_result_t result) {
     if (result.audio) free(result.audio);
     if (result.error_msg) free(result.error_msg);
+}
+
+void qwen3_tts_free_voice_clone_prompt_validation(
+    qwen3_tts_voice_clone_prompt_validation_t validation
+) {
+    if (validation.error_msg) free(validation.error_msg);
 }
 
 void qwen3_tts_set_progress_callback(

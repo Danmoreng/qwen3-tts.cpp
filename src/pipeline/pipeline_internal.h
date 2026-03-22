@@ -8,12 +8,14 @@ namespace qwen3_tts {
 class Qwen3TTS;
 struct tts_params;
 struct tts_result;
+struct voice_clone_prompt_asset;
 namespace pipeline_internal {
 
 struct ops {
     static tts_result synthesize_internal(Qwen3TTS & self,
                                           const std::string & text,
                                           const float * speaker_embedding,
+                                          const voice_clone_prompt_asset * prompt_asset,
                                           const tts_params & params,
                                           tts_result & result);
 };

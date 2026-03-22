@@ -11,7 +11,7 @@ Runs the full TTS pipeline in pure C++17, including text tokenization, speaker e
 ## Features
 
 - Full text-to-speech pipeline in C++17 with GGML backend
-- Voice cloning from reference audio or reusable speaker embeddings
+- Voice cloning from reference audio, reusable speaker embeddings, or reusable voice-clone prompt assets
 - Named speakers and natural-language voice/style instructions for CustomVoice models
 - Greedy and sampled decoding (temperature, top-k, repetition penalty)
 - Multilingual language selection from the CLI and native APIs
@@ -216,6 +216,18 @@ For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_ggu
 ./build/qwen3-tts-cli -m models --speaker-embedding speaker.json \
     -t "Second pass without re-encoding" -o cloned_reuse.wav
 
+# Create a reusable reference-aware voice clone prompt asset.
+# This path currently uses scripts/create_voice_clone_prompt.py and requires the
+# upstream qwen-tts Python package plus local HF model assets under models/.
+./build/qwen3-tts-cli -m models -r reference.wav \
+    --reference-text "Matching transcript for the reference audio." \
+    --dump-voice-clone-prompt clone_prompt.json \
+    -t "First prompt-backed generation" -o cloned_prompt.wav
+
+# Reuse the saved prompt asset without re-supplying the original reference inputs.
+./build/qwen3-tts-cli -m models --voice-clone-prompt clone_prompt.json \
+    -t "Second pass from the saved prompt asset" -o cloned_prompt_reuse.wav
+
 # 1.7B Base model (standard generation)
 ./build/qwen3-tts-cli -m models --model-name qwen3-tts-1.7b-base-f16.gguf \
     -t "The 1.7B base model is now running successfully." -o base_1.7b.wav
@@ -239,9 +251,13 @@ For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_ggu
 | `-t, --text <text>` | Text to synthesize | (required) |
 | `-o, --output <file>` | Output WAV file path | `output.wav` |
 | `-r, --reference <file>` | Reference audio for voice cloning | (none) |
+| `--reference-text <text>` | Matching transcript for `--reference` | (none) |
+| `--reference-text-file <file>` | Load matching transcript from a file | (none) |
 | `--speaker <name>` | Named speaker from loaded CustomVoice metadata | (none) |
 | `--speaker-embedding <file>` | Reuse a saved speaker embedding (`.json` or `.bin`) | (none) |
 | `--dump-speaker-embedding <file>` | Save the embedding extracted from `--reference` | (none) |
+| `--voice-clone-prompt <file>` | Reuse a saved voice clone prompt asset (`.json`) | (none) |
+| `--dump-voice-clone-prompt <file>` | Save a voice clone prompt asset created from `--reference` | (none) |
 | `--temperature <val>` | Sampling temperature (0 = greedy) | 0.9 |
 | `--top-k <n>` | Top-k sampling (0 = disabled) | 50 |
 | `--top-p <val>` | Top-p sampling | 1.0 |
@@ -253,7 +269,16 @@ For `Qwen3-TTS-12Hz-1.7B-CustomVoice`, always re-run `scripts/convert_tts_to_ggu
 
 `--top-p` is currently parsed by the CLI but not yet wired into transformer sampling.
 `--instruct` now follows Python reference behavior (`instruct_ids` path): the instruction is injected as a separate user prompt, not mixed into assistant text.
-`--reference`, `--speaker`, and `--speaker-embedding` are mutually exclusive input modes.
+`--reference`, `--speaker`, `--speaker-embedding`, and `--voice-clone-prompt` are mutually exclusive input modes.
+
+Reference-aware prompt creation is additive, not a hidden replacement for the current audio-only flow:
+
+- `--reference` without reference text keeps the current native audio-only speaker-embedding path.
+- `--reference` plus `--reference-text` or `--reference-text-file` requests a richer prompt asset.
+- Reference-aware prompt creation currently shells out to `scripts/create_voice_clone_prompt.py`, which requires:
+  - the upstream `qwen-tts` Python package and its Torch dependencies
+  - local Hugging Face model assets under the selected `models/` directory
+- Reusing an already saved `--voice-clone-prompt` asset stays in the native C++ inference path.
 
 On macOS, CoreML code predictor is enabled by default when `models/coreml/code_predictor.mlpackage` exists.
 Set `QWEN3_TTS_USE_COREML=0` to disable it. Low-memory mode is opt-in via `QWEN3_TTS_LOW_MEM=1`.

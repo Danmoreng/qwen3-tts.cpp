@@ -13,9 +13,13 @@ void print_usage(const char * program) {
     fprintf(stderr, "  -t, --text <text>      Text to synthesize (required)\n");
     fprintf(stderr, "  -o, --output <file>    Output WAV file (default: output.wav)\n");
     fprintf(stderr, "  -r, --reference <file> Reference audio for voice cloning\n");
+    fprintf(stderr, "  --reference-text <text> Matching transcript for --reference\n");
+    fprintf(stderr, "  --reference-text-file <file> Load matching transcript from a file\n");
     fprintf(stderr, "  --speaker <name>       Named speaker (CustomVoice models)\n");
     fprintf(stderr, "  --speaker-embedding <file> Use precomputed speaker embedding (.json/.bin)\n");
     fprintf(stderr, "  --dump-speaker-embedding <file> Save extracted embedding from --reference\n");
+    fprintf(stderr, "  --voice-clone-prompt <file> Reuse a saved voice clone prompt asset\n");
+    fprintf(stderr, "  --dump-voice-clone-prompt <file> Save a prompt asset created from --reference\n");
     fprintf(stderr, "  --temperature <val>    Sampling temperature (default: 0.9, 0=greedy)\n");
     fprintf(stderr, "  --top-k <n>            Top-k sampling (default: 50, 0=disabled)\n");
     fprintf(stderr, "  --top-p <val>          Top-p sampling (default: 1.0)\n");
@@ -39,8 +43,12 @@ int main(int argc, char ** argv) {
     std::string text;
     std::string output_file = "output.wav";
     std::string reference_audio;
+    std::string reference_text;
+    std::string reference_text_file;
     std::string speaker_embedding_file;
     std::string dump_speaker_embedding_file;
+    std::string voice_clone_prompt_file;
+    std::string dump_voice_clone_prompt_file;
     
     qwen3_tts::tts_params params;
     params.print_progress = true;
@@ -82,6 +90,18 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             reference_audio = argv[i];
+        } else if (arg == "--reference-text") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing reference text\n");
+                return 1;
+            }
+            reference_text = argv[i];
+        } else if (arg == "--reference-text-file") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing reference text file\n");
+                return 1;
+            }
+            reference_text_file = argv[i];
         } else if (arg == "--speaker") {
             if (++i >= argc) {
                 fprintf(stderr, "Error: missing speaker name\n");
@@ -100,6 +120,18 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             dump_speaker_embedding_file = argv[i];
+        } else if (arg == "--voice-clone-prompt") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing voice clone prompt file\n");
+                return 1;
+            }
+            voice_clone_prompt_file = argv[i];
+        } else if (arg == "--dump-voice-clone-prompt") {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: missing output voice clone prompt file\n");
+                return 1;
+            }
+            dump_voice_clone_prompt_file = argv[i];
         } else if (arg == "--temperature") {
             if (++i >= argc) {
                 fprintf(stderr, "Error: missing temperature value\n");
@@ -186,6 +218,11 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: --reference and --speaker-embedding are mutually exclusive\n");
         return 1;
     }
+    if (!voice_clone_prompt_file.empty() &&
+        (!reference_audio.empty() || !speaker_embedding_file.empty() || !params.speaker.empty())) {
+        fprintf(stderr, "Error: --voice-clone-prompt is mutually exclusive with --reference, --speaker-embedding, and --speaker\n");
+        return 1;
+    }
     if (!speaker_embedding_file.empty() && !params.speaker.empty()) {
         fprintf(stderr, "Error: --speaker and --speaker-embedding are mutually exclusive\n");
         return 1;
@@ -197,6 +234,34 @@ int main(int argc, char ** argv) {
     if (!dump_speaker_embedding_file.empty() && reference_audio.empty()) {
         fprintf(stderr, "Error: --dump-speaker-embedding requires --reference\n");
         return 1;
+    }
+    if (!reference_text.empty() && !reference_text_file.empty()) {
+        fprintf(stderr, "Error: --reference-text and --reference-text-file are mutually exclusive\n");
+        return 1;
+    }
+    if (!dump_voice_clone_prompt_file.empty() && reference_audio.empty()) {
+        fprintf(stderr, "Error: --dump-voice-clone-prompt requires --reference\n");
+        return 1;
+    }
+    if ((!reference_text.empty() || !reference_text_file.empty()) && reference_audio.empty()) {
+        fprintf(stderr, "Error: reference text requires --reference\n");
+        return 1;
+    }
+
+    if (!reference_text_file.empty()) {
+        FILE * f = fopen(reference_text_file.c_str(), "rb");
+        if (!f) {
+            fprintf(stderr, "Error: failed to open reference text file: %s\n", reference_text_file.c_str());
+            return 1;
+        }
+        std::string file_text;
+        char buf[4096];
+        size_t nread = 0;
+        while ((nread = fread(buf, 1, sizeof(buf), f)) > 0) {
+            file_text.append(buf, buf + nread);
+        }
+        fclose(f);
+        reference_text = file_text;
     }
     
     // Initialize TTS
@@ -216,7 +281,17 @@ int main(int argc, char ** argv) {
     // Generate speech
     qwen3_tts::tts_result result;
     
-    if (!speaker_embedding_file.empty()) {
+    if (!voice_clone_prompt_file.empty()) {
+        qwen3_tts::voice_clone_prompt_asset asset;
+        std::string load_error;
+        if (!qwen3_tts::load_voice_clone_prompt_file(voice_clone_prompt_file, asset, &load_error)) {
+            fprintf(stderr, "Error: failed to load voice clone prompt: %s\n", load_error.c_str());
+            return 1;
+        }
+        fprintf(stderr, "Synthesizing with voice clone prompt: \"%s\"\n", text.c_str());
+        fprintf(stderr, "Voice clone prompt: %s\n", voice_clone_prompt_file.c_str());
+        result = tts.synthesize_with_voice_clone_prompt(text, asset, params);
+    } else if (!speaker_embedding_file.empty()) {
         std::vector<float> speaker_embedding;
         if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
             fprintf(stderr, "Error: failed to load speaker embedding: %s\n", speaker_embedding_file.c_str());
@@ -235,29 +310,62 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
         result = tts.synthesize(text, params);
     } else {
-        std::vector<float> speaker_embedding;
-        int64_t encode_ms = 0;
         fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
         fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
-        if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
-            fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
-            return 1;
-        }
-        if (params.print_timing) {
-            fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
-                    (long long) encode_ms, speaker_embedding.size());
-        }
-        if (!dump_speaker_embedding_file.empty()) {
-            if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                        dump_speaker_embedding_file.c_str());
+        if (!reference_text.empty()) {
+            fprintf(stderr, "Reference text: %zu characters\n", reference_text.size());
+            qwen3_tts::voice_clone_prompt_asset asset;
+            if (!tts.create_voice_clone_prompt(reference_audio, reference_text, asset)) {
+                fprintf(stderr, "\nError: failed to create voice clone prompt: %s\n", tts.get_error().c_str());
                 return 1;
             }
-            fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
-        }
-        result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
-        if (result.success) {
-            result.t_encode_ms = encode_ms;
+            if (!dump_voice_clone_prompt_file.empty()) {
+                std::string save_error;
+                if (!qwen3_tts::save_voice_clone_prompt_file(dump_voice_clone_prompt_file, asset, &save_error)) {
+                    fprintf(stderr, "\nError: failed to save voice clone prompt: %s\n", save_error.c_str());
+                    return 1;
+                }
+                fprintf(stderr, "Voice clone prompt saved to: %s\n", dump_voice_clone_prompt_file.c_str());
+            }
+            result = tts.synthesize_with_voice_clone_prompt(text, asset, params);
+        } else {
+            std::vector<float> speaker_embedding;
+            int64_t encode_ms = 0;
+            if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
+                fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
+                return 1;
+            }
+            if (params.print_timing) {
+                fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
+                        (long long) encode_ms, speaker_embedding.size());
+            }
+            if (!dump_speaker_embedding_file.empty()) {
+                if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
+                    fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
+                            dump_speaker_embedding_file.c_str());
+                    return 1;
+                }
+                fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+            }
+            if (!dump_voice_clone_prompt_file.empty()) {
+                qwen3_tts::voice_clone_prompt_asset asset;
+                asset.format_version = 1;
+                asset.prompt_mode = qwen3_tts::voice_clone_prompt_mode::audio_only;
+                asset.model_kind = tts.get_model_capabilities().model_type;
+                asset.model_name = model_name.empty() ? "active-model" : model_name;
+                asset.speaker_embedding_dim = (int32_t) speaker_embedding.size();
+                asset.speaker_embedding = speaker_embedding;
+                std::string save_error;
+                if (!qwen3_tts::save_voice_clone_prompt_file(dump_voice_clone_prompt_file, asset, &save_error)) {
+                    fprintf(stderr, "\nError: failed to save audio-only voice clone prompt: %s\n", save_error.c_str());
+                    return 1;
+                }
+                fprintf(stderr, "Audio-only voice clone prompt saved to: %s\n", dump_voice_clone_prompt_file.c_str());
+            }
+            result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
+            if (result.success) {
+                result.t_encode_ms = encode_ms;
+            }
         }
     }
     

@@ -59,6 +59,12 @@ typedef struct {
     int32_t model_kind; // qwen3_tts_model_kind_t
 } qwen3_tts_model_capabilities_t;
 
+typedef struct {
+    int32_t valid;
+    int32_t model_compatible;
+    char* error_msg;
+} qwen3_tts_voice_clone_prompt_validation_t;
+
 typedef void (*qwen3_tts_progress_callback)(int tokens_generated, int max_tokens, void* user_data);
 
 QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
@@ -89,6 +95,29 @@ QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     const char* text,
     const char* speaker_embedding_file,
     qwen3_tts_params_t params
+);
+
+QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_voice_clone_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* voice_clone_prompt_file,
+    qwen3_tts_params_t params
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_create_voice_clone_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* reference_audio,
+    const char* reference_text,
+    const char* output_path
+);
+
+QWEN3_TTS_API qwen3_tts_voice_clone_prompt_validation_t qwen3_tts_validate_voice_clone_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* voice_clone_prompt_file
+);
+
+QWEN3_TTS_API void qwen3_tts_free_voice_clone_prompt_validation(
+    qwen3_tts_voice_clone_prompt_validation_t validation
 );
 
 QWEN3_TTS_API int32_t qwen3_tts_extract_speaker_embedding(
