@@ -5,6 +5,46 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
+#ifdef _WIN32
+static std::string wide_to_utf8(const std::wstring & wide) {
+    if (wide.empty()) {
+        return {};
+    }
+
+    int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int) wide.size(), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+
+    std::string utf8(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int) wide.size(), utf8.data(), size, nullptr, nullptr);
+    return utf8;
+}
+
+static std::vector<std::string> get_utf8_argv() {
+    int argc_w = 0;
+    LPWSTR * argv_w = CommandLineToArgvW(GetCommandLineW(), &argc_w);
+    std::vector<std::string> args;
+    if (!argv_w) {
+        return args;
+    }
+
+    args.reserve((size_t) argc_w);
+    for (int i = 0; i < argc_w; ++i) {
+        args.push_back(wide_to_utf8(argv_w[i]));
+    }
+
+    LocalFree(argv_w);
+    return args;
+}
+#endif
+
 void print_usage(const char * program) {
     fprintf(stderr, "Usage: %s [options] -m <model_dir> -t <text>\n", program);
     fprintf(stderr, "\n");
@@ -34,6 +74,22 @@ void print_usage(const char * program) {
 }
 
 int main(int argc, char ** argv) {
+    std::vector<std::string> args;
+#ifdef _WIN32
+    args = get_utf8_argv();
+    if (args.empty()) {
+        args.reserve((size_t) argc);
+        for (int i = 0; i < argc; ++i) {
+            args.emplace_back(argv[i]);
+        }
+    }
+#else
+    args.reserve((size_t) argc);
+    for (int i = 0; i < argc; ++i) {
+        args.emplace_back(argv[i]);
+    }
+#endif
+
     std::string model_dir;
     std::string model_name;
     std::string text;
@@ -46,96 +102,96 @@ int main(int argc, char ** argv) {
     params.print_progress = true;
     
     // Parse arguments
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+    for (int i = 1; i < (int) args.size(); i++) {
+        std::string arg = args[i];
         
         if (arg == "-h" || arg == "--help") {
-            print_usage(argv[0]);
+            print_usage(args[0].c_str());
             return 0;
         } else if (arg == "-m" || arg == "--model") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing model directory\n");
                 return 1;
             }
-            model_dir = argv[i];
+            model_dir = args[i];
         } else if (arg == "--model-name") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing model name\n");
                 return 1;
             }
-            model_name = argv[i];
+            model_name = args[i];
         } else if (arg == "-t" || arg == "--text") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing text\n");
                 return 1;
             }
-            text = argv[i];
+            text = args[i];
         } else if (arg == "-o" || arg == "--output") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing output file\n");
                 return 1;
             }
-            output_file = argv[i];
+            output_file = args[i];
         } else if (arg == "-r" || arg == "--reference") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing reference audio\n");
                 return 1;
             }
-            reference_audio = argv[i];
+            reference_audio = args[i];
         } else if (arg == "--speaker") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing speaker name\n");
                 return 1;
             }
-            params.speaker = argv[i];
+            params.speaker = args[i];
         } else if (arg == "--speaker-embedding") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing speaker embedding file\n");
                 return 1;
             }
-            speaker_embedding_file = argv[i];
+            speaker_embedding_file = args[i];
         } else if (arg == "--dump-speaker-embedding") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing dump speaker embedding file\n");
                 return 1;
             }
-            dump_speaker_embedding_file = argv[i];
+            dump_speaker_embedding_file = args[i];
         } else if (arg == "--temperature") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing temperature value\n");
                 return 1;
             }
-            params.temperature = std::stof(argv[i]);
+            params.temperature = std::stof(args[i]);
         } else if (arg == "--top-k") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing top-k value\n");
                 return 1;
             }
-            params.top_k = std::stoi(argv[i]);
+            params.top_k = std::stoi(args[i]);
         } else if (arg == "--top-p") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing top-p value\n");
                 return 1;
             }
-            params.top_p = std::stof(argv[i]);
+            params.top_p = std::stof(args[i]);
         } else if (arg == "--max-tokens") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing max-tokens value\n");
                 return 1;
             }
-            params.max_audio_tokens = std::stoi(argv[i]);
+            params.max_audio_tokens = std::stoi(args[i]);
         } else if (arg == "--repetition-penalty") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing repetition-penalty value\n");
                 return 1;
             }
-            params.repetition_penalty = std::stof(argv[i]);
+            params.repetition_penalty = std::stof(args[i]);
         } else if (arg == "-l" || arg == "--language") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing language value\n");
                 return 1;
             }
-            std::string lang = argv[i];
+            std::string lang = args[i];
             if (lang == "en" || lang == "english")       params.language_id = 2050;
             else if (lang == "ru" || lang == "russian")  params.language_id = 2069;
             else if (lang == "zh" || lang == "chinese")  params.language_id = 2055;
@@ -151,20 +207,20 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         } else if (arg == "--instruction" || arg == "--instruct") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing instruction value\n");
                 return 1;
             }
-            params.instruction = argv[i];
+            params.instruction = args[i];
         } else if (arg == "-j" || arg == "--threads") {
-            if (++i >= argc) {
+            if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing threads value\n");
                 return 1;
             }
-            params.n_threads = std::stoi(argv[i]);
+            params.n_threads = std::stoi(args[i]);
         } else {
             fprintf(stderr, "Error: unknown argument: %s\n", arg.c_str());
-            print_usage(argv[0]);
+            print_usage(args[0].c_str());
             return 1;
         }
     }
@@ -172,13 +228,13 @@ int main(int argc, char ** argv) {
     // Validate required arguments
     if (model_dir.empty()) {
         fprintf(stderr, "Error: model directory is required\n");
-        print_usage(argv[0]);
+        print_usage(args[0].c_str());
         return 1;
     }
     
     if (text.empty()) {
         fprintf(stderr, "Error: text is required\n");
-        print_usage(argv[0]);
+        print_usage(args[0].c_str());
         return 1;
     }
 

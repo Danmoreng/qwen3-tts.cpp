@@ -13,6 +13,14 @@
 // Expected: [151644, 77091, 198, 9707, 13, 151645, 198, 151644, 77091, 198]
 static const int32_t EXPECTED_TOKENS[] = {151644, 77091, 198, 9707, 13, 151645, 198, 151644, 77091, 198};
 static const size_t EXPECTED_TOKEN_COUNT = 10;
+static const int32_t EXPECTED_SPANISH_TOKENS[] = {39832, 68012, 0, 28286, 95897, 1788, 7061, 30};
+static const size_t EXPECTED_SPANISH_TOKEN_COUNT = 8;
+static const int32_t EXPECTED_SPANISH_TTS_TOKENS[] = {
+    151644, 77091, 198,
+    39832, 68012, 0, 28286, 95897, 1788, 7061, 30,
+    151645, 198, 151644, 77091, 198
+};
+static const size_t EXPECTED_SPANISH_TTS_TOKEN_COUNT = 16;
 
 void print_usage(const char * prog) {
     printf("Usage: %s --model <path_to_gguf>\n", prog);
@@ -129,6 +137,65 @@ int main(int argc, char ** argv) {
         printf("  PASS: Decoded text matches original\n\n");
     } else {
         printf("  INFO: Decoded text differs from original\n\n");
+    }
+
+    // Test 5b: Encode Spanish UTF-8 text with punctuation and accents
+    printf("Test 5b: Encode Spanish UTF-8 text\n");
+    const std::string spanish =
+        "\xC2\xA1"
+        "Hola! "
+        "\xC2\xBF"
+        "C"
+        "\xC3\xB3"
+        "mo est"
+        "\xC3\xA1"
+        "s?";
+    auto spanish_tokens = tokenizer.encode(spanish);
+    printf("  Tokens: [");
+    for (size_t i = 0; i < spanish_tokens.size(); i++) {
+        printf("%d", spanish_tokens[i]);
+        if (i + 1 < spanish_tokens.size()) printf(", ");
+    }
+    printf("]\n");
+
+    bool spanish_match = (spanish_tokens.size() == EXPECTED_SPANISH_TOKEN_COUNT);
+    if (spanish_match) {
+        for (size_t i = 0; i < EXPECTED_SPANISH_TOKEN_COUNT; i++) {
+            if (spanish_tokens[i] != EXPECTED_SPANISH_TOKENS[i]) {
+                spanish_match = false;
+                break;
+            }
+        }
+    }
+
+    if (!spanish_match) {
+        printf("  FAIL: Spanish UTF-8 tokens do not match expected reference\n\n");
+        return 1;
+    }
+
+    auto spanish_tts_tokens = tokenizer.encode_for_tts(spanish);
+    bool spanish_tts_match = (spanish_tts_tokens.size() == EXPECTED_SPANISH_TTS_TOKEN_COUNT);
+    if (spanish_tts_match) {
+        for (size_t i = 0; i < EXPECTED_SPANISH_TTS_TOKEN_COUNT; i++) {
+            if (spanish_tts_tokens[i] != EXPECTED_SPANISH_TTS_TOKENS[i]) {
+                spanish_tts_match = false;
+                break;
+            }
+        }
+    }
+
+    if (!spanish_tts_match) {
+        printf("  FAIL: Spanish TTS tokens do not match expected reference\n\n");
+        return 1;
+    }
+
+    std::string decoded_spanish = tokenizer.decode(spanish_tokens);
+    printf("  Decoded: '%s'\n", decoded_spanish.c_str());
+    if (decoded_spanish == spanish) {
+        printf("  PASS: Spanish UTF-8 round-trip matches original\n\n");
+    } else {
+        printf("  FAIL: Spanish UTF-8 round-trip differs from original\n\n");
+        return 1;
     }
     
     // Test 6: Decode single tokens

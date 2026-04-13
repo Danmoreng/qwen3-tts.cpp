@@ -76,10 +76,13 @@ endfunction()
 add_library(text_tokenizer STATIC
     src/text_tokenizer.cpp
     src/gguf_loader.cpp
+    third_party/llama.cpp/src/unicode.cpp
+    third_party/llama.cpp/src/unicode-data.cpp
 )
 target_include_directories(text_tokenizer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GGML_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/src
 )
 qwen3_link_ggml(text_tokenizer)
 target_link_libraries(text_tokenizer PUBLIC Threads::Threads)

@@ -1,4 +1,5 @@
 #include "text_tokenizer.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <cstring>
@@ -6,6 +7,10 @@
 #include <sstream>
 
 namespace qwen3_tts {
+
+static const std::vector<std::string> GPT2_REGEX_EXPRS = {
+    "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",
+};
 
 // GPT-2 byte-to-unicode mapping
 // Maps bytes 0-255 to unicode characters to avoid control characters
@@ -248,33 +253,10 @@ std::vector<int32_t> TextTokenizer::encode(const std::string & text) const {
     
     std::vector<int32_t> tokens;
     
-    // Convert text to GPT-2 unicode representation
-    std::string unicode_text = bytes_to_unicode(text);
-    
-    // Simple word splitting (no regex pre-tokenization for now)
-    // Split on spaces but keep the space with the following word (GPT-2 style)
-    std::vector<std::string> words;
-    std::string current_word;
-    
-    size_t i = 0;
-    while (i < unicode_text.size()) {
-        size_t len = utf8_len(unicode_text[i]);
-        std::string ch = unicode_text.substr(i, len);
-        
-        // Check if this is a space (Ġ in GPT-2 encoding)
-        if (ch == "Ġ") {
-            if (!current_word.empty()) {
-                words.push_back(current_word);
-                current_word.clear();
-            }
-            current_word = ch;  // Start new word with space
-        } else {
-            current_word += ch;
-        }
-        i += len;
-    }
-    if (!current_word.empty()) {
-        words.push_back(current_word);
+    // unicode_regex_split() returns byte-encoded GPT-style pieces already.
+    std::vector<std::string> words = unicode_regex_split(text, GPT2_REGEX_EXPRS);
+    if (words.empty() && !text.empty()) {
+        words.push_back(bytes_to_unicode(text));
     }
     
     // BPE encode each word
@@ -285,13 +267,16 @@ std::vector<int32_t> TextTokenizer::encode(const std::string & text) const {
             if (it != vocab_.end()) {
                 tokens.push_back(it->second);
             } else {
-                // Unknown token - encode as bytes
-                for (unsigned char c : tok) {
-                    std::string byte_tok = BYTE_TO_UNICODE[c];
+                // Unknown token - fall back to the underlying byte-level pieces.
+                size_t pos = 0;
+                while (pos < tok.size()) {
+                    size_t len = utf8_len(tok[pos]);
+                    std::string byte_tok = tok.substr(pos, len);
                     auto byte_it = vocab_.find(byte_tok);
                     if (byte_it != vocab_.end()) {
                         tokens.push_back(byte_it->second);
                     }
+                    pos += len;
                 }
             }
         }
