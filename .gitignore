@@ -10,6 +10,7 @@ models/
 models/*.gguf
 models/Qwen3-TTS-*/
 models/coreml/
+build/
 
 # Reference outputs (generated)
 reference/*.bin

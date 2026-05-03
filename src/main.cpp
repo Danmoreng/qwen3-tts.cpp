@@ -64,6 +64,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
     fprintf(stderr, "  --instruct <text>      Voice steering instructions (e.g. \"whispering\")\n");
+    fprintf(stderr, "  --daemon               Persistent mode (read TEXT|OUTPUT|... from stdin)\n");
     fprintf(stderr, "  -j, --threads <n>      Number of threads (default: 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\n");
@@ -212,6 +213,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             params.instruction = args[i];
+        } else if (arg == "--info") {
+            params.print_timing = false;
+        } else if (arg == "--list-speakers") {
+            params.print_timing = false;
+        } else if (arg == "--daemon") {
+            // recognized but handled later
         } else if (arg == "-j" || arg == "--threads") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing threads value\n");
@@ -232,7 +239,16 @@ int main(int argc, char ** argv) {
         return 1;
     }
     
-    if (text.empty()) {
+    bool info_mode = false;
+    bool list_mode = false;
+    bool daemon_mode = false;
+    for (const auto & arg : args) {
+        if (arg == "--info") info_mode = true;
+        if (arg == "--list-speakers") list_mode = true;
+        if (arg == "--daemon") daemon_mode = true;
+    }
+
+    if (text.empty() && !info_mode && !list_mode && !daemon_mode) {
         fprintf(stderr, "Error: text is required\n");
         print_usage(args[0].c_str());
         return 1;
@@ -263,13 +279,109 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: %s\n", tts.get_error().c_str());
         return 1;
     }
+
+    if (info_mode) {
+        auto caps = tts.get_model_capabilities();
+        printf("{\n");
+        printf("  \"model_type\": \"%s\",\n", caps.model_type.c_str());
+        printf("  \"supports_voice_clone\": %s,\n", caps.supports_voice_clone ? "true" : "false");
+        printf("  \"supports_named_speakers\": %s,\n", caps.supports_named_speakers ? "true" : "false");
+        printf("  \"supports_instruction\": %s,\n", caps.supports_instruction ? "true" : "false");
+        printf("  \"speaker_count\": %d\n", caps.speaker_count);
+        printf("}\n");
+        return 0;
+    }
+
+    if (list_mode) {
+        auto speakers = tts.get_available_speakers();
+        printf("[\n");
+        for (size_t i = 0; i < speakers.size(); ++i) {
+            printf("  \"%s\"%s\n", speakers[i].c_str(), (i == speakers.size() - 1) ? "" : ",");
+        }
+        printf("]\n");
+        return 0;
+    }
+
+    if (daemon_mode) {
+        fprintf(stderr, "Daemon mode active. Waiting for input on stdin...\n");
+        printf("READY\n");
+        fflush(stdout);
+
+        char line[8192];
+        while (fgets(line, sizeof(line), stdin)) {
+            // Format: TEXT|OUTPUT|SPEAKER|REF|INSTRUCT
+            std::string l(line);
+            if (l.empty() || l == "\n") continue;
+            if (l.back() == '\n') l.pop_back();
+
+            std::vector<std::string> parts;
+            size_t start = 0, end;
+            while ((end = l.find('|', start)) != std::string::npos) {
+                parts.push_back(l.substr(start, end - start));
+                start = end + 1;
+            }
+            parts.push_back(l.substr(start));
+
+            if (parts.size() < 2) {
+                fprintf(stderr, "Daemon error: invalid input format. Expected: TEXT|OUTPUT|...\n");
+                continue;
+            }
+
+            std::string d_text = parts[0];
+            std::string d_out = parts[1];
+            qwen3_tts::tts_params d_params = params; // start with defaults
+            std::string d_ref;
+            std::string d_embed;
+
+            if (parts.size() > 2 && !parts[2].empty()) d_params.speaker = parts[2];
+            if (parts.size() > 3 && !parts[3].empty()) d_ref = parts[3];
+            if (parts.size() > 4 && !parts[4].empty()) d_params.instruction = parts[4];
+            if (parts.size() > 5 && !parts[5].empty()) d_embed = parts[5];
+
+            qwen3_tts::tts_result d_res;
+            if (!d_ref.empty()) {
+                std::vector<float> emb;
+                if (tts.extract_speaker_embedding(d_ref, emb, nullptr)) {
+                    if (!d_embed.empty()) {
+                        qwen3_tts::save_speaker_embedding_file(d_embed, emb);
+                    }
+                    d_res = tts.synthesize_with_speaker_embedding(d_text, emb, d_params);
+                } else {
+                    d_res.success = false;
+                    d_res.error_msg = "Failed to extract embedding from: " + d_ref;
+                }
+            } else if (!d_embed.empty()) {
+                std::vector<float> emb;
+                if (qwen3_tts::load_speaker_embedding_file(d_embed, emb)) {
+                    d_res = tts.synthesize_with_speaker_embedding(d_text, emb, d_params);
+                } else {
+                    d_res.success = false;
+                    d_res.error_msg = "Failed to load embedding: " + d_embed;
+                }
+            } else {
+                d_res = tts.synthesize(d_text, d_params);
+            }
+
+            if (d_res.success) {
+                if (qwen3_tts::save_audio_file(d_out, d_res.audio, d_res.sample_rate)) {
+                    printf("DONE|%s\n", d_out.c_str());
+                } else {
+                    printf("ERROR|Failed to save WAV\n");
+                }
+            } else {
+                printf("ERROR|%s\n", d_res.error_msg.c_str());
+            }
+            fflush(stdout);
+        }
+        return 0;
+    }
     
     // Set progress callback
     tts.set_progress_callback([](int tokens, int max_tokens) {
         fprintf(stderr, "\rGenerating: %d/%d tokens", tokens, max_tokens);
     });
     
-    // Generate speech
+    // Generate speech (original non-daemon logic follows)
     qwen3_tts::tts_result result;
     
     if (!speaker_embedding_file.empty()) {
@@ -278,43 +390,19 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "Error: failed to load speaker embedding: %s\n", speaker_embedding_file.c_str());
             return 1;
         }
-        if (speaker_embedding.size() != 1024 && speaker_embedding.size() != 2048) {
-            fprintf(stderr,
-                    "Warning: speaker embedding has %zu dimensions; expected 1024 (0.6B) or 2048 (1.7B)\n",
-                    speaker_embedding.size());
-        }
-        fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
-        fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
-                speaker_embedding_file.c_str(), speaker_embedding.size());
         result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
     } else if (reference_audio.empty()) {
-        fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
         result = tts.synthesize(text, params);
     } else {
         std::vector<float> speaker_embedding;
-        int64_t encode_ms = 0;
-        fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
-        fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
-        if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
-            fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
+        if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, nullptr)) {
+            fprintf(stderr, "\nError: failed to extract speaker embedding\n");
             return 1;
         }
-        if (params.print_timing) {
-            fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
-                    (long long) encode_ms, speaker_embedding.size());
-        }
         if (!dump_speaker_embedding_file.empty()) {
-            if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                        dump_speaker_embedding_file.c_str());
-                return 1;
-            }
-            fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+            qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding);
         }
         result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
-        if (result.success) {
-            result.t_encode_ms = encode_ms;
-        }
     }
     
     if (!result.success) {
@@ -322,28 +410,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
     
-    fprintf(stderr, "\n");
-    
-    // Save output
     if (!qwen3_tts::save_audio_file(output_file, result.audio, result.sample_rate)) {
-        fprintf(stderr, "Error: failed to save output file: %s\n", output_file.c_str());
+        fprintf(stderr, "Error: failed to save output file\n");
         return 1;
     }
     
-    fprintf(stderr, "Output saved to: %s\n", output_file.c_str());
-    fprintf(stderr, "Audio duration: %.2f seconds\n", 
-            (float)result.audio.size() / result.sample_rate);
-    
-    // Print timing
-    if (params.print_timing) {
-        fprintf(stderr, "\nTiming:\n");
-        fprintf(stderr, "  Load:      %6lld ms\n", (long long)result.t_load_ms);
-        fprintf(stderr, "  Tokenize:  %6lld ms\n", (long long)result.t_tokenize_ms);
-        fprintf(stderr, "  Encode:    %6lld ms\n", (long long)result.t_encode_ms);
-        fprintf(stderr, "  Generate:  %6lld ms\n", (long long)result.t_generate_ms);
-        fprintf(stderr, "  Decode:    %6lld ms\n", (long long)result.t_decode_ms);
-        fprintf(stderr, "  Total:     %6lld ms\n", (long long)result.t_total_ms);
-    }
-    
+    fprintf(stderr, "\nOutput saved to: %s\n", output_file.c_str());
     return 0;
 }
