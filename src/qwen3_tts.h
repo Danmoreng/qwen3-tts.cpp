@@ -177,11 +177,23 @@ public:
 private:
     friend struct pipeline_internal::ops;
 
+    struct voice_prompt_cache_entry {
+        bool valid = false;
+        uint64_t sample_hash = 0;
+        int32_t n_samples = 0;
+        std::string reference_text;
+        std::vector<int32_t> reference_token_ids;
+        bool has_auto_reference_codes = false;
+        std::vector<float> speaker_embedding;
+        std::optional<speech_codes> reference_codes;
+    };
+
     TextTokenizer tokenizer_;
     TTSTransformer transformer_;
     AudioTokenizerEncoder audio_encoder_;
     SpeechTokenizerEncoder speech_encoder_;
     AudioTokenizerDecoder audio_decoder_;
+    voice_prompt_cache_entry voice_prompt_cache_;
     
     bool models_loaded_ = false;
     bool encoder_loaded_ = false;

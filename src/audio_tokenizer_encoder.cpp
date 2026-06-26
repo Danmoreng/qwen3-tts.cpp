@@ -9,6 +9,10 @@ AudioTokenizerEncoder::AudioTokenizerEncoder()
 }
 
 AudioTokenizerEncoder::~AudioTokenizerEncoder() {
+    unload_model();
+}
+
+void AudioTokenizerEncoder::unload_model() {
     auto & state = impl_->state;
 
     free_speaker_encoder_model(impl_->model);

@@ -26,8 +26,11 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     log_memory_usage("load/start");
 
     transformer_.unload_model();
+    audio_encoder_.unload_model();
     speech_encoder_.unload_model();
     audio_decoder_.unload_model();
+    voice_prompt_cache_ = {};
+    encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
     decoder_loaded_ = false;

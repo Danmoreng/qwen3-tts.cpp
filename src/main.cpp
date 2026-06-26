@@ -78,6 +78,32 @@ static void normalize_text_newlines(std::string & text) {
     text.swap(out);
 }
 
+static std::string output_file_for_repeat(const std::string & path, int iteration, int repeat_count) {
+    if (repeat_count <= 1) {
+        return path;
+    }
+
+    const size_t slash = path.find_last_of("/\\");
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+        dot = path.size();
+    }
+
+    std::ostringstream out;
+    out << path.substr(0, dot) << "." << (iteration + 1) << path.substr(dot);
+    return out.str();
+}
+
+static void print_result_timing(const qwen3_tts::tts_result & result) {
+    fprintf(stderr, "\nTiming:\n");
+    fprintf(stderr, "  Load:      %6lld ms\n", (long long) result.t_load_ms);
+    fprintf(stderr, "  Tokenize:  %6lld ms\n", (long long) result.t_tokenize_ms);
+    fprintf(stderr, "  Encode:    %6lld ms\n", (long long) result.t_encode_ms);
+    fprintf(stderr, "  Generate:  %6lld ms\n", (long long) result.t_generate_ms);
+    fprintf(stderr, "  Decode:    %6lld ms\n", (long long) result.t_decode_ms);
+    fprintf(stderr, "  Total:     %6lld ms\n", (long long) result.t_total_ms);
+}
+
 static bool load_speech_codes_file(const std::string & path,
                                    qwen3_tts::speech_codes & codes,
                                    std::string & error) {
@@ -165,6 +191,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --top-k <n>            Top-k sampling (default: 50, 0=disabled)\n");
     fprintf(stderr, "  --top-p <val>          Top-p sampling (default: 1.0)\n");
     fprintf(stderr, "  --max-tokens <n>       Maximum audio tokens (default: 4096)\n");
+    fprintf(stderr, "  --repeat <n>           Run synthesis n times in one process (default: 1)\n");
     fprintf(stderr, "  --repetition-penalty <val> Repetition penalty (default: 1.05)\n");
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
@@ -205,6 +232,7 @@ int main(int argc, char ** argv) {
     std::string reference_codes_file;
     std::string speaker_embedding_file;
     std::string dump_speaker_embedding_file;
+    int repeat_count = 1;
     
     qwen3_tts::tts_params params;
     params.print_progress = true;
@@ -324,6 +352,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             params.max_audio_tokens = std::stoi(args[i]);
+        } else if (arg == "--repeat") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing repeat value\n");
+                return 1;
+            }
+            repeat_count = std::stoi(args[i]);
         } else if (arg == "--repetition-penalty") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing repetition-penalty value\n");
@@ -379,6 +413,10 @@ int main(int argc, char ** argv) {
     if (text.empty()) {
         fprintf(stderr, "Error: text is required\n");
         print_usage(args[0].c_str());
+        return 1;
+    }
+    if (repeat_count < 1) {
+        fprintf(stderr, "Error: --repeat must be >= 1\n");
         return 1;
     }
 
@@ -457,97 +495,99 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "\rGenerating: %d/%d tokens", tokens, max_tokens);
     });
     
-    // Generate speech
-    qwen3_tts::tts_result result;
-    
+    std::vector<float> speaker_embedding_from_file;
     if (!speaker_embedding_file.empty()) {
-        std::vector<float> speaker_embedding;
-        if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
+        if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding_from_file)) {
             fprintf(stderr, "Error: failed to load speaker embedding: %s\n", speaker_embedding_file.c_str());
             return 1;
         }
-        if (speaker_embedding.size() != 1024 && speaker_embedding.size() != 2048) {
+        if (speaker_embedding_from_file.size() != 1024 && speaker_embedding_from_file.size() != 2048) {
             fprintf(stderr,
                     "Warning: speaker embedding has %zu dimensions; expected 1024 (0.6B) or 2048 (1.7B)\n",
-                    speaker_embedding.size());
+                    speaker_embedding_from_file.size());
         }
-        fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
-        fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
-                speaker_embedding_file.c_str(), speaker_embedding.size());
-        result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
-    } else if (reference_audio.empty()) {
-        fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
-        result = tts.synthesize(text, params);
-    } else {
-        std::vector<float> speaker_embedding;
-        int64_t encode_ms = 0;
-        fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
-        fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
-        if (auto_reference_codes) {
-            if (!dump_speaker_embedding_file.empty()) {
+    }
+
+    for (int repeat = 0; repeat < repeat_count; ++repeat) {
+        if (repeat_count > 1) {
+            fprintf(stderr, "\nRepeat %d/%d\n", repeat + 1, repeat_count);
+        }
+
+        qwen3_tts::tts_result result;
+
+        if (!speaker_embedding_file.empty()) {
+            fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
+            fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
+                    speaker_embedding_file.c_str(), speaker_embedding_from_file.size());
+            result = tts.synthesize_with_speaker_embedding(text, speaker_embedding_from_file, params);
+        } else if (reference_audio.empty()) {
+            fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
+            result = tts.synthesize(text, params);
+        } else {
+            std::vector<float> speaker_embedding;
+            int64_t encode_ms = 0;
+            fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
+            fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
+            if (auto_reference_codes) {
+                if (!dump_speaker_embedding_file.empty() && repeat == 0) {
+                    if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
+                        fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
+                        return 1;
+                    }
+                    if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
+                        fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
+                                dump_speaker_embedding_file.c_str());
+                        return 1;
+                    }
+                    fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+                    fprintf(stderr, "Speaker embedding will be extracted again for ICL synthesis.\n");
+                }
+                result = tts.synthesize_with_voice(text, reference_audio, params);
+            } else {
                 if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
                     fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
                     return 1;
                 }
-                if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                    fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                            dump_speaker_embedding_file.c_str());
-                    return 1;
+                if (params.print_timing) {
+                    fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
+                            (long long) encode_ms, speaker_embedding.size());
                 }
-                fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
-                fprintf(stderr, "Speaker embedding will be extracted again for ICL synthesis.\n");
-            }
-            result = tts.synthesize_with_voice(text, reference_audio, params);
-        } else {
-            if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
-                fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
-                return 1;
-            }
-            if (params.print_timing) {
-                fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
-                        (long long) encode_ms, speaker_embedding.size());
-            }
-            if (!dump_speaker_embedding_file.empty()) {
-                if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                    fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                            dump_speaker_embedding_file.c_str());
-                    return 1;
+                if (!dump_speaker_embedding_file.empty() && repeat == 0) {
+                    if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
+                        fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
+                                dump_speaker_embedding_file.c_str());
+                        return 1;
+                    }
+                    fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
                 }
-                fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
-            }
-            result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
-            if (result.success) {
-                result.t_encode_ms = encode_ms;
+                result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
+                if (result.success) {
+                    result.t_encode_ms = encode_ms;
+                    result.t_total_ms += encode_ms;
+                }
             }
         }
-    }
-    
-    if (!result.success) {
-        fprintf(stderr, "\nError: %s\n", result.error_msg.c_str());
-        return 1;
-    }
-    
-    fprintf(stderr, "\n");
-    
-    // Save output
-    if (!qwen3_tts::save_audio_file(output_file, result.audio, result.sample_rate)) {
-        fprintf(stderr, "Error: failed to save output file: %s\n", output_file.c_str());
-        return 1;
-    }
-    
-    fprintf(stderr, "Output saved to: %s\n", output_file.c_str());
-    fprintf(stderr, "Audio duration: %.2f seconds\n", 
-            (float)result.audio.size() / result.sample_rate);
-    
-    // Print timing
-    if (params.print_timing) {
-        fprintf(stderr, "\nTiming:\n");
-        fprintf(stderr, "  Load:      %6lld ms\n", (long long)result.t_load_ms);
-        fprintf(stderr, "  Tokenize:  %6lld ms\n", (long long)result.t_tokenize_ms);
-        fprintf(stderr, "  Encode:    %6lld ms\n", (long long)result.t_encode_ms);
-        fprintf(stderr, "  Generate:  %6lld ms\n", (long long)result.t_generate_ms);
-        fprintf(stderr, "  Decode:    %6lld ms\n", (long long)result.t_decode_ms);
-        fprintf(stderr, "  Total:     %6lld ms\n", (long long)result.t_total_ms);
+
+        if (!result.success) {
+            fprintf(stderr, "\nError: %s\n", result.error_msg.c_str());
+            return 1;
+        }
+
+        fprintf(stderr, "\n");
+
+        const std::string repeat_output_file = output_file_for_repeat(output_file, repeat, repeat_count);
+        if (!qwen3_tts::save_audio_file(repeat_output_file, result.audio, result.sample_rate)) {
+            fprintf(stderr, "Error: failed to save output file: %s\n", repeat_output_file.c_str());
+            return 1;
+        }
+
+        fprintf(stderr, "Output saved to: %s\n", repeat_output_file.c_str());
+        fprintf(stderr, "Audio duration: %.2f seconds\n",
+                (float) result.audio.size() / result.sample_rate);
+
+        if (params.print_timing) {
+            print_result_timing(result);
+        }
     }
     
     return 0;

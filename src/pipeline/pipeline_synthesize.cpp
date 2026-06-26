@@ -2,6 +2,7 @@
 #include "pipeline/pipeline_internal.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 
@@ -46,6 +47,24 @@ bool write_codes_file(const std::string & path,
     return true;
 }
 
+uint64_t fnv1a_append(uint64_t hash, const void * data, size_t bytes) {
+    const uint8_t * ptr = static_cast<const uint8_t *>(data);
+    for (size_t i = 0; i < bytes; ++i) {
+        hash ^= (uint64_t) ptr[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+uint64_t hash_reference_samples(const float * samples, int32_t n_samples) {
+    uint64_t hash = 1469598103934665603ULL;
+    hash = fnv1a_append(hash, &n_samples, sizeof(n_samples));
+    if (samples && n_samples > 0) {
+        hash = fnv1a_append(hash, samples, (size_t) n_samples * sizeof(float));
+    }
+    return hash;
+}
+
 } // namespace
 
 tts_result Qwen3TTS::synthesize(const std::string & text,
@@ -70,7 +89,13 @@ tts_result Qwen3TTS::synthesize(const std::string & text,
         return ops::synthesize_internal(*this, text, speaker_embedding.data(), params, result);
     }
 
-    if (transformer_.get_config().tts_model_type == "custom_voice") {
+    const std::string & model_type = transformer_.get_config().tts_model_type;
+    if (model_type == "base") {
+        result.error_msg = "Base model requires --reference or --speaker-embedding; unconditioned synthesis has no speaker voice";
+        return result;
+    }
+
+    if (model_type == "custom_voice") {
         result.error_msg = "CustomVoice model requires --speaker, --reference, or --speaker-embedding";
         return result;
     }
@@ -111,64 +136,95 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         return result;
     }
 
-    if (!encoder_loaded_) {
-        if (tts_model_path_.empty()) {
-            result.error_msg = "Internal error: missing TTS model path for lazy encoder load";
-            return result;
-        }
-        int64_t t_encoder_load_start = get_time_ms();
-        if (!audio_encoder_.load_model(tts_model_path_)) {
-            result.error_msg = "Failed to load speaker encoder: " + audio_encoder_.get_error();
-            return result;
-        }
-        encoder_loaded_ = true;
-        if (params.print_timing) {
-            fprintf(stderr, "  Speaker encoder lazy-loaded in %lld ms\n",
-                    (long long) (get_time_ms() - t_encoder_load_start));
-            log_memory_usage("voice/after-encoder-load");
-        }
-    }
-
     int64_t t_encode_start = get_time_ms();
     std::vector<float> speaker_embedding;
-
-    if (!audio_encoder_.encode(ref_samples, n_ref_samples, speaker_embedding)) {
-        result.error_msg = "Failed to extract speaker embedding: " + audio_encoder_.get_error();
-        return result;
-    }
     tts_params effective_params = params;
     const bool needs_reference_codes =
         !effective_params.reference_codes.has_value() &&
         (!effective_params.reference_text.empty() ||
          !effective_params.reference_token_ids.empty());
-    if (needs_reference_codes) {
-        if (tokenizer_model_path_.empty()) {
-            result.error_msg = "Internal error: missing tokenizer model path for speech tokenizer encoder";
-            return result;
+    const uint64_t sample_hash = hash_reference_samples(ref_samples, n_ref_samples);
+    const bool cache_hit =
+        voice_prompt_cache_.valid &&
+        voice_prompt_cache_.sample_hash == sample_hash &&
+        voice_prompt_cache_.n_samples == n_ref_samples &&
+        voice_prompt_cache_.reference_text == effective_params.reference_text &&
+        voice_prompt_cache_.reference_token_ids == effective_params.reference_token_ids &&
+        voice_prompt_cache_.has_auto_reference_codes == needs_reference_codes &&
+        (!needs_reference_codes || voice_prompt_cache_.reference_codes.has_value());
+
+    if (cache_hit) {
+        speaker_embedding = voice_prompt_cache_.speaker_embedding;
+        if (needs_reference_codes) {
+            effective_params.reference_codes = voice_prompt_cache_.reference_codes;
         }
-        if (!speech_encoder_loaded_) {
-            const int64_t t_speech_encoder_load_start = get_time_ms();
-            if (!speech_encoder_.load_model(tokenizer_model_path_)) {
-                result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
+        if (params.print_progress || params.print_timing) {
+            fprintf(stderr, "Voice prompt cache hit: reused speaker embedding%s\n",
+                    needs_reference_codes ? " and reference speech codes" : "");
+        }
+    } else {
+        if (!encoder_loaded_) {
+            if (tts_model_path_.empty()) {
+                result.error_msg = "Internal error: missing TTS model path for lazy encoder load";
                 return result;
             }
-            speech_encoder_loaded_ = true;
+            int64_t t_encoder_load_start = get_time_ms();
+            if (!audio_encoder_.load_model(tts_model_path_)) {
+                result.error_msg = "Failed to load speaker encoder: " + audio_encoder_.get_error();
+                return result;
+            }
+            encoder_loaded_ = true;
             if (params.print_timing) {
-                fprintf(stderr, "  Speech tokenizer encoder lazy-loaded in %lld ms\n",
-                        (long long) (get_time_ms() - t_speech_encoder_load_start));
-                log_memory_usage("voice/after-speech-encoder-load");
+                fprintf(stderr, "  Speaker encoder lazy-loaded in %lld ms\n",
+                        (long long) (get_time_ms() - t_encoder_load_start));
+                log_memory_usage("voice/after-encoder-load");
             }
         }
-        speech_codes reference_codes;
-        if (!speech_encoder_.encode(ref_samples, n_ref_samples, reference_codes)) {
-            result.error_msg = "Failed to tokenize reference audio: " + speech_encoder_.get_error();
+
+        if (!audio_encoder_.encode(ref_samples, n_ref_samples, speaker_embedding)) {
+            result.error_msg = "Failed to extract speaker embedding: " + audio_encoder_.get_error();
             return result;
         }
-        if (params.print_progress) {
-            fprintf(stderr, "Reference audio tokenized: %d frames x %d codebooks\n",
-                    reference_codes.n_frames, reference_codes.n_codebooks);
+        if (needs_reference_codes) {
+            if (tokenizer_model_path_.empty()) {
+                result.error_msg = "Internal error: missing tokenizer model path for speech tokenizer encoder";
+                return result;
+            }
+            if (!speech_encoder_loaded_) {
+                const int64_t t_speech_encoder_load_start = get_time_ms();
+                if (!speech_encoder_.load_model(tokenizer_model_path_)) {
+                    result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
+                    return result;
+                }
+                speech_encoder_loaded_ = true;
+                if (params.print_timing) {
+                    fprintf(stderr, "  Speech tokenizer encoder lazy-loaded in %lld ms\n",
+                            (long long) (get_time_ms() - t_speech_encoder_load_start));
+                    log_memory_usage("voice/after-speech-encoder-load");
+                }
+            }
+            speech_codes reference_codes;
+            if (!speech_encoder_.encode(ref_samples, n_ref_samples, reference_codes)) {
+                result.error_msg = "Failed to tokenize reference audio: " + speech_encoder_.get_error();
+                return result;
+            }
+            if (params.print_progress) {
+                fprintf(stderr, "Reference audio tokenized: %d frames x %d codebooks\n",
+                        reference_codes.n_frames, reference_codes.n_codebooks);
+            }
+            effective_params.reference_codes = std::move(reference_codes);
         }
-        effective_params.reference_codes = std::move(reference_codes);
+
+        voice_prompt_cache_.valid = true;
+        voice_prompt_cache_.sample_hash = sample_hash;
+        voice_prompt_cache_.n_samples = n_ref_samples;
+        voice_prompt_cache_.reference_text = effective_params.reference_text;
+        voice_prompt_cache_.reference_token_ids = effective_params.reference_token_ids;
+        voice_prompt_cache_.has_auto_reference_codes = needs_reference_codes;
+        voice_prompt_cache_.speaker_embedding = speaker_embedding;
+        voice_prompt_cache_.reference_codes = needs_reference_codes
+            ? effective_params.reference_codes
+            : std::optional<speech_codes>();
     }
     result.t_encode_ms = get_time_ms() - t_encode_start;
 
@@ -283,7 +339,7 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
                                                        const float * speaker_embedding,
                                                        const tts_params & params,
                                                        tts_result & result) {
-    int64_t t_total_start = get_time_ms();
+    int64_t t_total_start = get_time_ms() - result.t_encode_ms;
     auto sample_memory = [&](const char * stage) {
         process_memory_snapshot mem;
         if (!get_process_memory_snapshot(mem)) {
