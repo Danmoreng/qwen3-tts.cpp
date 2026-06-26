@@ -136,6 +136,40 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         result.error_msg = "Failed to extract speaker embedding: " + audio_encoder_.get_error();
         return result;
     }
+    tts_params effective_params = params;
+    const bool needs_reference_codes =
+        !effective_params.reference_codes.has_value() &&
+        (!effective_params.reference_text.empty() ||
+         !effective_params.reference_token_ids.empty());
+    if (needs_reference_codes) {
+        if (tokenizer_model_path_.empty()) {
+            result.error_msg = "Internal error: missing tokenizer model path for speech tokenizer encoder";
+            return result;
+        }
+        if (!speech_encoder_loaded_) {
+            const int64_t t_speech_encoder_load_start = get_time_ms();
+            if (!speech_encoder_.load_model(tokenizer_model_path_)) {
+                result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
+                return result;
+            }
+            speech_encoder_loaded_ = true;
+            if (params.print_timing) {
+                fprintf(stderr, "  Speech tokenizer encoder lazy-loaded in %lld ms\n",
+                        (long long) (get_time_ms() - t_speech_encoder_load_start));
+                log_memory_usage("voice/after-speech-encoder-load");
+            }
+        }
+        speech_codes reference_codes;
+        if (!speech_encoder_.encode(ref_samples, n_ref_samples, reference_codes)) {
+            result.error_msg = "Failed to tokenize reference audio: " + speech_encoder_.get_error();
+            return result;
+        }
+        if (params.print_progress) {
+            fprintf(stderr, "Reference audio tokenized: %d frames x %d codebooks\n",
+                    reference_codes.n_frames, reference_codes.n_codebooks);
+        }
+        effective_params.reference_codes = std::move(reference_codes);
+    }
     result.t_encode_ms = get_time_ms() - t_encode_start;
 
     const int expected_dim = transformer_.get_config().hidden_size;
@@ -152,7 +186,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         fprintf(stderr, "Speaker embedding extracted: %zu floats\n", speaker_embedding.size());
     }
 
-    return ops::synthesize_internal(*this, text, speaker_embedding.data(), params, result);
+    return ops::synthesize_internal(*this, text, speaker_embedding.data(), effective_params, result);
 }
 
 tts_result Qwen3TTS::synthesize_with_speaker_embedding(const std::string & text,

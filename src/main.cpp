@@ -422,13 +422,18 @@ int main(int argc, char ** argv) {
         }
         params.reference_codes = std::move(codes);
     }
-    if ((!params.reference_text.empty() || !params.reference_token_ids.empty()) &&
-        !params.reference_codes.has_value()) {
-        fprintf(stderr, "Error: reference text/token IDs require --reference-codes\n");
+    const bool has_reference_prompt =
+        !params.reference_text.empty() || !params.reference_token_ids.empty();
+    const bool auto_reference_codes = has_reference_prompt &&
+        !params.reference_codes.has_value() && !reference_audio.empty();
+    if (has_reference_prompt &&
+        !params.reference_codes.has_value() &&
+        reference_audio.empty()) {
+        fprintf(stderr, "Error: reference text/token IDs require --reference or --reference-codes\n");
         return 1;
     }
     if (params.reference_codes.has_value()) {
-        if (params.reference_text.empty() && params.reference_token_ids.empty()) {
+        if (!has_reference_prompt) {
             fprintf(stderr, "Error: --reference-codes requires --reference-text, --reference-text-file, or --reference-token-ids\n");
             return 1;
         }
@@ -478,25 +483,42 @@ int main(int argc, char ** argv) {
         int64_t encode_ms = 0;
         fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
         fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
-        if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
-            fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
-            return 1;
-        }
-        if (params.print_timing) {
-            fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
-                    (long long) encode_ms, speaker_embedding.size());
-        }
-        if (!dump_speaker_embedding_file.empty()) {
-            if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                        dump_speaker_embedding_file.c_str());
+        if (auto_reference_codes) {
+            if (!dump_speaker_embedding_file.empty()) {
+                if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
+                    fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
+                    return 1;
+                }
+                if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
+                    fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
+                            dump_speaker_embedding_file.c_str());
+                    return 1;
+                }
+                fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+                fprintf(stderr, "Speaker embedding will be extracted again for ICL synthesis.\n");
+            }
+            result = tts.synthesize_with_voice(text, reference_audio, params);
+        } else {
+            if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
+                fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
                 return 1;
             }
-            fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
-        }
-        result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
-        if (result.success) {
-            result.t_encode_ms = encode_ms;
+            if (params.print_timing) {
+                fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
+                        (long long) encode_ms, speaker_embedding.size());
+            }
+            if (!dump_speaker_embedding_file.empty()) {
+                if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
+                    fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
+                            dump_speaker_embedding_file.c_str());
+                    return 1;
+                }
+                fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+            }
+            result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
+            if (result.success) {
+                result.t_encode_ms = encode_ms;
+            }
         }
     }
     

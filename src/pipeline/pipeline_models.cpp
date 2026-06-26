@@ -26,8 +26,10 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     log_memory_usage("load/start");
 
     transformer_.unload_model();
+    speech_encoder_.unload_model();
     audio_decoder_.unload_model();
     transformer_loaded_ = false;
+    speech_encoder_loaded_ = false;
     decoder_loaded_ = false;
 
     std::string tts_model_path;
@@ -42,7 +44,12 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
 
             if (ext == ".gguf") {
                 if (filename.find("tokenizer") != std::string::npos) {
-                    tokenizer_model_path = entry.path().string();
+                    if (tokenizer_model_path.empty() ||
+                        filename == "qwen3-tts-tokenizer-f16.gguf" ||
+                        (tokenizer_model_path.find("tokenizer-f16") == std::string::npos &&
+                         filename.find("tokenizer-f16") != std::string::npos)) {
+                        tokenizer_model_path = entry.path().string();
+                    }
                 } else if (filename.find("qwen3-tts") != std::string::npos || filename.find("full") != std::string::npos) {
                     if (!model_name.empty()) {
                         if (filename.find(model_name) != std::string::npos) {
@@ -71,8 +78,10 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     fprintf(stderr, "  Tokenizer model path: %s\n", tokenizer_model_path.c_str());
 
     tts_model_path_ = tts_model_path;
+    tokenizer_model_path_ = tokenizer_model_path;
     decoder_model_path_ = tokenizer_model_path;
     encoder_loaded_ = false;
+    speech_encoder_loaded_ = false;
     transformer_loaded_ = false;
     decoder_loaded_ = false;
 

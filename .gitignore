@@ -15,6 +15,7 @@ models/coreml/
 reference/*.bin
 reference/*.wav
 reference/debug/
+reference/speech_tokenizer_golden_ref_audio_pcm/
 
 # Test outputs
 test_output/

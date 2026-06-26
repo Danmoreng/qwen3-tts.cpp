@@ -51,6 +51,9 @@ if(QWEN3_TTS_EMBED_GGML)
     endif()
     set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    if(MSVC)
+        set(MATH_LIBRARY "" CACHE STRING "MSVC does not need libm" FORCE)
+    endif()
     add_subdirectory("${GGML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ggml")
 endif()
 
@@ -142,6 +145,18 @@ target_include_directories(audio_tokenizer_encoder PUBLIC
 qwen3_link_ggml(audio_tokenizer_encoder)
 target_link_libraries(audio_tokenizer_encoder PUBLIC Threads::Threads)
 
+# Speech tokenizer encoder library (GGML-based Qwen3 12Hz audio -> codes)
+add_library(speech_tokenizer_encoder STATIC
+    src/speech_tokenizer_encoder.cpp
+    src/gguf_loader.cpp
+)
+target_include_directories(speech_tokenizer_encoder PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${GGML_DIR}/include
+)
+qwen3_link_ggml(speech_tokenizer_encoder)
+target_link_libraries(speech_tokenizer_encoder PUBLIC Threads::Threads)
+
 # Audio tokenizer decoder library (GGML-based)
 add_library(audio_tokenizer_decoder STATIC
     src/decoder/decoder_cache.cpp
@@ -176,6 +191,7 @@ target_link_libraries(qwen3_tts PUBLIC
     text_tokenizer
     tts_transformer
     audio_tokenizer_encoder
+    speech_tokenizer_encoder
     audio_tokenizer_decoder
     Threads::Threads
 )
@@ -221,6 +237,14 @@ target_link_libraries(test_encoder PRIVATE
     Threads::Threads
 )
 
+add_executable(test_speech_tokenizer_encoder
+    tests/test_speech_tokenizer_encoder.cpp
+)
+target_link_libraries(test_speech_tokenizer_encoder PRIVATE
+    speech_tokenizer_encoder
+    Threads::Threads
+)
+
 # Test executable for transformer
 add_executable(test_transformer
     tests/test_transformer.cpp
@@ -249,7 +273,7 @@ target_link_libraries(test_decoder PRIVATE
 )
 
 # Install targets
-install(TARGETS text_tokenizer tts_transformer audio_tokenizer_encoder audio_tokenizer_decoder qwen3_tts qwen3-tts-cli
+install(TARGETS text_tokenizer tts_transformer audio_tokenizer_encoder speech_tokenizer_encoder audio_tokenizer_decoder qwen3_tts qwen3-tts-cli
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
@@ -259,6 +283,7 @@ install(FILES
     src/tts_transformer.h 
     src/coreml_code_predictor.h
     src/audio_tokenizer_encoder.h 
+    src/speech_tokenizer_encoder.h
     src/audio_tokenizer_decoder.h 
     src/qwen3_tts.h
     DESTINATION include
@@ -272,6 +297,10 @@ add_test(NAME tokenizer_test
 )
 add_test(NAME encoder_test
     COMMAND test_encoder --tokenizer models/qwen3-tts-0.6b-f16.gguf --audio clone.wav --reference reference/ref_audio_embedding.bin
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME speech_tokenizer_encoder_load_test
+    COMMAND test_speech_tokenizer_encoder models/qwen3-tts-tokenizer-f16.gguf
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME transformer_test

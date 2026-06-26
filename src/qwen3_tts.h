@@ -3,6 +3,7 @@
 #include "text_tokenizer.h"
 #include "tts_transformer.h"
 #include "audio_tokenizer_encoder.h"
+#include "speech_tokenizer_encoder.h"
 #include "audio_tokenizer_decoder.h"
 
 #include <string>
@@ -179,15 +180,18 @@ private:
     TextTokenizer tokenizer_;
     TTSTransformer transformer_;
     AudioTokenizerEncoder audio_encoder_;
+    SpeechTokenizerEncoder speech_encoder_;
     AudioTokenizerDecoder audio_decoder_;
     
     bool models_loaded_ = false;
     bool encoder_loaded_ = false;
+    bool speech_encoder_loaded_ = false;
     bool transformer_loaded_ = false;
     bool decoder_loaded_ = false;
     bool low_mem_mode_ = false;
     std::string error_msg_;
     std::string tts_model_path_;
+    std::string tokenizer_model_path_;
     std::string decoder_model_path_;
     tts_progress_callback_t progress_callback_;
 };

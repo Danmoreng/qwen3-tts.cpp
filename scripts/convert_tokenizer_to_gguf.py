@@ -274,6 +274,11 @@ class Qwen3TTSTokenizerConverter:
 
         n_dims = len(data.shape)
 
+        # Encoder VQ nearest-neighbor decisions are sensitive to small codebook
+        # rounding changes, so keep these codebooks in F32 for Python parity.
+        if tensor_name.startswith("tok_enc.vq_") and "codebook" in tensor_name:
+            return data.astype(np.float32), gguf.GGMLQuantizationType.F32
+
         # 1D tensors (norms, biases, scales) should be F32
         if n_dims <= 1:
             return data.astype(np.float32), gguf.GGMLQuantizationType.F32
@@ -320,7 +325,7 @@ class Qwen3TTSTokenizerConverter:
         skipped_count = 0
         skipped_tensors = []
         
-        # Collect embedding_sum and cluster_usage pairs for codebook computation
+        # Collect embedding_sum/embed_sum and cluster_usage pairs for codebook computation
         codebook_pairs: dict[str, dict[str, torch.Tensor]] = {}
 
         logger.info("Processing tensors...")
@@ -328,8 +333,9 @@ class Qwen3TTSTokenizerConverter:
         
         # First pass: collect codebook pairs
         for hf_name, tensor in all_tensors:
-            if "embedding_sum" in hf_name:
-                base_name = hf_name.replace("embedding_sum", "")
+            if "embedding_sum" in hf_name or "embed_sum" in hf_name:
+                sum_name = "embedding_sum" if "embedding_sum" in hf_name else "embed_sum"
+                base_name = hf_name.replace(sum_name, "")
                 if base_name not in codebook_pairs:
                     codebook_pairs[base_name] = {}
                 codebook_pairs[base_name]["embedding_sum"] = tensor
@@ -352,9 +358,10 @@ class Qwen3TTSTokenizerConverter:
                 skipped_count += 1
                 continue
             
-            # For embedding_sum, compute actual codebook = embedding_sum / cluster_usage
-            if "embedding_sum" in hf_name:
-                base_name = hf_name.replace("embedding_sum", "")
+            # For embedding_sum/embed_sum, compute actual codebook = sum / cluster_usage
+            if "embedding_sum" in hf_name or "embed_sum" in hf_name:
+                sum_name = "embedding_sum" if "embedding_sum" in hf_name else "embed_sum"
+                base_name = hf_name.replace(sum_name, "")
                 if base_name in codebook_pairs and "cluster_usage" in codebook_pairs[base_name]:
                     embedding_sum = codebook_pairs[base_name]["embedding_sum"]
                     cluster_usage = codebook_pairs[base_name]["cluster_usage"]
