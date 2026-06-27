@@ -5,6 +5,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <vector>
 
 namespace qwen3_tts {
 
@@ -127,7 +129,7 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
         return false;
     }
 
-    const size_t ctx_size = ggml_tensor_overhead() * dec_tensor_count;
+    const size_t ctx_size = ggml_tensor_overhead() * (dec_tensor_count + 64);
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx_size,
         /*.mem_buffer =*/ nullptr,
@@ -309,9 +311,15 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
         }
     }
 
+    decoder_internal::ops::prepare_snake_tensors(*this);
+
     if (!load_tensor_data_from_file(model_path, gguf_ctx, model.ctx,
                                     model.tensors, model.buffer, error_msg,
                                     GGML_BACKEND_DEVICE_TYPE_IGPU)) {
+        return false;
+    }
+
+    if (!decoder_internal::ops::upload_snake_tensors(*this)) {
         return false;
     }
 
@@ -375,6 +383,123 @@ void free_audio_decoder_model(audio_decoder_model & model) {
         model.ctx = nullptr;
     }
     model.tensors.clear();
+}
+
+void decoder_internal::ops::prepare_snake_tensors(AudioTokenizerDecoder & self) {
+    auto & model = self.impl_->model;
+
+    auto prepare_pair = [&](struct ggml_tensor * alpha,
+                            struct ggml_tensor * beta,
+                            struct ggml_tensor *& alpha_exp,
+                            struct ggml_tensor *& inv_beta_exp,
+                            const char * name_prefix) {
+        if (!alpha || !beta) {
+            return;
+        }
+
+        const int64_t channels = alpha->ne[0];
+        alpha_exp = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, 1, channels);
+        inv_beta_exp = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, 1, channels);
+
+        char name[128];
+        snprintf(name, sizeof(name), "%s.alpha_exp", name_prefix);
+        ggml_set_name(alpha_exp, name);
+        snprintf(name, sizeof(name), "%s.inv_beta_exp", name_prefix);
+        ggml_set_name(inv_beta_exp, name);
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        decoder_block & block = model.dec_blocks[i];
+        char prefix[64];
+        snprintf(prefix, sizeof(prefix), "tok_dec.dec.%d.snake", i + 1);
+        prepare_pair(block.snake_alpha, block.snake_beta,
+                     block.snake_alpha_exp, block.snake_inv_beta_exp, prefix);
+
+        for (int r = 0; r < 3; ++r) {
+            residual_block & res = block.res[r];
+            snprintf(prefix, sizeof(prefix), "tok_dec.dec.%d.res.%d.act1", i + 1, r + 2);
+            prepare_pair(res.act1_alpha, res.act1_beta,
+                         res.act1_alpha_exp, res.act1_inv_beta_exp, prefix);
+            snprintf(prefix, sizeof(prefix), "tok_dec.dec.%d.res.%d.act2", i + 1, r + 2);
+            prepare_pair(res.act2_alpha, res.act2_beta,
+                         res.act2_alpha_exp, res.act2_inv_beta_exp, prefix);
+        }
+    }
+
+    prepare_pair(model.dec5_snake_alpha, model.dec5_snake_beta,
+                 model.dec5_snake_alpha_exp, model.dec5_snake_inv_beta_exp,
+                 "tok_dec.dec.5.snake");
+}
+
+bool decoder_internal::ops::upload_snake_tensors(AudioTokenizerDecoder & self) {
+    auto & model = self.impl_->model;
+    auto & error_msg = self.impl_->error_msg;
+
+    auto upload_pair = [&](struct ggml_tensor * alpha,
+                           struct ggml_tensor * beta,
+                           struct ggml_tensor * alpha_exp,
+                           struct ggml_tensor * inv_beta_exp,
+                           const char * label) -> bool {
+        if (!alpha || !beta || !alpha_exp || !inv_beta_exp) {
+            return true;
+        }
+        if (alpha->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32) {
+            error_msg = std::string("Snake tensor must be F32: ") + label;
+            return false;
+        }
+        if (alpha->ne[0] != beta->ne[0]) {
+            error_msg = std::string("Snake alpha/beta size mismatch: ") + label;
+            return false;
+        }
+
+        const int64_t channels = alpha->ne[0];
+        std::vector<float> alpha_host((size_t) channels);
+        std::vector<float> beta_host((size_t) channels);
+        std::vector<float> alpha_exp_host((size_t) channels);
+        std::vector<float> inv_beta_exp_host((size_t) channels);
+
+        ggml_backend_tensor_get(alpha, alpha_host.data(), 0, (size_t) channels * sizeof(float));
+        ggml_backend_tensor_get(beta, beta_host.data(), 0, (size_t) channels * sizeof(float));
+
+        for (int64_t i = 0; i < channels; ++i) {
+            alpha_exp_host[(size_t) i] = expf(alpha_host[(size_t) i]);
+            inv_beta_exp_host[(size_t) i] = 1.0f / (expf(beta_host[(size_t) i]) + 1e-9f);
+        }
+
+        ggml_backend_tensor_set(alpha_exp, alpha_exp_host.data(), 0,
+                                (size_t) channels * sizeof(float));
+        ggml_backend_tensor_set(inv_beta_exp, inv_beta_exp_host.data(), 0,
+                                (size_t) channels * sizeof(float));
+        return true;
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        decoder_block & block = model.dec_blocks[i];
+        char label[64];
+        snprintf(label, sizeof(label), "tok_dec.dec.%d.snake", i + 1);
+        if (!upload_pair(block.snake_alpha, block.snake_beta,
+                         block.snake_alpha_exp, block.snake_inv_beta_exp, label)) {
+            return false;
+        }
+
+        for (int r = 0; r < 3; ++r) {
+            residual_block & res = block.res[r];
+            snprintf(label, sizeof(label), "tok_dec.dec.%d.res.%d.act1", i + 1, r + 2);
+            if (!upload_pair(res.act1_alpha, res.act1_beta,
+                             res.act1_alpha_exp, res.act1_inv_beta_exp, label)) {
+                return false;
+            }
+            snprintf(label, sizeof(label), "tok_dec.dec.%d.res.%d.act2", i + 1, r + 2);
+            if (!upload_pair(res.act2_alpha, res.act2_beta,
+                             res.act2_alpha_exp, res.act2_inv_beta_exp, label)) {
+                return false;
+            }
+        }
+    }
+
+    return upload_pair(model.dec5_snake_alpha, model.dec5_snake_beta,
+                       model.dec5_snake_alpha_exp, model.dec5_snake_inv_beta_exp,
+                       "tok_dec.dec.5.snake");
 }
 
 } // namespace qwen3_tts

@@ -162,7 +162,18 @@ bool load_tensor_data_from_file(
 ) {
     ggml_backend_t backend = ggml_backend_init_by_type(preferred_backend_type, nullptr);
     if (!backend && preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        if (preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+        }
+        if (!backend && preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_GPU) {
+            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+        }
+        if (!backend && preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_ACCEL, nullptr);
+        }
+        if (!backend) {
+            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        }
     }
     if (!backend) {
         error_msg = "Failed to initialize backend for GGUF tensor loader";

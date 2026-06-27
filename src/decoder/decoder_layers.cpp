@@ -8,20 +8,30 @@ namespace qwen3_tts {
 struct ggml_tensor * decoder_internal::ops::apply_snake(struct ggml_context * ctx,
                                                         struct ggml_tensor * x,
                                                         struct ggml_tensor * alpha,
-                                                        struct ggml_tensor * beta) {
+                                                        struct ggml_tensor * beta,
+                                                        struct ggml_tensor * alpha_exp,
+                                                        struct ggml_tensor * inv_beta_exp) {
+    if (alpha_exp && inv_beta_exp) {
+        struct ggml_tensor * ax = ggml_mul(ctx, x, alpha_exp);
+        struct ggml_tensor * sin_ax = ggml_sin(ctx, ax);
+        struct ggml_tensor * sin_sq = ggml_sqr(ctx, sin_ax);
+        struct ggml_tensor * scaled_sin = ggml_mul(ctx, sin_sq, inv_beta_exp);
+        return ggml_add(ctx, x, scaled_sin);
+    }
+
     int64_t seq_len = x->ne[0];
     int64_t channels = x->ne[1];
     int64_t batch = x->ne[2];
 
-    struct ggml_tensor * alpha_exp = ggml_exp(ctx, alpha);
+    struct ggml_tensor * alpha_exp_runtime = ggml_exp(ctx, alpha);
 
-    struct ggml_tensor * alpha_3d = ggml_reshape_3d(ctx, alpha_exp, 1, channels, 1);
+    struct ggml_tensor * alpha_3d = ggml_reshape_3d(ctx, alpha_exp_runtime, 1, channels, 1);
     struct ggml_tensor * alpha_broad = ggml_repeat(ctx, alpha_3d,
                                                     ggml_new_tensor_3d(ctx, GGML_TYPE_F32, seq_len, channels, batch));
 
     struct ggml_tensor * neg_beta = ggml_scale(ctx, beta, -1.0f);
-    struct ggml_tensor * inv_beta_exp = ggml_exp(ctx, neg_beta);
-    struct ggml_tensor * inv_beta_3d = ggml_reshape_3d(ctx, inv_beta_exp, 1, channels, 1);
+    struct ggml_tensor * inv_beta_exp_runtime = ggml_exp(ctx, neg_beta);
+    struct ggml_tensor * inv_beta_3d = ggml_reshape_3d(ctx, inv_beta_exp_runtime, 1, channels, 1);
     struct ggml_tensor * inv_beta = ggml_repeat(ctx, inv_beta_3d,
                                                  ggml_new_tensor_3d(ctx, GGML_TYPE_F32, seq_len, channels, batch));
 
@@ -186,7 +196,8 @@ struct ggml_tensor * decoder_internal::ops::apply_residual_block(struct ggml_con
     struct ggml_tensor * residual = x;
 
     if (block.act1_alpha) {
-        x = apply_snake(ctx, x, block.act1_alpha, block.act1_beta);
+        x = apply_snake(ctx, x, block.act1_alpha, block.act1_beta,
+                        block.act1_alpha_exp, block.act1_inv_beta_exp);
     }
 
     int64_t out_channels = block.conv1_w->ne[2];
@@ -198,7 +209,8 @@ struct ggml_tensor * decoder_internal::ops::apply_residual_block(struct ggml_con
     }
 
     if (block.act2_alpha) {
-        x = apply_snake(ctx, x, block.act2_alpha, block.act2_beta);
+        x = apply_snake(ctx, x, block.act2_alpha, block.act2_beta,
+                        block.act2_alpha_exp, block.act2_inv_beta_exp);
     }
 
     out_channels = block.conv2_w->ne[2];
@@ -219,7 +231,8 @@ struct ggml_tensor * decoder_internal::ops::apply_decoder_block(struct ggml_cont
     (void) self;
     (void) block_idx;
     if (block.snake_alpha && block.snake_beta) {
-        x = apply_snake(ctx, x, block.snake_alpha, block.snake_beta);
+        x = apply_snake(ctx, x, block.snake_alpha, block.snake_beta,
+                        block.snake_alpha_exp, block.snake_inv_beta_exp);
     }
 
     int64_t seq_len = x->ne[0];

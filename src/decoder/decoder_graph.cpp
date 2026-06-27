@@ -165,7 +165,8 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
     }
 
     if (model.dec5_snake_alpha) {
-        cur = apply_snake(ctx0, cur, model.dec5_snake_alpha, model.dec5_snake_beta);
+        cur = apply_snake(ctx0, cur, model.dec5_snake_alpha, model.dec5_snake_beta,
+                          model.dec5_snake_alpha_exp, model.dec5_snake_inv_beta_exp);
     }
 
     ggml_set_name(cur, "dec5_output");

@@ -36,10 +36,14 @@ struct residual_block {
     int dilation = 1;
     struct ggml_tensor * act1_alpha = nullptr;
     struct ggml_tensor * act1_beta = nullptr;
+    struct ggml_tensor * act1_alpha_exp = nullptr;
+    struct ggml_tensor * act1_inv_beta_exp = nullptr;
     struct ggml_tensor * conv1_w = nullptr;
     struct ggml_tensor * conv1_b = nullptr;
     struct ggml_tensor * act2_alpha = nullptr;
     struct ggml_tensor * act2_beta = nullptr;
+    struct ggml_tensor * act2_alpha_exp = nullptr;
+    struct ggml_tensor * act2_inv_beta_exp = nullptr;
     struct ggml_tensor * conv2_w = nullptr;
     struct ggml_tensor * conv2_b = nullptr;
 };
@@ -48,6 +52,8 @@ struct residual_block {
 struct decoder_block {
     struct ggml_tensor * snake_alpha = nullptr;
     struct ggml_tensor * snake_beta = nullptr;
+    struct ggml_tensor * snake_alpha_exp = nullptr;
+    struct ggml_tensor * snake_inv_beta_exp = nullptr;
     struct ggml_tensor * conv_t_w = nullptr;
     struct ggml_tensor * conv_t_b = nullptr;
     residual_block res[3];
@@ -101,6 +107,8 @@ struct audio_decoder_model {
 
     struct ggml_tensor * dec5_snake_alpha = nullptr;
     struct ggml_tensor * dec5_snake_beta = nullptr;
+    struct ggml_tensor * dec5_snake_alpha_exp = nullptr;
+    struct ggml_tensor * dec5_snake_inv_beta_exp = nullptr;
 
     struct ggml_tensor * dec6_conv_w = nullptr;
     struct ggml_tensor * dec6_conv_b = nullptr;
@@ -135,7 +143,9 @@ struct ops {
     static struct ggml_tensor * apply_snake(struct ggml_context * ctx,
                                             struct ggml_tensor * x,
                                             struct ggml_tensor * alpha,
-                                            struct ggml_tensor * beta);
+                                            struct ggml_tensor * beta,
+                                            struct ggml_tensor * alpha_exp = nullptr,
+                                            struct ggml_tensor * inv_beta_exp = nullptr);
     static struct ggml_tensor * apply_rms_norm(struct ggml_context * ctx,
                                                struct ggml_tensor * x,
                                                struct ggml_tensor * w,
@@ -160,6 +170,8 @@ struct ops {
                                                     int upsample_rate,
                                                     int block_idx);
     static void normalize_codebooks(AudioTokenizerDecoder & self);
+    static void prepare_snake_tensors(AudioTokenizerDecoder & self);
+    static bool upload_snake_tensors(AudioTokenizerDecoder & self);
 };
 
 } // namespace decoder_internal
