@@ -55,6 +55,7 @@ struct decoder_block {
     struct ggml_tensor * snake_alpha_exp = nullptr;
     struct ggml_tensor * snake_inv_beta_exp = nullptr;
     struct ggml_tensor * conv_t_w = nullptr;
+    struct ggml_tensor * conv_t_w_perm = nullptr;
     struct ggml_tensor * conv_t_b = nullptr;
     residual_block res[3];
 };
@@ -62,6 +63,7 @@ struct decoder_block {
 // Upsample block weights (ConvNeXt-style)
 struct upsample_block {
     struct ggml_tensor * conv_w = nullptr;
+    struct ggml_tensor * conv_w_perm = nullptr;
     struct ggml_tensor * conv_b = nullptr;
     struct ggml_tensor * dwconv_w = nullptr;
     struct ggml_tensor * dwconv_b = nullptr;
@@ -172,6 +174,8 @@ struct ops {
     static void normalize_codebooks(AudioTokenizerDecoder & self);
     static void prepare_snake_tensors(AudioTokenizerDecoder & self);
     static bool upload_snake_tensors(AudioTokenizerDecoder & self);
+    static void prepare_transconv_tensors(AudioTokenizerDecoder & self);
+    static bool upload_transconv_tensors(AudioTokenizerDecoder & self);
 };
 
 } // namespace decoder_internal

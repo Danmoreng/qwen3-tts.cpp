@@ -5,6 +5,35 @@
 
 namespace qwen3_tts {
 
+namespace {
+
+struct ggml_tensor * qwen_causal_trans_conv1d(struct ggml_context * ctx,
+                                              struct ggml_tensor * w_perm,
+                                              struct ggml_tensor * b,
+                                              struct ggml_tensor * x,
+                                              int stride,
+                                              int kernel,
+                                              int out_channels) {
+    const int trim = kernel - stride;
+
+    struct ggml_tensor * xt = ggml_cont(ctx, ggml_transpose(ctx, x));
+    struct ggml_tensor * col = ggml_mul_mat(ctx, w_perm, xt);
+    struct ggml_tensor * y = ggml_col2im_1d(ctx, col, stride, out_channels, 0);
+
+    if (trim > 0) {
+        const int64_t keep = y->ne[0] - trim;
+        y = ggml_view_2d(ctx, y, keep, y->ne[1], y->nb[1], 0);
+    }
+
+    if (b) {
+        y = ggml_add(ctx, y, ggml_reshape_2d(ctx, b, 1, out_channels));
+    }
+
+    return y;
+}
+
+} // namespace
+
 struct ggml_tensor * decoder_internal::ops::apply_snake(struct ggml_context * ctx,
                                                         struct ggml_tensor * x,
                                                         struct ggml_tensor * alpha,
@@ -138,12 +167,17 @@ struct ggml_tensor * decoder_internal::ops::apply_upsample_block(struct ggml_con
     int64_t channels = x->ne[1];
 
     struct ggml_tensor * x_2d = ggml_reshape_2d(ctx, x, seq_len, channels);
-    x_2d = ggml_conv_transpose_1d(ctx, block.conv_w, x_2d, 2, 0, 1);
+    if (block.conv_w_perm) {
+        x_2d = qwen_causal_trans_conv1d(ctx, block.conv_w_perm, block.conv_b,
+                                        x_2d, 2, 2, (int) channels);
+    } else {
+        x_2d = ggml_conv_transpose_1d(ctx, block.conv_w, x_2d, 2, 0, 1);
+    }
 
     int64_t new_seq_len = x_2d->ne[0];
     x = ggml_reshape_3d(ctx, x_2d, new_seq_len, channels, 1);
 
-    if (block.conv_b) {
+    if (!block.conv_w_perm && block.conv_b) {
         x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.conv_b, 1, channels, 1));
     }
 
@@ -241,21 +275,28 @@ struct ggml_tensor * decoder_internal::ops::apply_decoder_block(struct ggml_cont
     int kernel_size = block.conv_t_w->ne[0];
 
     struct ggml_tensor * x_2d = ggml_reshape_2d(ctx, x, seq_len, in_channels);
-    x_2d = ggml_conv_transpose_1d(ctx, block.conv_t_w, x_2d, upsample_rate, 0, 1);
+    if (block.conv_t_w_perm) {
+        x_2d = qwen_causal_trans_conv1d(ctx, block.conv_t_w_perm, block.conv_t_b,
+                                        x_2d, upsample_rate, kernel_size, (int) out_channels);
+    } else {
+        x_2d = ggml_conv_transpose_1d(ctx, block.conv_t_w, x_2d, upsample_rate, 0, 1);
+    }
 
     int64_t new_seq_len = x_2d->ne[0];
     x = ggml_reshape_3d(ctx, x_2d, new_seq_len, out_channels, 1);
 
-    int pad = kernel_size - upsample_rate;
-    int left_pad = pad;
-    int right_pad = pad;
-    int64_t out_seq_len = new_seq_len - left_pad - right_pad;
+    if (!block.conv_t_w_perm) {
+        int pad = kernel_size - upsample_rate;
+        int left_pad = pad;
+        int right_pad = pad;
+        int64_t out_seq_len = new_seq_len - left_pad - right_pad;
 
-    x = ggml_view_3d(ctx, x, out_seq_len, out_channels, 1,
-                     x->nb[1], x->nb[2], left_pad * x->nb[0]);
-    x = ggml_cont(ctx, x);
+        x = ggml_view_3d(ctx, x, out_seq_len, out_channels, 1,
+                         x->nb[1], x->nb[2], left_pad * x->nb[0]);
+        x = ggml_cont(ctx, x);
+    }
 
-    if (block.conv_t_b) {
+    if (!block.conv_t_w_perm && block.conv_t_b) {
         x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.conv_t_b, 1, out_channels, 1));
     }
 

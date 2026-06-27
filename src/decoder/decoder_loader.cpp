@@ -129,7 +129,7 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
         return false;
     }
 
-    const size_t ctx_size = ggml_tensor_overhead() * (dec_tensor_count + 64);
+    const size_t ctx_size = ggml_tensor_overhead() * (dec_tensor_count + 72);
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx_size,
         /*.mem_buffer =*/ nullptr,
@@ -312,6 +312,7 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     }
 
     decoder_internal::ops::prepare_snake_tensors(*this);
+    decoder_internal::ops::prepare_transconv_tensors(*this);
 
     if (!load_tensor_data_from_file(model_path, gguf_ctx, model.ctx,
                                     model.tensors, model.buffer, error_msg,
@@ -320,6 +321,9 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     }
 
     if (!decoder_internal::ops::upload_snake_tensors(*this)) {
+        return false;
+    }
+    if (!decoder_internal::ops::upload_transconv_tensors(*this)) {
         return false;
     }
 
@@ -500,6 +504,111 @@ bool decoder_internal::ops::upload_snake_tensors(AudioTokenizerDecoder & self) {
     return upload_pair(model.dec5_snake_alpha, model.dec5_snake_beta,
                        model.dec5_snake_alpha_exp, model.dec5_snake_inv_beta_exp,
                        "tok_dec.dec.5.snake");
+}
+
+void decoder_internal::ops::prepare_transconv_tensors(AudioTokenizerDecoder & self) {
+    auto & model = self.impl_->model;
+
+    auto prepare_perm = [&](struct ggml_tensor * src,
+                            struct ggml_tensor *& dst,
+                            const char * name_prefix) {
+        if (!src) {
+            return;
+        }
+
+        const int64_t kernel = src->ne[0];
+        const int64_t out_channels = src->ne[1];
+        const int64_t in_channels = src->ne[2];
+        dst = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32,
+                                 in_channels, kernel * out_channels);
+
+        char name[128];
+        snprintf(name, sizeof(name), "%s.perm_f32", name_prefix);
+        ggml_set_name(dst, name);
+    };
+
+    for (int i = 0; i < 2; ++i) {
+        char prefix[64];
+        snprintf(prefix, sizeof(prefix), "tok_dec.upsample.%d.conv.weight", i);
+        prepare_perm(model.upsample[i].conv_w, model.upsample[i].conv_w_perm, prefix);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        char prefix[64];
+        snprintf(prefix, sizeof(prefix), "tok_dec.dec.%d.conv_t.weight", i + 1);
+        prepare_perm(model.dec_blocks[i].conv_t_w, model.dec_blocks[i].conv_t_w_perm, prefix);
+    }
+}
+
+bool decoder_internal::ops::upload_transconv_tensors(AudioTokenizerDecoder & self) {
+    auto & model = self.impl_->model;
+    auto & error_msg = self.impl_->error_msg;
+
+    auto load_value = [](const void * data, enum ggml_type type, size_t idx) -> float {
+        if (type == GGML_TYPE_F32) {
+            return static_cast<const float *>(data)[idx];
+        }
+        if (type == GGML_TYPE_F16) {
+            return ggml_fp16_to_fp32(static_cast<const ggml_fp16_t *>(data)[idx]);
+        }
+        return ggml_bf16_to_fp32(static_cast<const ggml_bf16_t *>(data)[idx]);
+    };
+
+    auto upload_perm = [&](struct ggml_tensor * src,
+                           struct ggml_tensor * dst,
+                           const char * label) -> bool {
+        if (!src || !dst) {
+            return true;
+        }
+        if (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16 && src->type != GGML_TYPE_BF16) {
+            error_msg = std::string("ConvTranspose weight cannot be pre-permuted: ") + label;
+            return false;
+        }
+
+        const int64_t kernel = src->ne[0];
+        const int64_t out_channels = src->ne[1];
+        const int64_t in_channels = src->ne[2];
+        const int64_t n = kernel * out_channels * in_channels;
+
+        std::vector<uint8_t> src_host(ggml_nbytes(src));
+        std::vector<float> dst_host((size_t) n);
+        ggml_backend_tensor_get(src, src_host.data(), 0, src_host.size());
+
+        for (int64_t ic = 0; ic < in_channels; ++ic) {
+            for (int64_t oc = 0; oc < out_channels; ++oc) {
+                for (int64_t k = 0; k < kernel; ++k) {
+                    const size_t src_idx = (size_t) ic * (size_t) out_channels * (size_t) kernel
+                                         + (size_t) oc * (size_t) kernel
+                                         + (size_t) k;
+                    const size_t dst_idx = ((size_t) oc * (size_t) kernel + (size_t) k)
+                                         * (size_t) in_channels
+                                         + (size_t) ic;
+                    dst_host[dst_idx] = load_value(src_host.data(), src->type, src_idx);
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(dst, dst_host.data(), 0, dst_host.size() * sizeof(float));
+        return true;
+    };
+
+    for (int i = 0; i < 2; ++i) {
+        char label[64];
+        snprintf(label, sizeof(label), "tok_dec.upsample.%d.conv.weight", i);
+        if (!upload_perm(model.upsample[i].conv_w, model.upsample[i].conv_w_perm, label)) {
+            return false;
+        }
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        char label[64];
+        snprintf(label, sizeof(label), "tok_dec.dec.%d.conv_t.weight", i + 1);
+        if (!upload_perm(model.dec_blocks[i].conv_t_w, model.dec_blocks[i].conv_t_w_perm, label)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 } // namespace qwen3_tts
