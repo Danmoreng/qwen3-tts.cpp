@@ -16,11 +16,17 @@ param(
     [string]$PythonAttnImplementation = "auto",
     [ValidateSet("basic", "voice_clone", "voice_clone_synth_only")]
     [string]$Scenario = "basic",
-    [string]$ReferenceAudio = "examples\readme_clone_input.wav"
+    [string]$ReferenceAudio = "examples\readme_clone_input.wav",
+    [double]$MinAudioPeak = 1e-4,
+    [double]$MinAudioRms = 1e-6,
+    [int]$MinNonZeroSamples = 16,
+    [switch]$AllowSilentAudio
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "wav_stats.ps1")
 
 function Resolve-PythonExe {
     param([string]$Requested)
@@ -311,6 +317,29 @@ function Parse-BenchmarkMetric {
     return $null
 }
 
+function Get-BenchmarkAudioResult {
+    param(
+        [int]$ExitCode,
+        [string]$OutputWav
+    )
+
+    $stats = if (Test-Path $OutputWav) { Get-WavAudioStats -Path $OutputWav } else { New-EmptyWavAudioStats -path $OutputWav -errorMessage "file not found" }
+    $audioStatus = Get-WavAudioQualityStatus -Stats $stats -MinPeak $MinAudioPeak -MinRms $MinAudioRms -MinNonZeroSamples $MinNonZeroSamples
+    $status = if ($ExitCode -ne 0 -or -not (Test-Path $OutputWav)) {
+        "FAIL"
+    } elseif ($audioStatus -eq "OK" -or $AllowSilentAudio) {
+        "PASS"
+    } else {
+        $audioStatus
+    }
+
+    return [PSCustomObject]@{
+        Status      = $status
+        AudioStatus = $audioStatus
+        Stats       = $stats
+    }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonPath = Resolve-PythonExe -Requested $PythonExe
 $cliPath = Resolve-CliExe -Requested $CliExe
@@ -466,7 +495,12 @@ foreach ($model in $models) {
             Get-WavDurationSec -Path $pyOut
         }
         $pyRtf = if ($pyAudioSec -gt 0) { ($pyEffectiveMs / 1000.0) / $pyAudioSec } else { 0.0 }
-        $pyStatus = if ($pyRun.ExitCode -eq 0) { "PASS" } else { "FAIL" }
+        $pyAudioResult = Get-BenchmarkAudioResult -ExitCode $pyRun.ExitCode -OutputWav $pyOut
+        $pyStatus = $pyAudioResult.Status
+        if ($pyAudioSec -le 0.0 -and $pyAudioResult.Stats.Valid) {
+            $pyAudioSec = $pyAudioResult.Stats.DurationSec
+            $pyRtf = if ($pyAudioSec -gt 0) { ($pyEffectiveMs / 1000.0) / $pyAudioSec } else { 0.0 }
+        }
 
         $pyLog = Join-Path $logDir ("{0}_{1}_{2}_run{3}.log" -f $Scenario, $model.Name, $pythonPipelineSlug, $rep)
         @(
@@ -491,6 +525,10 @@ foreach ($model in $models) {
             PeakRssMB = [math]::Round($pyRun.PeakWorkingSet / 1MB, 2)
             AudioSec  = [math]::Round($pyAudioSec, 3)
             RTF       = [math]::Round($pyRtf, 3)
+            AudioStatus = $pyAudioResult.AudioStatus
+            AudioPeak = if ($pyAudioResult.Stats.Valid) { [math]::Round($pyAudioResult.Stats.Peak, 8) } else { $null }
+            AudioRms = if ($pyAudioResult.Stats.Valid) { [math]::Round($pyAudioResult.Stats.Rms, 8) } else { $null }
+            AudioNonZeroSamples = if ($pyAudioResult.Stats.Valid) { $pyAudioResult.Stats.NonZeroSamples } else { $null }
             Note      = ""
             LogPath   = $pyLog
             OutputWav = $pyOut
@@ -522,7 +560,12 @@ foreach ($model in $models) {
             $cppAudioSec = Get-WavDurationSec -Path $cppOut
         }
         $cppRtf = if ($cppAudioSec -gt 0) { ($cppEffectiveMs / 1000.0) / $cppAudioSec } else { 0.0 }
-        $cppStatus = if ($cppRun.ExitCode -eq 0) { "PASS" } else { "FAIL" }
+        $cppAudioResult = Get-BenchmarkAudioResult -ExitCode $cppRun.ExitCode -OutputWav $cppOut
+        $cppStatus = $cppAudioResult.Status
+        if ($cppAudioSec -le 0.0 -and $cppAudioResult.Stats.Valid) {
+            $cppAudioSec = $cppAudioResult.Stats.DurationSec
+            $cppRtf = if ($cppAudioSec -gt 0) { ($cppEffectiveMs / 1000.0) / $cppAudioSec } else { 0.0 }
+        }
 
         $cppLog = Join-Path $logDir ("{0}_{1}_cpp_run{2}.log" -f $Scenario, $model.Name, $rep)
         @(
@@ -547,6 +590,10 @@ foreach ($model in $models) {
             PeakRssMB = [math]::Round($cppRun.PeakWorkingSet / 1MB, 2)
             AudioSec  = [math]::Round($cppAudioSec, 3)
             RTF       = [math]::Round($cppRtf, 3)
+            AudioStatus = $cppAudioResult.AudioStatus
+            AudioPeak = if ($cppAudioResult.Stats.Valid) { [math]::Round($cppAudioResult.Stats.Peak, 8) } else { $null }
+            AudioRms = if ($cppAudioResult.Stats.Valid) { [math]::Round($cppAudioResult.Stats.Rms, 8) } else { $null }
+            AudioNonZeroSamples = if ($cppAudioResult.Stats.Valid) { $cppAudioResult.Stats.NonZeroSamples } else { $null }
             Note      = ""
             LogPath   = $cppLog
             OutputWav = $cppOut
@@ -564,6 +611,10 @@ foreach ($model in $models) {
                 PeakRssMB = 0
                 AudioSec  = 0
                 RTF       = 0
+                AudioStatus = ""
+                AudioPeak = $null
+                AudioRms = $null
+                AudioNonZeroSamples = $null
                 Note      = "original CLI not found"
                 LogPath   = ""
                 OutputWav = ""
@@ -580,6 +631,10 @@ foreach ($model in $models) {
                 PeakRssMB = 0
                 AudioSec  = 0
                 RTF       = 0
+                AudioStatus = ""
+                AudioPeak = $null
+                AudioRms = $null
+                AudioNonZeroSamples = $null
                 Note      = "original CLI has fixed 0.6B model (no --model-name)"
                 LogPath   = ""
                 OutputWav = ""
@@ -610,7 +665,12 @@ foreach ($model in $models) {
                 $origAudioSec = Get-WavDurationSec -Path $origOut
             }
             $origRtf = if ($origAudioSec -gt 0) { ($origEffectiveMs / 1000.0) / $origAudioSec } else { 0.0 }
-            $origStatus = if ($origRun.ExitCode -eq 0) { "PASS" } else { "FAIL" }
+            $origAudioResult = Get-BenchmarkAudioResult -ExitCode $origRun.ExitCode -OutputWav $origOut
+            $origStatus = $origAudioResult.Status
+            if ($origAudioSec -le 0.0 -and $origAudioResult.Stats.Valid) {
+                $origAudioSec = $origAudioResult.Stats.DurationSec
+                $origRtf = if ($origAudioSec -gt 0) { ($origEffectiveMs / 1000.0) / $origAudioSec } else { 0.0 }
+            }
 
             $origLog = Join-Path $logDir ("{0}_{1}_cpp_original_run{2}.log" -f $Scenario, $model.Name, $rep)
             @(
@@ -635,6 +695,10 @@ foreach ($model in $models) {
                 PeakRssMB = [math]::Round($origRun.PeakWorkingSet / 1MB, 2)
                 AudioSec  = [math]::Round($origAudioSec, 3)
                 RTF       = [math]::Round($origRtf, 3)
+                AudioStatus = $origAudioResult.AudioStatus
+                AudioPeak = if ($origAudioResult.Stats.Valid) { [math]::Round($origAudioResult.Stats.Peak, 8) } else { $null }
+                AudioRms = if ($origAudioResult.Stats.Valid) { [math]::Round($origAudioResult.Stats.Rms, 8) } else { $null }
+                AudioNonZeroSamples = if ($origAudioResult.Stats.Valid) { $origAudioResult.Stats.NonZeroSamples } else { $null }
                 Note      = ""
                 LogPath   = $origLog
                 OutputWav = $origOut
@@ -690,7 +754,7 @@ $summary |
 
 Write-Host ""
 Write-Host "Raw Results"
-$rows | Sort-Object Model, Scenario, Pipeline, Run | Format-Table Model, Scenario, Pipeline, Run, Status, ExitCode, WallMs, PeakRssMB, AudioSec, RTF, Note -AutoSize
+$rows | Sort-Object Model, Scenario, Pipeline, Run | Format-Table Model, Scenario, Pipeline, Run, Status, ExitCode, WallMs, PeakRssMB, AudioSec, RTF, AudioStatus, AudioPeak, AudioRms, Note -AutoSize
 
 Write-Host ""
 Write-Host "Benchmark Summary (averages of PASS runs)"

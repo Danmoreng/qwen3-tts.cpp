@@ -9,6 +9,10 @@ param(
     [int]$MaxTokens = 128,
     [int]$TopK = 1,
     [double]$Temperature = 0.0,
+    [double]$MinAudioPeak = 1e-4,
+    [double]$MinAudioRms = 1e-6,
+    [int]$MinNonZeroSamples = 16,
+    [switch]$AllowSilentAudio,
     [switch]$DisableCudaGraphs
 )
 
@@ -17,6 +21,8 @@ $ErrorActionPreference = "Stop"
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
+
+. (Join-Path $PSScriptRoot "wav_stats.ps1")
 
 function Find-FirstExisting([string[]]$paths) {
     foreach ($p in $paths) {
@@ -241,9 +247,20 @@ $logBody = @(
 ) -join "`r`n"
 Set-Content -Path $logPath -Value $logBody -Encoding UTF8
 
-$status = if ($result.ExitCode -eq 0 -and (Test-Path $wavPath)) { "PASS" } else { "FAIL" }
+$wavStats = if (Test-Path $wavPath) { Get-WavAudioStats -Path $wavPath } else { New-EmptyWavAudioStats -path $wavPath -errorMessage "file not found" }
+$audioStatus = Get-WavAudioQualityStatus -Stats $wavStats -MinPeak $MinAudioPeak -MinRms $MinAudioRms -MinNonZeroSamples $MinNonZeroSamples
+$status = if ($result.ExitCode -ne 0 -or -not (Test-Path $wavPath)) {
+    "FAIL"
+} elseif ($audioStatus -eq "OK" -or $AllowSilentAudio) {
+    "PASS"
+} else {
+    $audioStatus
+}
 $wavBytes = if (Test-Path $wavPath) { (Get-Item $wavPath).Length } else { 0 }
 $commit = Get-GitCommit -repoRoot $repoRoot
+if ($null -eq $timing.AudioSec -and $wavStats.Valid) {
+    $timing.AudioSec = $wavStats.DurationSec
+}
 
 $current = [PSCustomObject]([ordered]@{
     Timestamp   = $timestamp
@@ -258,6 +275,10 @@ $current = [PSCustomObject]([ordered]@{
     RTF         = Round-Nullable -value $timing.RTF -digits 3
     XRealtime   = Round-Nullable -value $timing.XRealtime -digits 3
     WavBytes    = $wavBytes
+    AudioStatus = $audioStatus
+    AudioPeak   = if ($wavStats.Valid) { [Math]::Round($wavStats.Peak, 8) } else { $null }
+    AudioRms    = if ($wavStats.Valid) { [Math]::Round($wavStats.Rms, 8) } else { $null }
+    AudioNonZeroSamples = if ($wavStats.Valid) { $wavStats.NonZeroSamples } else { $null }
     LogPath     = $logPath
     WavPath     = $wavPath
     Text        = $Text
@@ -281,6 +302,10 @@ $historyRow = [PSCustomObject]@{
     RTF        = $current.RTF
     XRealtime  = $current.XRealtime
     WavBytes   = $current.WavBytes
+    AudioStatus = $current.AudioStatus
+    AudioPeak   = $current.AudioPeak
+    AudioRms    = $current.AudioRms
+    AudioNonZeroSamples = $current.AudioNonZeroSamples
     LogPath    = $current.LogPath
     WavPath    = $current.WavPath
 }

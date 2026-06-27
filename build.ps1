@@ -4,6 +4,7 @@ param (
     [switch]$UseNinja,
     [switch]$EnableCuda,
     [switch]$EnableCudaGraphs,
+    [switch]$EnableTiming,
     [switch]$BuildAll,
     [switch]$RunSmokeTest,
     [ValidateSet("Debug", "Release")]
@@ -123,6 +124,7 @@ if ($configuredGenerator -and $configuredGenerator -ne $expectedGenerator) {
 
 $cudaFlag = if ($EnableCuda) { "ON" } else { "OFF" }
 $cudaGraphsFlag = if ($EnableCudaGraphs -or $EnableCuda) { "ON" } else { "OFF" }
+$timingFlag = if ($EnableTiming) { "ON" } else { "OFF" }
 
 $configureArgs = @(
     "-S", $ScriptDir,
@@ -135,7 +137,8 @@ $configureArgs = @(
     "-DQWEN3_TTS_BUILD_SHARED=OFF",
     "-DQWEN3_TTS_CUDA=$cudaFlag",
     "-DGGML_CUDA=$cudaFlag",
-    "-DGGML_CUDA_GRAPHS=$cudaGraphsFlag"
+    "-DGGML_CUDA_GRAPHS=$cudaGraphsFlag",
+    "-DQWEN3_TTS_TIMING=$timingFlag"
 )
 
 if ($isNinja) {

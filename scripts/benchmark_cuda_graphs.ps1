@@ -8,6 +8,10 @@ param(
     [int]$MaxTokens = 128,
     [int]$TopK = 1,
     [double]$Temperature = 0.0,
+    [double]$MinAudioPeak = 1e-4,
+    [double]$MinAudioRms = 1e-6,
+    [int]$MinNonZeroSamples = 16,
+    [switch]$AllowSilentAudio,
     [string]$ModelF16 = "qwen3-tts-1.7b-base-f16.gguf",
     [string]$ModelQ80 = "qwen3-tts-1.7b-base-q8_0.gguf",
     [string]$ModelQ4K = "qwen3-tts-1.7b-base-q4_k.gguf"
@@ -18,6 +22,8 @@ $ErrorActionPreference = "Stop"
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
+
+. (Join-Path $PSScriptRoot "wav_stats.ps1")
 
 function Find-FirstExisting([string[]]$paths) {
     foreach ($p in $paths) {
@@ -159,6 +165,10 @@ try {
                 AudioSec  = ""
                 RTF       = ""
                 XRealtime = ""
+                AudioStatus = ""
+                AudioPeak = ""
+                AudioRms = ""
+                AudioNonZeroSamples = ""
                 LogPath   = $logPath
                 WavPath   = $wavPath
             })
@@ -200,7 +210,18 @@ try {
         ) -join "`r`n"
         Set-Content -Path $logPath -Value $logBody -Encoding UTF8
 
-        $status = if ($res.ExitCode -eq 0 -and (Test-Path $wavPath)) { "PASS" } else { "FAIL" }
+        $wavStats = if (Test-Path $wavPath) { Get-WavAudioStats -Path $wavPath } else { New-EmptyWavAudioStats -path $wavPath -errorMessage "file not found" }
+        $audioStatus = Get-WavAudioQualityStatus -Stats $wavStats -MinPeak $MinAudioPeak -MinRms $MinAudioRms -MinNonZeroSamples $MinNonZeroSamples
+        $status = if ($res.ExitCode -ne 0 -or -not (Test-Path $wavPath)) {
+            "FAIL"
+        } elseif ($audioStatus -eq "OK" -or $AllowSilentAudio) {
+            "PASS"
+        } else {
+            $audioStatus
+        }
+        if ($null -eq $timing.AudioSec -and $wavStats.Valid) {
+            $timing.AudioSec = $wavStats.DurationSec
+        }
 
         $results.Add([PSCustomObject]@{
             Run       = $run.Name
@@ -214,6 +235,10 @@ try {
             AudioSec  = if ($null -ne $timing.AudioSec) { [Math]::Round($timing.AudioSec, 3) } else { $null }
             RTF       = if ($null -ne $timing.RTF) { [Math]::Round($timing.RTF, 3) } else { $null }
             XRealtime = if ($null -ne $timing.XRealtime) { [Math]::Round($timing.XRealtime, 3) } else { $null }
+            AudioStatus = $audioStatus
+            AudioPeak = if ($wavStats.Valid) { [Math]::Round($wavStats.Peak, 8) } else { $null }
+            AudioRms = if ($wavStats.Valid) { [Math]::Round($wavStats.Rms, 8) } else { $null }
+            AudioNonZeroSamples = if ($wavStats.Valid) { $wavStats.NonZeroSamples } else { $null }
             LogPath   = $logPath
             WavPath   = $wavPath
         })
@@ -229,13 +254,13 @@ finally {
 
 $csvPath = Join-Path $resolvedOutputDir "benchmark_summary.csv"
 $results |
-    Select-Object Run, Model, Graphs, Status, ExitCode, TotalMs, GenMs, DecodeMs, AudioSec, RTF, XRealtime, LogPath, WavPath |
+    Select-Object Run, Model, Graphs, Status, ExitCode, TotalMs, GenMs, DecodeMs, AudioSec, RTF, XRealtime, AudioStatus, AudioPeak, AudioRms, AudioNonZeroSamples, LogPath, WavPath |
     Export-Csv -NoTypeInformation -Encoding UTF8 -Path $csvPath
 
 Write-Host ""
 Write-Host "Benchmark Summary" -ForegroundColor Cyan
 $results |
-    Select-Object Run, Model, Graphs, Status, ExitCode, TotalMs, GenMs, DecodeMs, AudioSec, RTF, XRealtime |
+    Select-Object Run, Model, Graphs, Status, ExitCode, TotalMs, GenMs, DecodeMs, AudioSec, RTF, XRealtime, AudioStatus, AudioPeak, AudioRms |
     Format-Table -AutoSize
 
 Write-Host ""

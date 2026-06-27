@@ -103,8 +103,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
         gate = ggml_silu(ctx0, gate);
         cur = ggml_mul(ctx0, gate, up);
 
-        struct ggml_tensor * ffn_down_f32 = ggml_cast(ctx0, layer.ffn_down, GGML_TYPE_F32);
-        cur = ggml_mul_mat(ctx0, ffn_down_f32, cur);
+        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }
@@ -270,8 +269,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
         gate = ggml_silu(ctx0, gate);
         cur = ggml_mul(ctx0, gate, up);
 
-        struct ggml_tensor * ffn_down_f32 = ggml_cast(ctx0, layer.ffn_down, GGML_TYPE_F32);
-        cur = ggml_mul_mat(ctx0, ffn_down_f32, cur);
+        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }
@@ -458,8 +456,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
         gate = ggml_silu(ctx0, gate);
         cur = ggml_mul(ctx0, gate, up);
 
-        struct ggml_tensor * ffn_down_f32 = ggml_cast(ctx0, layer.ffn_down, GGML_TYPE_F32);
-        cur = ggml_mul_mat(ctx0, ffn_down_f32, cur);
+        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }
