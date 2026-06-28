@@ -9,6 +9,12 @@ and 24 kHz waveform decoding without Python or PyTorch at inference time.
 Windows with CUDA is the primary tested target. Linux uses the standard CMake
 build path and the same GGML backend options.
 
+## Desktop UI
+
+If you prefer a graphical interface, [Qwen-TTS Studio](https://github.com/Danmoreng/qwen-tts-studio)
+wraps this runtime in a desktop app with model management, voice presets,
+voice cloning, backend selection, and Windows/Linux packaging.
+
 ## Features
 
 - End-to-end Qwen3-TTS inference in C++17
