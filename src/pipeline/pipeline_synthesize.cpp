@@ -90,11 +90,6 @@ tts_result Qwen3TTS::synthesize(const std::string & text,
     }
 
     const std::string & model_type = transformer_.get_config().tts_model_type;
-    if (model_type == "base") {
-        result.error_msg = "Base model requires --reference or --speaker-embedding; unconditioned synthesis has no speaker voice";
-        return result;
-    }
-
     if (model_type == "custom_voice") {
         result.error_msg = "CustomVoice model requires --speaker, --reference, or --speaker-embedding";
         return result;

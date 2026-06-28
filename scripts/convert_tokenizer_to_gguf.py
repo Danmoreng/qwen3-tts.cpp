@@ -244,7 +244,11 @@ class Qwen3TTSTokenizerConverter:
                 if len(groups) == 1:
                     return template.format(groups[0])
                 elif len(groups) == 2:
-                    return template.format(groups[0], groups[1])
+                    # Serveurperso/koboldcpp-style GGUFs number the three
+                    # residual units within each decoder block as 0, 1, 2.
+                    # HF module indices are 2, 3, 4 because block.0 is Snake
+                    # and block.1 is the transposed convolution.
+                    return template.format(groups[0], str(int(groups[1]) - 2))
                 return None
 
         return None
@@ -419,6 +423,11 @@ class Qwen3TTSTokenizerConverter:
         writer.add_uint32(f"{arch}.codebook_size", self.encoder_codebook_size)
         writer.add_uint32(f"{arch}.sample_rate", self.sample_rate)
         writer.add_float32(f"{arch}.frame_rate", self.frame_rate)
+        writer.add_uint32(f"{arch}.input_sample_rate", self.config.get("input_sample_rate", self.sample_rate))
+        writer.add_uint32(f"{arch}.output_sample_rate", self.config.get("output_sample_rate", self.sample_rate))
+        writer.add_uint32(f"{arch}.decode_upsample_rate", self.config.get("decode_upsample_rate", 1920))
+        writer.add_uint32(f"{arch}.encode_downsample_rate", self.config.get("encode_downsample_rate", 1920))
+        writer.add_uint32(f"{arch}.encoder_valid_num_quantizers", self.encoder_valid_quantizers)
         
         # Encoder parameters
         writer.add_uint32(f"{arch}.encoder.hidden_size", self.encoder_hidden_size)
@@ -434,10 +443,39 @@ class Qwen3TTSTokenizerConverter:
         writer.add_uint32(f"{arch}.decoder.num_heads", self.decoder_num_heads)
         writer.add_uint32(f"{arch}.decoder.latent_dim", self.decoder_latent_dim)
         writer.add_uint32(f"{arch}.decoder.codebook_dim", self.decoder_codebook_dim)
+        writer.add_uint32(f"{arch}.decoder.codebook_size", self.decoder_codebook_size)
+        writer.add_uint32(f"{arch}.decoder.decoder_dim", self.config.get("decoder_config", {}).get("decoder_dim", 1536))
+        writer.add_uint32(f"{arch}.decoder.intermediate_size", self.config.get("decoder_config", {}).get("intermediate_size", 1024))
+        writer.add_uint32(f"{arch}.decoder.head_dim", self.config.get("decoder_config", {}).get("head_dim", 64))
+        writer.add_uint32(f"{arch}.decoder.num_attention_heads", self.decoder_num_heads)
+        writer.add_uint32(f"{arch}.decoder.num_key_value_heads", self.config.get("decoder_config", {}).get("num_key_value_heads", self.decoder_num_heads))
+        writer.add_uint32(f"{arch}.decoder.num_hidden_layers", self.decoder_num_layers)
+        writer.add_uint32(f"{arch}.decoder.num_quantizers", self.decoder_num_quantizers)
         writer.add_uint32(f"{arch}.decoder.semantic_codebook_size", self.decoder_semantic_codebook_size)
+        writer.add_uint32(
+            f"{arch}.decoder.num_semantic_quantizers",
+            self.config.get("decoder_config", {}).get("num_semantic_quantizers", 1),
+        )
+        writer.add_float32(f"{arch}.decoder.rms_norm_eps", self.config.get("decoder_config", {}).get("rms_norm_eps", 1e-5))
+        writer.add_float32(f"{arch}.decoder.rope_theta", float(self.config.get("decoder_config", {}).get("rope_theta", 10000.0)))
+        writer.add_uint32(f"{arch}.decoder.sliding_window", self.config.get("decoder_config", {}).get("sliding_window", 72))
+        writer.add_float32(
+            f"{arch}.decoder.layer_scale_initial_scale",
+            self.config.get("decoder_config", {}).get("layer_scale_initial_scale", 0.01),
+        )
+        writer.add_uint32(
+            f"{arch}.decoder.vector_quantization_hidden_dim",
+            self.config.get("decoder_config", {}).get("vector_quantization_hidden_dimension", 512),
+        )
+        writer.add_uint32(f"{arch}.decoder.codebook_dim_internal", self.encoder_codebook_dim)
         
         # Upsample rates as array
         writer.add_array(f"{arch}.upsample_rates", self.upsample_rates)
+        writer.add_array(f"{arch}.decoder.upsample_rates", self.upsample_rates)
+        writer.add_array(
+            f"{arch}.decoder.upsampling_ratios",
+            self.config.get("decoder_config", {}).get("upsampling_ratios", [2, 2]),
+        )
 
         logger.info("Added model metadata")
 

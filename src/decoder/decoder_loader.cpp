@@ -145,6 +145,21 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     struct gguf_context * gguf_ctx = loader.get_ctx();
     struct ggml_context * meta_ctx = loader.get_meta_ctx();
 
+    bool zero_based_decoder_residuals = false;
+    for (int64_t i = 0; i < n_tensors; ++i) {
+        const char * name = loader.get_tensor_name(i);
+        if (!name) {
+            continue;
+        }
+        int blk_idx = 0;
+        int res_idx = 0;
+        if (sscanf(name, "tok_dec.dec.%d.res.%d.", &blk_idx, &res_idx) == 2 &&
+            blk_idx >= 1 && blk_idx <= 4 && res_idx >= 0 && res_idx <= 1) {
+            zero_based_decoder_residuals = true;
+            break;
+        }
+    }
+
     for (int64_t i = 0; i < n_tensors; ++i) {
         const char * name = loader.get_tensor_name(i);
         if (!name || strncmp(name, "tok_dec.", 8) != 0) {
@@ -201,6 +216,13 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
             int blk_idx, res_idx, cb_idx, n = 0;
             char suffix[64];
             const size_t name_len = strlen(name);
+            const auto map_res_idx = [zero_based_decoder_residuals](int idx) -> int {
+                if (zero_based_decoder_residuals) {
+                    return (idx >= 0 && idx <= 2) ? idx : -1;
+                }
+                if (idx >= 2 && idx <= 4) return idx - 2;
+                return -1;
+            };
 
             #define MATCH1(fmt, var) (sscanf(name, fmt "%n", &var, &n) == 1 && (size_t) n == name_len)
             #define MATCH2(fmt, v1, v2) (sscanf(name, fmt "%n", &v1, &v2, &n) == 2 && (size_t) n == name_len)
@@ -272,36 +294,44 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
             } else if (MATCH1("tok_dec.dec.%d.conv_t.bias", blk_idx)) {
                 if (blk_idx >= 1 && blk_idx <= 4) model.dec_blocks[blk_idx - 1].conv_t_b = tensor;
             } else if (MATCH2("tok_dec.dec.%d.res.%d.act1.alpha", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].act1_alpha = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].act1_alpha = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.act1.beta", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].act1_beta = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].act1_beta = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.conv1.weight", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].conv1_w = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].conv1_w = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.conv1.bias", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].conv1_b = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].conv1_b = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.act2.alpha", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].act2_alpha = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].act2_alpha = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.act2.beta", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].act2_beta = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].act2_beta = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.conv2.weight", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].conv2_w = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].conv2_w = tensor;
                 }
             } else if (MATCH2("tok_dec.dec.%d.res.%d.conv2.bias", blk_idx, res_idx)) {
-                if (blk_idx >= 1 && blk_idx <= 4 && res_idx >= 2 && res_idx <= 4) {
-                    model.dec_blocks[blk_idx - 1].res[res_idx - 2].conv2_b = tensor;
+                const int mapped_res_idx = map_res_idx(res_idx);
+                if (blk_idx >= 1 && blk_idx <= 4 && mapped_res_idx >= 0) {
+                    model.dec_blocks[blk_idx - 1].res[mapped_res_idx].conv2_b = tensor;
                 }
             }
 

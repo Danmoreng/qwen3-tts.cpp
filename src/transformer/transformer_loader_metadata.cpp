@@ -303,6 +303,47 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
         }
     }
 
+    if (cfg.speaker_id_map.empty()) {
+        const int64_t names_idx = gguf_find_key(ctx, "qwen3-tts.codec.speaker_names");
+        const int64_t ids_idx = gguf_find_key(ctx, "qwen3-tts.codec.speaker_ids");
+        if (names_idx >= 0 && ids_idx >= 0 &&
+            gguf_get_kv_type(ctx, names_idx) == GGUF_TYPE_ARRAY &&
+            gguf_get_kv_type(ctx, ids_idx) == GGUF_TYPE_ARRAY &&
+            gguf_get_arr_type(ctx, names_idx) == GGUF_TYPE_STRING) {
+            const size_t n_names = gguf_get_arr_n(ctx, names_idx);
+            const size_t n_ids = gguf_get_arr_n(ctx, ids_idx);
+            const size_t n = std::min(n_names, n_ids);
+            const enum gguf_type id_arr_type = gguf_get_arr_type(ctx, ids_idx);
+            const void * id_data = gguf_get_arr_data(ctx, ids_idx);
+
+            for (size_t i = 0; i < n; ++i) {
+                const char * raw_name = gguf_get_arr_str(ctx, names_idx, i);
+                if (!raw_name || raw_name[0] == '\0') {
+                    continue;
+                }
+
+                int32_t spk_id = -1;
+                if (id_arr_type == GGUF_TYPE_INT32 && id_data) {
+                    spk_id = ((const int32_t *) id_data)[i];
+                } else if (id_arr_type == GGUF_TYPE_UINT32 && id_data) {
+                    spk_id = (int32_t) ((const uint32_t *) id_data)[i];
+                } else {
+                    continue;
+                }
+                if (spk_id < 0) {
+                    continue;
+                }
+
+                cfg.speaker_id_map[transformer_internal::normalize_speaker_name(raw_name)] = spk_id;
+            }
+        }
+    }
+
+    if (cfg.tts_model_type == "base" && !cfg.speaker_id_map.empty()) {
+        cfg.tts_model_type = "custom_voice";
+        fprintf(stderr, "  TTS model type inferred from speaker metadata: %s\n", cfg.tts_model_type.c_str());
+    }
+
     if (!cfg.speaker_id_map.empty()) {
         fprintf(stderr, "  CustomVoice speakers loaded: %zu\n", cfg.speaker_id_map.size());
     }
