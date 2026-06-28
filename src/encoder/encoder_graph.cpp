@@ -14,6 +14,22 @@ struct ggml_tensor * apply_reflect_pad_1d(struct ggml_context * ctx,
     return ggml_pad_reflect_1d(ctx, x, pad, pad);
 }
 
+struct ggml_tensor * as_f16_conv_weight(struct ggml_context * ctx,
+                                        struct ggml_tensor * w,
+                                        const char * debug_name = nullptr) {
+    if (!w || w->type == GGML_TYPE_F16) {
+        return w;
+    }
+
+    struct ggml_tensor * cast = ggml_cast(ctx, w, GGML_TYPE_F16);
+    if (debug_name) {
+        char name[64];
+        snprintf(name, sizeof(name), "%s_weight_f16", debug_name);
+        ggml_set_name(cast, name);
+    }
+    return cast;
+}
+
 struct ggml_tensor * apply_conv1d(struct ggml_context * ctx,
                                   struct ggml_tensor * w,
                                   struct ggml_tensor * b,
@@ -29,7 +45,8 @@ struct ggml_tensor * apply_conv1d(struct ggml_context * ctx,
         actual_pad = 0;
     }
 
-    struct ggml_tensor * y = ggml_conv_1d(ctx, w, input, stride, actual_pad, dilation);
+    struct ggml_tensor * conv_w = as_f16_conv_weight(ctx, w, debug_name);
+    struct ggml_tensor * y = ggml_conv_1d(ctx, conv_w, input, stride, actual_pad, dilation);
     if (debug_name) {
         char name[64];
         snprintf(name, sizeof(name), "%s_conv", debug_name);
@@ -83,12 +100,7 @@ struct ggml_cgraph * encoder_internal::ops::build_graph(AudioTokenizerEncoder & 
     struct ggml_tensor * mel_padded = apply_reflect_pad_1d(ctx0, cur, 2);
     ggml_set_name(mel_padded, "mel_padded");
 
-    cur = ggml_conv_1d(ctx0, model.conv0_w, mel_padded, 1, 0, 1);
-    ggml_set_name(cur, "conv0_conv");
-    if (model.conv0_b) {
-        const int64_t oc = cur->ne[1];
-        cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model.conv0_b, 1, oc, 1));
-    }
+    cur = apply_conv1d(ctx0, model.conv0_w, model.conv0_b, mel_padded, 1, 0, 1, "conv0", false);
     ggml_set_name(cur, "conv0_pre_relu");
     cur = ggml_relu(ctx0, cur);
     ggml_set_name(cur, "conv0_out");

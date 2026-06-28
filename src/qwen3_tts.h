@@ -213,6 +213,7 @@ private:
     bool low_mem_mode_ = false;
     std::string error_msg_;
     std::string tts_model_path_;
+    std::string speaker_encoder_model_path_;
     std::string tokenizer_model_path_;
     std::string decoder_model_path_;
     tts_progress_callback_t progress_callback_;

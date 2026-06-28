@@ -3,8 +3,10 @@
 #include "pipeline/pipeline_internal.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -19,6 +21,69 @@ namespace fs = std::filesystem;
 using pipeline_internal::configure_ggml_logging_once;
 using pipeline_internal::get_time_ms;
 using pipeline_internal::log_memory_usage;
+
+namespace {
+
+std::string to_lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return (char) std::tolower(c); });
+    return value;
+}
+
+bool has_speaker_encoder_tensors(const std::string & model_path) {
+    GGUFLoader loader;
+    if (!loader.open(model_path)) {
+        return false;
+    }
+    const int64_t n_tensors = loader.get_n_tensors();
+    for (int64_t i = 0; i < n_tensors; ++i) {
+        const char * name = loader.get_tensor_name(i);
+        if (name && strncmp(name, "spk_enc.", 8) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string find_speaker_encoder_model(const std::string & tts_model_path,
+                                       const std::vector<fs::path> & tts_candidates,
+                                       int32_t expected_embedding_dim) {
+    if (has_speaker_encoder_tensors(tts_model_path)) {
+        return tts_model_path;
+    }
+
+    const std::string size_marker = expected_embedding_dim >= 2048 ? "1.7b" : "0.6b";
+    int best_score = -1;
+    std::string best_path;
+
+    for (const auto & candidate : tts_candidates) {
+        const std::string filename = to_lower(candidate.filename().string());
+        if (filename.find("tokenizer") != std::string::npos ||
+            filename.find(size_marker) == std::string::npos ||
+            filename.find("base") == std::string::npos) {
+            continue;
+        }
+
+        const std::string path = candidate.string();
+        if (!has_speaker_encoder_tensors(path)) {
+            continue;
+        }
+
+        int score = 0;
+        if (filename.find("qwen-talker") != std::string::npos) score += 40;
+        if (filename.find("q8_0") != std::string::npos) score += 30;
+        if (filename.find("bf16") != std::string::npos) score += 20;
+        if (filename.find("f16") != std::string::npos) score += 10;
+        if (score > best_score) {
+            best_score = score;
+            best_path = path;
+        }
+    }
+
+    return best_path;
+}
+
+} // namespace
 
 bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & model_name) {
     configure_ggml_logging_once();
@@ -39,6 +104,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     std::string tts_model_path;
     std::string tokenizer_model_path;
     std::vector<fs::path> tokenizer_candidates;
+    std::vector<fs::path> tts_candidates;
 
     if (fs::exists(model_dir) && fs::is_directory(model_dir)) {
         for (const auto & entry : fs::directory_iterator(model_dir)) {
@@ -55,6 +121,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
                 } else if (filename_lower.find("qwen3-tts") != std::string::npos ||
                            filename_lower.find("qwen-talker") != std::string::npos ||
                            filename_lower.find("full") != std::string::npos) {
+                    tts_candidates.push_back(entry.path());
                     if (!model_name.empty()) {
                         if (filename.find(model_name) != std::string::npos) {
                             tts_model_path = entry.path().string();
@@ -127,6 +194,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     fprintf(stderr, "  Tokenizer model path: %s\n", tokenizer_model_path.c_str());
 
     tts_model_path_ = tts_model_path;
+    speaker_encoder_model_path_.clear();
     tokenizer_model_path_ = tokenizer_model_path;
     decoder_model_path_ = tokenizer_model_path;
     encoder_loaded_ = false;
@@ -171,6 +239,11 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     fprintf(stderr, "  TTS transformer loaded: hidden_size=%d, n_layers=%d (%lld ms)\n",
             transformer_.get_config().hidden_size, transformer_.get_config().n_layers,
             (long long) (get_time_ms() - t_transformer_start));
+    speaker_encoder_model_path_ = find_speaker_encoder_model(
+        tts_model_path, tts_candidates, transformer_.get_config().hidden_size);
+    if (!speaker_encoder_model_path_.empty() && speaker_encoder_model_path_ != tts_model_path) {
+        fprintf(stderr, "  Speaker encoder provider: %s\n", speaker_encoder_model_path_.c_str());
+    }
     log_memory_usage("load/after-transformer");
 
     if (!low_mem_mode_) {
@@ -220,7 +293,7 @@ tts_model_capabilities Qwen3TTS::get_model_capabilities() const {
     caps.speaker_embedding_dim = cfg.hidden_size;
     caps.speaker_count = (int32_t) cfg.speaker_id_map.size();
     caps.supports_named_speakers = caps.speaker_count > 0;
-    caps.supports_voice_clone = (cfg.tts_model_type == "base");
+    caps.supports_voice_clone = !speaker_encoder_model_path_.empty();
 
     if (cfg.has_supports_instruction) {
         caps.supports_instruction = cfg.supports_instruction;

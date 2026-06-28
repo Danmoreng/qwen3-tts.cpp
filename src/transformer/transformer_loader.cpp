@@ -12,6 +12,18 @@
 
 namespace qwen3_tts {
 
+namespace {
+
+std::string filename_lower(const std::string & path) {
+    size_t slash = path.find_last_of("/\\");
+    std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return (char) std::tolower(c); });
+    return name;
+}
+
+} // namespace
+
 void TTSTransformer::unload_model() {
     free_tts_kv_cache(impl_->state.cache);
     free_tts_kv_cache(impl_->state.code_pred_cache);
@@ -96,6 +108,17 @@ bool TTSTransformer::load_model(const std::string & model_path) {
         gguf_free(ctx);
         if (meta_ctx) ggml_free(meta_ctx);
         return false;
+    }
+    {
+        const std::string name = filename_lower(model_path);
+        auto & cfg = impl_->model.config;
+        if (name.find("customvoice") != std::string::npos && cfg.tts_model_type == "base") {
+            cfg.tts_model_type = "custom_voice";
+            fprintf(stderr, "  TTS model type inferred from filename: %s\n", cfg.tts_model_type.c_str());
+        } else if (name.find("voicedesign") != std::string::npos && cfg.tts_model_type == "base") {
+            cfg.tts_model_type = "voice_design";
+            fprintf(stderr, "  TTS model type inferred from filename: %s\n", cfg.tts_model_type.c_str());
+        }
     }
 
     if (!transformer_internal::ops::create_tensors(*this, ctx)) {

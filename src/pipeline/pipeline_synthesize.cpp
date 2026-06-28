@@ -159,12 +159,12 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         }
     } else {
         if (!encoder_loaded_) {
-            if (tts_model_path_.empty()) {
+            if (speaker_encoder_model_path_.empty()) {
                 result.error_msg = "Internal error: missing TTS model path for lazy encoder load";
                 return result;
             }
             int64_t t_encoder_load_start = get_time_ms();
-            if (!audio_encoder_.load_model(tts_model_path_)) {
+            if (!audio_encoder_.load_model(speaker_encoder_model_path_)) {
                 result.error_msg = "Failed to load speaker encoder: " + audio_encoder_.get_error();
                 return result;
             }
@@ -292,12 +292,12 @@ bool Qwen3TTS::extract_speaker_embedding(const std::string & reference_audio,
     }
 
     if (!encoder_loaded_) {
-        if (tts_model_path_.empty()) {
+        if (speaker_encoder_model_path_.empty()) {
             error_msg_ = "Internal error: missing TTS model path for lazy encoder load";
             return false;
         }
         int64_t t_encoder_load_start = get_time_ms();
-        if (!audio_encoder_.load_model(tts_model_path_)) {
+        if (!audio_encoder_.load_model(speaker_encoder_model_path_)) {
             error_msg_ = "Failed to load speaker encoder: " + audio_encoder_.get_error();
             return false;
         }

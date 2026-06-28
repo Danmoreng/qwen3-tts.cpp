@@ -18,8 +18,12 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
         return false;
     }
 
-    model.config.sample_rate = loader.get_u32("qwen3-tts.speaker_encoder.sample_rate", 24000);
-    model.config.embedding_dim = loader.get_u32("qwen3-tts.speaker_encoder.embedding_length", 1024);
+    model.config.sample_rate = loader.get_u32(
+        "qwen3-tts.speaker_encoder.sample_rate",
+        loader.get_u32("qwen3-tts.spk_enc.sample_rate", 24000));
+    model.config.embedding_dim = loader.get_u32(
+        "qwen3-tts.speaker_encoder.embedding_length",
+        loader.get_u32("qwen3-tts.spk_enc.embedding_length", 1024));
 
     const int64_t n_tensors = loader.get_n_tensors();
     int spk_tensor_count = 0;
@@ -62,38 +66,11 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
             continue;
         }
 
-        std::string sname(name);
-        const bool is_weight = sname.size() >= 7 &&
-            sname.compare(sname.size() - 7, 7, ".weight") == 0;
-        const bool requires_f16_conv =
-            sname == "spk_enc.conv0.weight" ||
-            sname == "spk_enc.mfa.weight" ||
-            sname == "spk_enc.asp.conv.weight" ||
-            sname == "spk_enc.asp.tdnn.weight" ||
-            sname == "spk_enc.fc.weight" ||
-            sname.find(".tdnn") != std::string::npos ||
-            sname.find(".res2net.") != std::string::npos ||
-            sname.find(".se.conv") != std::string::npos;
-        if (is_weight && requires_f16_conv && meta_tensor->type != GGML_TYPE_F16) {
-            error_msg_ = "Speaker encoder tensor " + sname +
-                " has unsupported type " + ggml_type_name(meta_tensor->type) +
-                "; use a precomputed speaker embedding or an F16 speaker encoder model";
-            return false;
-        }
-        if (is_weight &&
-            !requires_f16_conv &&
-            meta_tensor->type != GGML_TYPE_F16 &&
-            meta_tensor->type != GGML_TYPE_F32) {
-            error_msg_ = "Speaker encoder tensor " + sname +
-                " has unsupported type " + ggml_type_name(meta_tensor->type) +
-                "; use a precomputed speaker embedding or an F16 speaker encoder model";
-            return false;
-        }
-
         struct ggml_tensor * tensor = ggml_dup_tensor(model.ctx, meta_tensor);
         ggml_set_name(tensor, name);
         model.tensors[name] = tensor;
 
+        std::string sname(name);
         if (sname == "spk_enc.conv0.weight") {
             model.conv0_w = tensor;
         } else if (sname == "spk_enc.conv0.bias") {
