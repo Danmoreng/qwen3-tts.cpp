@@ -126,7 +126,8 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
     }
 
     if (!load_tensor_data_from_file(model_path, gguf_ctx, model.ctx,
-                                    model.tensors, model.buffer, error_msg_)) {
+                                    model.tensors, model.buffer, error_msg_,
+                                    get_preferred_backend_type())) {
         return false;
     }
 

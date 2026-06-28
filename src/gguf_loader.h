@@ -8,8 +8,15 @@
 #include <map>
 #include <vector>
 #include <memory>
+#include <cstdint>
 
 namespace qwen3_tts {
+
+enum class backend_preference {
+    auto_select = 0,
+    cpu = 1,
+    cuda = 2,
+};
 
 // Generic GGUF model loader class
 // This is a simplified loader that can be extended for specific model types
@@ -76,6 +83,11 @@ bool load_tensor_data_from_file(
 // Helper to initialize backend with GPU preference and CPU fallback
 ggml_backend_t init_preferred_backend(const char * component_name, std::string * error_msg);
 void release_preferred_backend(ggml_backend_t backend);
+bool set_backend_preference(backend_preference preference);
+backend_preference get_backend_preference();
+enum ggml_backend_dev_type get_preferred_backend_type();
+int32_t get_compiled_backend_mask();
+std::string get_active_backend_name();
 
 // Helper function to free model resources
 void free_ggml_resources(struct ggml_context * ctx, ggml_backend_buffer_t buffer);

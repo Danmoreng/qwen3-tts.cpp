@@ -153,6 +153,28 @@ JNIEXPORT void JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeFree(JNI
     qwen3_tts_free(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr));
 }
 
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSetBackendPreference(
+    JNIEnv* env, jobject thiz, jint preference
+) {
+    return qwen3_tts_set_backend_preference(static_cast<int32_t>(preference)) != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetCompiledBackendMask(
+    JNIEnv* env, jobject thiz
+) {
+    return static_cast<jint>(qwen3_tts_get_compiled_backend_mask());
+}
+
+JNIEXPORT jstring JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetActiveBackendName(
+    JNIEnv* env, jobject thiz
+) {
+    char* name = qwen3_tts_get_active_backend_name();
+    if (!name) return nullptr;
+    jstring result = env->NewStringUTF(name);
+    qwen3_tts_free_string(name);
+    return result;
+}
+
 JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoadModels(
     JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring model_dir, jstring model_name
 ) {

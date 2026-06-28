@@ -74,6 +74,9 @@ function(qwen3_link_ggml target_name)
             target_link_libraries(${target_name} PUBLIC ggml-cpu)
         endif()
     endif()
+    if(QWEN3_TTS_CUDA)
+        target_compile_definitions(${target_name} PUBLIC QWEN3_TTS_CUDA_ENABLED)
+    endif()
 endfunction()
 
 # Text tokenizer library

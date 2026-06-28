@@ -595,7 +595,8 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
     }
 
     if (!load_tensor_data_from_file(tokenizer_model_path, loader.get_ctx(), model.ctx,
-                                    model.tensors, model.buffer, error_msg_)) {
+                                    model.tensors, model.buffer, error_msg_,
+                                    get_preferred_backend_type())) {
         return false;
     }
 

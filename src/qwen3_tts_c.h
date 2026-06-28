@@ -56,6 +56,12 @@ typedef enum {
     QWEN3_TTS_MODEL_KIND_VOICE_DESIGN = 3,
 } qwen3_tts_model_kind_t;
 
+typedef enum {
+    QWEN3_TTS_BACKEND_AUTO = 0,
+    QWEN3_TTS_BACKEND_CPU = 1,
+    QWEN3_TTS_BACKEND_CUDA = 2,
+} qwen3_tts_backend_preference_t;
+
 typedef struct {
     int32_t loaded;
     int32_t supports_voice_clone;
@@ -96,6 +102,9 @@ typedef int32_t (*qwen3_tts_audio_chunk_callback)(
 
 QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
 QWEN3_TTS_API void qwen3_tts_free(qwen3_tts_context_t* ctx);
+QWEN3_TTS_API int32_t qwen3_tts_set_backend_preference(int32_t preference);
+QWEN3_TTS_API int32_t qwen3_tts_get_compiled_backend_mask();
+QWEN3_TTS_API char* qwen3_tts_get_active_backend_name();
 
 QWEN3_TTS_API int32_t qwen3_tts_load_models(qwen3_tts_context_t* ctx, const char* model_dir);
 QWEN3_TTS_API int32_t qwen3_tts_load_models_with_name(

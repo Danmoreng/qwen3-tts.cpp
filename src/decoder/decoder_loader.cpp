@@ -382,7 +382,7 @@ bool AudioTokenizerDecoder::load_model_impl(const std::string & model_path,
 
     if (!load_tensor_data_from_file(model_path, gguf_ctx, model.ctx,
                                     model.tensors, model.buffer, error_msg,
-                                    GGML_BACKEND_DEVICE_TYPE_IGPU)) {
+                                    get_preferred_backend_type())) {
         return false;
     }
 

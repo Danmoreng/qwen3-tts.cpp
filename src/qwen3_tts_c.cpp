@@ -1,5 +1,6 @@
 #include "qwen3_tts_c.h"
 #include "qwen3_tts.h"
+#include "gguf_loader.h"
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -93,6 +94,25 @@ qwen3_tts_context_t* qwen3_tts_init() {
 
 void qwen3_tts_free(qwen3_tts_context_t* ctx) {
     delete ctx;
+}
+
+int32_t qwen3_tts_set_backend_preference(int32_t preference) {
+    qwen3_tts::backend_preference native_preference = qwen3_tts::backend_preference::auto_select;
+    if (preference == QWEN3_TTS_BACKEND_CPU) {
+        native_preference = qwen3_tts::backend_preference::cpu;
+    } else if (preference == QWEN3_TTS_BACKEND_CUDA) {
+        native_preference = qwen3_tts::backend_preference::cuda;
+    }
+    return qwen3_tts::set_backend_preference(native_preference) ? 1 : 0;
+}
+
+int32_t qwen3_tts_get_compiled_backend_mask() {
+    return qwen3_tts::get_compiled_backend_mask();
+}
+
+char* qwen3_tts_get_active_backend_name() {
+    const std::string name = qwen3_tts::get_active_backend_name();
+    return strdup(name.c_str());
 }
 
 int32_t qwen3_tts_load_models(qwen3_tts_context_t* ctx, const char* model_dir) {
