@@ -45,7 +45,8 @@ precision by the quantization policy.
 These numbers are local Windows CUDA measurements from the framework comparison
 harness. Each row is the average of three voice-clone runs. Speaker encoding is
 measured as a separate encode phase, and speech synthesis is measured with a
-precomputed speaker embedding.
+precomputed speaker embedding. The GGUF Q8_0 rows were refreshed on 2026-06-28
+after the Serveurperso-compatible GGUF loader/converter update.
 
 Test setup:
 
@@ -60,8 +61,8 @@ Test setup:
 
 | Engine | Model / dtype | Speaker encode | Speech synthesis | Audio | RTF |
 |--------|---------------|----------------|------------------|-------|-----|
-| `qwen3-tts.cpp` | GGUF F16 | 2.029 s | 1.503 s | 6.907 s | 4.600 |
-| `ServeurpersoCom/qwentts.cpp` | GGUF Q8_0 | 2.035 s | 3.492 s | 6.960 s | 2.001 |
+| `qwen3-tts.cpp` | GGUF Q8_0 | 2.790 s | 1.470 s | 6.450 s | 4.400 |
+| `ServeurpersoCom/qwentts.cpp` | GGUF Q8_0 | 2.080 s | 3.260 s | 6.720 s | 2.060 |
 | `audio.cpp` | HF weights, F16 | 1.380 s | 5.888 s | 5.600 s | 0.953 |
 | `faster-qwen3-tts` | HF weights, BF16 | 11.466 s | 17.832 s | 7.120 s | 0.401 |
 | Official Python | HF weights, BF16 | 12.160 s | 22.550 s | 6.800 s | 0.303 |
@@ -70,8 +71,8 @@ Test setup:
 
 | Engine | Model / dtype | Speaker encode | Speech synthesis | Audio | RTF |
 |--------|---------------|----------------|------------------|-------|-----|
-| `qwen3-tts.cpp` | GGUF Q8_0 | 2.562 s | 1.104 s | 6.987 s | 6.345 |
-| `ServeurpersoCom/qwentts.cpp` | GGUF Q8_0 | 2.002 s | 4.281 s | 9.280 s | 2.169 |
+| `qwen3-tts.cpp` | GGUF Q8_0 | 1.970 s | 1.100 s | 6.160 s | 5.580 |
+| `ServeurpersoCom/qwentts.cpp` | GGUF Q8_0 | 2.040 s | 3.060 s | 6.480 s | 2.120 |
 | `audio.cpp` | HF weights, F32 | 1.275 s | 5.777 s | 5.920 s | 1.025 |
 | `faster-qwen3-tts` | HF weights, BF16 | 12.391 s | 17.358 s | 6.400 s | 0.369 |
 | Official Python | HF weights, BF16 | 12.919 s | 23.348 s | 7.360 s | 0.315 |
@@ -82,9 +83,11 @@ failed with non-finite sampler logits on this setup.
 The comparison harness is:
 
 ```powershell
-.\scripts\benchmark_frameworks.ps1 -Variant 1.7b-base -BenchmarkMode split -Runs 3
-.\scripts\benchmark_frameworks.ps1 -Variant 0.6b-base -BenchmarkMode split -Runs 3 `
-  -QwenCppModelName qwen3-tts-0.6b-base-q8_0-reconverted.gguf
+.\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso `
+  -Variant 1.7b-base -BenchmarkMode split -Runs 3
+.\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso `
+  -Variant 0.6b-base -BenchmarkMode split -Runs 3 `
+  -QwenCppModelName qwen-talker-0.6b-base-Q8_0.gguf
 ```
 
 ## Quick Start
@@ -179,12 +182,12 @@ Typical files:
 
 | File | Purpose |
 |------|---------|
-| `qwen3-tts-0.6b-f16.gguf` | 0.6B Base transformer |
-| `qwen3-tts-1.7b-base-f16.gguf` | 1.7B Base transformer |
-| `qwen3-tts-1.7b-customvoice-f16.gguf` | 1.7B CustomVoice transformer |
-| `qwen3-tts-tokenizer-f16.gguf` | Speech tokenizer / vocoder |
-| `qwen3-tts-*-q8_0.gguf` | Quantized transformer variant, if generated |
-| `qwen3-tts-*-q4_k_m.gguf` | K-quant transformer variant, if generated |
+| `qwen-talker-0.6b-base-Q8_0.gguf` | 0.6B Base talker |
+| `qwen-talker-1.7b-base-Q8_0.gguf` | 1.7B Base talker |
+| `qwen-talker-1.7b-customvoice-Q8_0.gguf` | 1.7B CustomVoice talker |
+| `qwen-tokenizer-12hz-Q8_0.gguf` | Speech tokenizer / vocoder |
+| `qwen-talker-*-BF16.gguf` | BF16 talker variant, if generated |
+| `qwen-talker-*-Q4_K_M.gguf` | K-quant talker variant, if generated |
 
 Manual conversion is still available:
 
@@ -193,20 +196,22 @@ huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base \
   --local-dir models/Qwen3-TTS-12Hz-0.6B-Base
 
 python scripts/convert_tts_to_gguf.py \
-  models/Qwen3-TTS-12Hz-0.6B-Base \
-  models/qwen3-tts-0.6b-f16.gguf
+  --input models/Qwen3-TTS-12Hz-0.6B-Base \
+  --output models/qwen-talker-0.6b-base-Q8_0.gguf \
+  --type q8_0
 
 python scripts/convert_tokenizer_to_gguf.py \
-  models/Qwen3-TTS-12Hz-0.6B-Base \
-  models/qwen3-tts-tokenizer-f16.gguf
+  --input models/Qwen3-TTS-12Hz-0.6B-Base \
+  --output models/qwen-tokenizer-12hz-Q8_0.gguf \
+  --type q8_0
 ```
 
 Quantize a converted transformer GGUF:
 
 ```bash
 ./build/qwen3-tts-quantize \
-  models/qwen3-tts-1.7b-base-f16.gguf \
-  models/qwen3-tts-1.7b-base-q8_0.gguf \
+  models/qwen-talker-1.7b-base-F32.gguf \
+  models/qwen-talker-1.7b-base-Q8_0.gguf \
   q8_0
 ```
 
@@ -227,10 +232,14 @@ Select a specific model:
 
 ```bash
 ./build/qwen3-tts-cli -m models \
-  --model-name qwen3-tts-1.7b-base-f16.gguf \
+  --model-name qwen-talker-1.7b-base-Q8_0.gguf \
   -t "The selected model is now running." \
   -o selected.wav
 ```
+
+Base talkers can synthesize without `--reference`, `--speaker`, or
+`--speaker-embedding`. Supplying a reference or embedding conditions the voice;
+omitting it uses the model's unconditioned Base prompt.
 
 Voice cloning from reference audio:
 
@@ -268,7 +277,7 @@ CustomVoice speaker:
 
 ```bash
 ./build/qwen3-tts-cli -m models \
-  --model-name qwen3-tts-1.7b-customvoice-f16.gguf \
+  --model-name qwen-talker-1.7b-customvoice-Q8_0.gguf \
   --speaker vivian \
   --instruct "Whispering, very soft and quiet voice." \
   -t "This is a styled CustomVoice example." \
@@ -436,7 +445,7 @@ $env:QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES = "2"
 $env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS = "15"
 
 .\build\qwen3-tts-cli.exe -m .\models `
-  --model-name qwen3-tts-1.7b-base-f16.gguf `
+  --model-name qwen-talker-1.7b-base-Q8_0.gguf `
   -t "Hello." `
   --temperature 0 `
   --top-k 0 `

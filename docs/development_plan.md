@@ -28,7 +28,7 @@ Maintain a single, current plan that separates:
 | Python vs C++ trace tooling | Implemented | `scripts/dump_python_trace.py` and `scripts/debug_trace_report.py` allow frame/step-level parity checks. |
 | Windows 1.7B CLI regression hook | Implemented | `scripts/run_all_tests.ps1` now supports optional 1.7B CLI checks (`-Require17B`, `-ModelName17`, `-Model17Speaker`). |
 | 1.7B instruction prompt parity | Implemented | C++ now routes `--instruct/--instruction` through separate instruction tokens (`encode_instruct` + transformer `instruct_tokens`), mirroring Python `instruct_ids` behavior and preventing read-aloud instruction regressions. |
-| 1.7B converter/regeneration baseline | Implemented | Team baseline now assumes regenerated `qwen3-tts-1.7b-f16.gguf` from current converter before runtime/debug comparisons. |
+| 1.7B converter/regeneration baseline | Implemented | Team baseline now assumes regenerated Serveurperso-compatible `qwen-talker-1.7b-base-Q8_0.gguf` from current converter before runtime/debug comparisons. |
 | Lightweight 1.7B deterministic gate | Implemented | A lightweight 1.7B regression check is now part of the active regression workflow. |
 
 ## Current State (Open / Needs Verification)

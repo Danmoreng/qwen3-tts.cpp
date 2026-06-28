@@ -7,6 +7,13 @@ namespace qwen3_tts {
 
 namespace {
 
+struct ggml_tensor * as_f16_conv_weight(struct ggml_context * ctx, struct ggml_tensor * w) {
+    if (!w || w->type == GGML_TYPE_F16) {
+        return w;
+    }
+    return ggml_cont(ctx, ggml_cast(ctx, w, GGML_TYPE_F16));
+}
+
 struct ggml_tensor * qwen_causal_trans_conv1d(struct ggml_context * ctx,
                                               struct ggml_tensor * w_perm,
                                               struct ggml_tensor * b,
@@ -185,7 +192,7 @@ struct ggml_tensor * decoder_internal::ops::apply_upsample_block(struct ggml_con
 
     if (block.dwconv_w) {
         x = ggml_pad_ext(ctx, x, 6, 0, 0, 0, 0, 0, 0, 0);
-        x = ggml_conv_1d_dw(ctx, block.dwconv_w, x, 1, 0, 1);
+        x = ggml_conv_1d_dw(ctx, as_f16_conv_weight(ctx, block.dwconv_w), x, 1, 0, 1);
         if (block.dwconv_b) {
             x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.dwconv_b, 1, channels, 1));
         }
@@ -237,7 +244,7 @@ struct ggml_tensor * decoder_internal::ops::apply_residual_block(struct ggml_con
     int64_t out_channels = block.conv1_w->ne[2];
     int padding = 6 * block.dilation;
     x = ggml_pad_ext(ctx, x, padding, 0, 0, 0, 0, 0, 0, 0);
-    x = ggml_conv_1d(ctx, block.conv1_w, x, 1, 0, block.dilation);
+    x = ggml_conv_1d(ctx, as_f16_conv_weight(ctx, block.conv1_w), x, 1, 0, block.dilation);
     if (block.conv1_b) {
         x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.conv1_b, 1, out_channels, 1));
     }
@@ -248,7 +255,7 @@ struct ggml_tensor * decoder_internal::ops::apply_residual_block(struct ggml_con
     }
 
     out_channels = block.conv2_w->ne[2];
-    x = ggml_conv_1d(ctx, block.conv2_w, x, 1, 0, 1);
+    x = ggml_conv_1d(ctx, as_f16_conv_weight(ctx, block.conv2_w), x, 1, 0, 1);
     if (block.conv2_b) {
         x = ggml_add(ctx, x, ggml_reshape_3d(ctx, block.conv2_b, 1, out_channels, 1));
     }

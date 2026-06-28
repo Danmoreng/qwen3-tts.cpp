@@ -5,8 +5,8 @@ One-shot model setup for qwen3-tts.cpp.
 This script downloads required Hugging Face model assets and generates all model
 artifacts needed by the final C++ pipeline:
 
-- models/qwen3-tts-0.6b-f16.gguf
-- models/qwen3-tts-tokenizer-f16.gguf
+- models/qwen-talker-0.6b-base-Q8_0.gguf
+- models/qwen-tokenizer-12hz-Q8_0.gguf
 - models/coreml/code_predictor.mlpackage (optional, macOS)
 
 Example:
@@ -188,7 +188,7 @@ def convert_gguf(
                 "--output",
                 str(out_tts),
                 "--type",
-                "f16",
+                "q8_0",
             ],
             cwd=REPO_ROOT,
         )
@@ -205,7 +205,7 @@ def convert_gguf(
                 "--output",
                 str(out_tok),
                 "--type",
-                "f16",
+                "q8_0",
             ],
             cwd=REPO_ROOT,
         )
@@ -274,8 +274,8 @@ def main() -> int:
     models_dir = Path(args.models_dir).resolve()
     base_dir = models_dir / "Qwen3-TTS-12Hz-0.6B-Base"
     tokenizer_dir = models_dir / "Qwen3-TTS-Tokenizer-12Hz"
-    out_tts = models_dir / "qwen3-tts-0.6b-f16.gguf"
-    out_tok = models_dir / "qwen3-tts-tokenizer-f16.gguf"
+    out_tts = models_dir / "qwen-talker-0.6b-base-Q8_0.gguf"
+    out_tok = models_dir / "qwen-tokenizer-12hz-Q8_0.gguf"
     out_coreml = models_dir / "coreml" / "code_predictor.mlpackage"
 
     hf_token = args.hf_token.strip() or None

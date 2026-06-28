@@ -3,7 +3,7 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$ModelDir = "models",
-    [string]$ModelName = "qwen3-tts-0.6b-f16.gguf",
+    [string]$ModelName = "qwen-talker-0.6b-base-Q8_0.gguf",
     [string]$OutputDir = "benchmark_output\0p6b_f16_cuda",
     [string]$Text = "Hello from the 0.6B F16 CUDA iteration benchmark.",
     [int]$MaxTokens = 128,

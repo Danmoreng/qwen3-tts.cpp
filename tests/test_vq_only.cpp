@@ -12,7 +12,7 @@
 int main() {
     // Load model
     qwen3_tts::AudioTokenizerDecoder decoder;
-    if (!decoder.load_model("models/qwen3-tts-tokenizer-f16.gguf")) {
+    if (!decoder.load_model("models/qwen-tokenizer-12hz-Q8_0.gguf")) {
         fprintf(stderr, "Failed to load model: %s\n", decoder.get_error().c_str());
         return 1;
     }

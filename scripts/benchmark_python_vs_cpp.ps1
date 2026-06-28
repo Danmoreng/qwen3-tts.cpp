@@ -368,12 +368,12 @@ $models = @(
     [pscustomobject]@{
         Name = "0.6B"
         HfModelDir = Join-Path $repoRoot "models\Qwen3-TTS-12Hz-0.6B-Base"
-        CppModelName = "qwen3-tts-0.6b-f16.gguf"
+        CppModelName = "qwen-talker-0.6b-base-Q8_0.gguf"
     },
     [pscustomobject]@{
         Name = "1.7B"
         HfModelDir = Join-Path $repoRoot "models\Qwen3-TTS-12Hz-1.7B-Base"
-        CppModelName = "qwen3-tts-1.7b-base-f16.gguf"
+        CppModelName = "qwen-talker-1.7b-base-Q8_0.gguf"
     }
 )
 

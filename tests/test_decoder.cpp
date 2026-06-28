@@ -40,7 +40,7 @@ static void print_usage(const char * prog) {
 }
 
 int main(int argc, char ** argv) {
-    const char * tokenizer_path = "models/qwen3-tts-tokenizer-f16.gguf";
+    const char * tokenizer_path = "models/qwen-tokenizer-12hz-Q8_0.gguf";
     const char * codes_path = "reference/speech_codes.bin";
     const char * reference_path = "reference/decoded_audio.bin";
     const char * output_path = nullptr;

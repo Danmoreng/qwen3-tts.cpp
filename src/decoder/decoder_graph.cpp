@@ -5,6 +5,17 @@
 
 namespace qwen3_tts {
 
+namespace {
+
+struct ggml_tensor * as_f16_conv_weight(struct ggml_context * ctx, struct ggml_tensor * w) {
+    if (!w || w->type == GGML_TYPE_F16) {
+        return w;
+    }
+    return ggml_cont(ctx, ggml_cast(ctx, w, GGML_TYPE_F16));
+}
+
+} // namespace
+
 struct ggml_cgraph * decoder_internal::ops::build_graph(AudioTokenizerDecoder & self, int32_t n_frames) {
     return build_graph_impl(self, n_frames, nullptr);
 }
@@ -97,7 +108,7 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
 
     struct ggml_tensor * latent_for_conv = ggml_cont(ctx0, latent);
     struct ggml_tensor * latent_padded = ggml_pad_ext(ctx0, latent_for_conv, 2, 0, 0, 0, 0, 0, 0, 0);
-    struct ggml_tensor * cur = ggml_conv_1d(ctx0, model.pre_conv_w, latent_padded, 1, 0, 1);
+    struct ggml_tensor * cur = ggml_conv_1d(ctx0, as_f16_conv_weight(ctx0, model.pre_conv_w), latent_padded, 1, 0, 1);
     if (model.pre_conv_b) {
         cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model.pre_conv_b, 1, cfg.latent_dim, 1));
     }
@@ -149,7 +160,7 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
     ggml_set_name(cur, "upsample_output");
 
     cur = ggml_pad_ext(ctx0, cur, 6, 0, 0, 0, 0, 0, 0, 0);
-    cur = ggml_conv_1d(ctx0, model.dec0_conv_w, cur, 1, 0, 1);
+    cur = ggml_conv_1d(ctx0, as_f16_conv_weight(ctx0, model.dec0_conv_w), cur, 1, 0, 1);
     if (model.dec0_conv_b) {
         cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model.dec0_conv_b, 1, cfg.decoder_dim, 1));
     }
@@ -172,7 +183,7 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
     ggml_set_name(cur, "dec5_output");
 
     cur = ggml_pad_ext(ctx0, cur, 6, 0, 0, 0, 0, 0, 0, 0);
-    cur = ggml_conv_1d(ctx0, model.dec6_conv_w, cur, 1, 0, 1);
+    cur = ggml_conv_1d(ctx0, as_f16_conv_weight(ctx0, model.dec6_conv_w), cur, 1, 0, 1);
     if (model.dec6_conv_b) {
         cur = ggml_add(ctx0, cur, ggml_reshape_3d(ctx0, model.dec6_conv_b, 1, 1, 1));
     }

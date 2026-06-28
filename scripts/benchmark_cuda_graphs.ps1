@@ -12,9 +12,9 @@ param(
     [double]$MinAudioRms = 1e-6,
     [int]$MinNonZeroSamples = 16,
     [switch]$AllowSilentAudio,
-    [string]$ModelF16 = "qwen3-tts-1.7b-base-f16.gguf",
-    [string]$ModelQ80 = "qwen3-tts-1.7b-base-q8_0.gguf",
-    [string]$ModelQ4K = "qwen3-tts-1.7b-base-q4_k.gguf"
+    [string]$ModelF16 = "qwen-talker-1.7b-base-BF16.gguf",
+    [string]$ModelQ80 = "qwen-talker-1.7b-base-Q8_0.gguf",
+    [string]$ModelQ4K = "qwen-talker-1.7b-base-Q4_K_M.gguf"
 )
 
 Set-StrictMode -Version Latest

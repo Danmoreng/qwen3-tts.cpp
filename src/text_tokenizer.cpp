@@ -146,6 +146,16 @@ bool TextTokenizer::load_from_gguf(struct gguf_context * ctx) {
     if (pad_key >= 0) {
         config_.pad_token_id = (int32_t)gguf_get_val_u32(ctx, pad_key);
     }
+
+    int64_t im_start_key = gguf_find_key(ctx, "qwen3-tts.text.im_start_id");
+    if (im_start_key >= 0) {
+        config_.bos_token_id = (int32_t) gguf_get_val_u32(ctx, im_start_key);
+    }
+
+    int64_t im_end_key = gguf_find_key(ctx, "qwen3-tts.text.im_end_id");
+    if (im_end_key >= 0) {
+        config_.eos_token_id = (int32_t) gguf_get_val_u32(ctx, im_end_key);
+    }
     
     // Find special tokens by content
     auto find_token = [this](const std::string & text) -> int32_t {
@@ -162,6 +172,16 @@ bool TextTokenizer::load_from_gguf(struct gguf_context * ctx) {
     user_token_id_ = find_token("user");
     if (user_token_id_ < 0) {
         user_token_id_ = find_token("Ġuser");
+    }
+
+    const int32_t im_start_id = find_token("<|im_start|>");
+    if (im_start_id >= 0) {
+        config_.bos_token_id = im_start_id;
+    }
+
+    const int32_t im_end_id = find_token("<|im_end|>");
+    if (im_end_id >= 0) {
+        config_.eos_token_id = im_end_id;
     }
     
     // Newline token

@@ -5,8 +5,8 @@ Convert Qwen3-TTS-Tokenizer-12Hz model to GGUF format.
 Usage:
     python scripts/convert_tokenizer_to_gguf.py \
         --input models/Qwen3-TTS-Tokenizer-12Hz \
-        --output models/qwen3-tts-tokenizer-f16.gguf \
-        --type f16
+        --output models/qwen-tokenizer-12hz-Q8_0.gguf \
+        --type q8_0
 """
 
 from __future__ import annotations
@@ -64,9 +64,7 @@ class Qwen3TTSTokenizerConverter:
         "decoder.pre_transformer.norm.weight": "tok_dec.pre_tfm.norm.weight",
         
         # Decoder quantizer projections
-        "decoder.quantizer.rvq_first.input_proj.weight": "tok_dec.vq_first.input_proj.weight",
         "decoder.quantizer.rvq_first.output_proj.weight": "tok_dec.vq_first.output_proj.weight",
-        "decoder.quantizer.rvq_rest.input_proj.weight": "tok_dec.vq_rest.input_proj.weight",
         "decoder.quantizer.rvq_rest.output_proj.weight": "tok_dec.vq_rest.output_proj.weight",
         
         # Decoder initial conv (index 0)
@@ -181,7 +179,8 @@ class Qwen3TTSTokenizerConverter:
 
     def _load_config(self) -> dict[str, Any]:
         """Load model configuration from config.json."""
-        config_path = self.input_dir / "config.json"
+        tokenizer_config_path = self.input_dir / "speech_tokenizer" / "config.json"
+        config_path = tokenizer_config_path if tokenizer_config_path.exists() else self.input_dir / "config.json"
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
@@ -276,11 +275,14 @@ class Qwen3TTSTokenizerConverter:
         else:
             data = tensor.numpy()
 
+        if tensor_name == "tok_dec.dec.6.conv.weight" and len(data.shape) == 3 and data.shape[0] == 1:
+            data = data.squeeze(0)
+
         n_dims = len(data.shape)
 
-        # Encoder VQ nearest-neighbor decisions are sensitive to small codebook
-        # rounding changes, so keep these codebooks in F32 for Python parity.
-        if tensor_name.startswith("tok_enc.vq_") and "codebook" in tensor_name:
+        # Match Serveurperso: RVQ codebooks and the projections around them
+        # stay F32 because codec nearest-neighbor decisions are precision-sensitive.
+        if tensor_name.startswith("tok_enc.vq_") or tensor_name.startswith("tok_dec.vq_"):
             return data.astype(np.float32), gguf.GGMLQuantizationType.F32
 
         # 1D tensors (norms, biases, scales) should be F32
@@ -293,8 +295,9 @@ class Qwen3TTSTokenizerConverter:
         elif self.output_type == "f16":
             return data.astype(np.float16), gguf.GGMLQuantizationType.F16
         elif self.output_type == "q8_0":
-            # Keep some tensors in F16 for quality (codebooks, norms)
-            if any(x in tensor_name for x in ["codebook", "_norm", "norm.", "scale", "alpha", "beta"]):
+            # Keep scalar-ish quality/control tensors in F16, matching Serveurperso's
+            # quantized artifacts after the F32 source GGUF is requantized.
+            if any(x in tensor_name for x in ["_norm", "norm.", "scale", "alpha", "beta"]):
                 return data.astype(np.float16), gguf.GGMLQuantizationType.F16
             
             data = data.astype(np.float32)
@@ -331,6 +334,7 @@ class Qwen3TTSTokenizerConverter:
         
         # Collect embedding_sum/embed_sum and cluster_usage pairs for codebook computation
         codebook_pairs: dict[str, dict[str, torch.Tensor]] = {}
+        encoder_acoustic_kept = self.encoder_valid_quantizers - self.config.get("encoder_config", {}).get("num_semantic_quantizers", 1)
 
         logger.info("Processing tensors...")
         all_tensors = list(self._get_tensors())
@@ -354,6 +358,15 @@ class Qwen3TTSTokenizerConverter:
 
             if ggml_name is None:
                 skipped_tensors.append(hf_name)
+                skipped_count += 1
+                continue
+
+            if ggml_name.endswith(".initialized"):
+                skipped_count += 1
+                continue
+
+            acoustic_match = re.match(r"tok_enc\.vq_acoustic\.(\d+)\.codebook$", ggml_name)
+            if acoustic_match and int(acoustic_match.group(1)) >= encoder_acoustic_kept:
                 skipped_count += 1
                 continue
             
@@ -402,27 +415,22 @@ class Qwen3TTSTokenizerConverter:
         
         # General metadata
         writer.add_name(self.model_name)
-        writer.add_type(gguf.GGUFType.MODEL)
 
         # File type
         if self.output_type == "f32":
-            ftype = gguf.LlamaFileType.ALL_F32
+            ftype = "F32"
         elif self.output_type == "f16":
-            ftype = gguf.LlamaFileType.MOSTLY_F16
+            ftype = "F16"
         elif self.output_type == "q8_0":
-            ftype = gguf.LlamaFileType.MOSTLY_Q8_0
+            ftype = "Q8_0"
         else:
-            ftype = gguf.LlamaFileType.MOSTLY_F16
-        writer.add_file_type(ftype)
+            ftype = "F16"
+        writer.add_string("general.file_type", ftype)
 
         # Quantization version
         writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
 
         # Tokenizer-specific hyperparameters
-        writer.add_uint32(f"{arch}.num_codebooks", self.decoder_num_quantizers)
-        writer.add_uint32(f"{arch}.codebook_size", self.encoder_codebook_size)
-        writer.add_uint32(f"{arch}.sample_rate", self.sample_rate)
-        writer.add_float32(f"{arch}.frame_rate", self.frame_rate)
         writer.add_uint32(f"{arch}.input_sample_rate", self.config.get("input_sample_rate", self.sample_rate))
         writer.add_uint32(f"{arch}.output_sample_rate", self.config.get("output_sample_rate", self.sample_rate))
         writer.add_uint32(f"{arch}.decode_upsample_rate", self.config.get("decode_upsample_rate", 1920))
@@ -430,17 +438,41 @@ class Qwen3TTSTokenizerConverter:
         writer.add_uint32(f"{arch}.encoder_valid_num_quantizers", self.encoder_valid_quantizers)
         
         # Encoder parameters
+        enc_cfg = self.config.get("encoder_config", {})
+        writer.add_uint32(f"{arch}.encoder.num_filters", enc_cfg.get("num_filters", 32))
+        writer.add_uint32(f"{arch}.encoder.kernel_size", enc_cfg.get("kernel_size", 7))
+        writer.add_uint32(f"{arch}.encoder.last_kernel_size", enc_cfg.get("last_kernel_size", 7))
+        writer.add_uint32(f"{arch}.encoder.residual_kernel_size", enc_cfg.get("residual_kernel_size", 3))
+        writer.add_uint32(f"{arch}.encoder.num_residual_layers", enc_cfg.get("num_residual_layers", 1))
+        writer.add_uint32(f"{arch}.encoder.dilation_growth_rate", enc_cfg.get("dilation_growth_rate", 2))
+        writer.add_uint32(f"{arch}.encoder.compress", enc_cfg.get("compress", 2))
+        writer.add_array(f"{arch}.encoder.upsampling_ratios", enc_cfg.get("upsampling_ratios", [8, 5, 4, 3]))
         writer.add_uint32(f"{arch}.encoder.hidden_size", self.encoder_hidden_size)
-        writer.add_uint32(f"{arch}.encoder.num_layers", self.encoder_num_layers)
-        writer.add_uint32(f"{arch}.encoder.num_heads", self.encoder_num_heads)
+        writer.add_uint32(f"{arch}.encoder.intermediate_size", enc_cfg.get("intermediate_size", 2048))
+        writer.add_uint32(f"{arch}.encoder.head_dim", enc_cfg.get("head_dim", 64))
+        writer.add_uint32(f"{arch}.encoder.num_attention_heads", self.encoder_num_heads)
+        writer.add_uint32(f"{arch}.encoder.num_key_value_heads", enc_cfg.get("num_key_value_heads", self.encoder_num_heads))
+        writer.add_uint32(f"{arch}.encoder.num_hidden_layers", self.encoder_num_layers)
+        writer.add_float32(f"{arch}.encoder.norm_eps", enc_cfg.get("norm_eps", enc_cfg.get("rms_norm_eps", 1e-5)))
+        writer.add_float32(f"{arch}.encoder.rope_theta", float(enc_cfg.get("rope_theta", 10000.0)))
+        writer.add_float32(
+            f"{arch}.encoder.layer_scale_initial_scale",
+            enc_cfg.get("layer_scale_initial_scale", 0.01),
+        )
         writer.add_uint32(f"{arch}.encoder.num_quantizers", self.encoder_num_quantizers)
-        writer.add_uint32(f"{arch}.encoder.valid_quantizers", self.encoder_valid_quantizers)
         writer.add_uint32(f"{arch}.encoder.codebook_dim", self.encoder_codebook_dim)
+        writer.add_uint32(f"{arch}.encoder.codebook_size", self.encoder_codebook_size)
+        writer.add_uint32(
+            f"{arch}.encoder.num_semantic_quantizers",
+            enc_cfg.get("num_semantic_quantizers", 1),
+        )
+        writer.add_uint32(
+            f"{arch}.encoder.vector_quantization_hidden_dim",
+            enc_cfg.get("vector_quantization_hidden_dimension", 256),
+        )
         
         # Decoder parameters
         writer.add_uint32(f"{arch}.decoder.hidden_size", self.decoder_hidden_size)
-        writer.add_uint32(f"{arch}.decoder.num_layers", self.decoder_num_layers)
-        writer.add_uint32(f"{arch}.decoder.num_heads", self.decoder_num_heads)
         writer.add_uint32(f"{arch}.decoder.latent_dim", self.decoder_latent_dim)
         writer.add_uint32(f"{arch}.decoder.codebook_dim", self.decoder_codebook_dim)
         writer.add_uint32(f"{arch}.decoder.codebook_size", self.decoder_codebook_size)
@@ -451,7 +483,6 @@ class Qwen3TTSTokenizerConverter:
         writer.add_uint32(f"{arch}.decoder.num_key_value_heads", self.config.get("decoder_config", {}).get("num_key_value_heads", self.decoder_num_heads))
         writer.add_uint32(f"{arch}.decoder.num_hidden_layers", self.decoder_num_layers)
         writer.add_uint32(f"{arch}.decoder.num_quantizers", self.decoder_num_quantizers)
-        writer.add_uint32(f"{arch}.decoder.semantic_codebook_size", self.decoder_semantic_codebook_size)
         writer.add_uint32(
             f"{arch}.decoder.num_semantic_quantizers",
             self.config.get("decoder_config", {}).get("num_semantic_quantizers", 1),
@@ -468,9 +499,8 @@ class Qwen3TTSTokenizerConverter:
             self.config.get("decoder_config", {}).get("vector_quantization_hidden_dimension", 512),
         )
         writer.add_uint32(f"{arch}.decoder.codebook_dim_internal", self.encoder_codebook_dim)
-        
+
         # Upsample rates as array
-        writer.add_array(f"{arch}.upsample_rates", self.upsample_rates)
         writer.add_array(f"{arch}.decoder.upsample_rates", self.upsample_rates)
         writer.add_array(
             f"{arch}.decoder.upsampling_ratios",

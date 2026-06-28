@@ -273,8 +273,8 @@ $resolvedReferenceAudio = if ([string]::IsNullOrWhiteSpace($ReferenceAudio)) {
 }
 
 $requiredModelFiles = @(
-    (Join-Path $resolvedModelDir "qwen3-tts-0.6b-f16.gguf"),
-    (Join-Path $resolvedModelDir "qwen3-tts-tokenizer-f16.gguf")
+    (Join-Path $resolvedModelDir "qwen-talker-0.6b-base-Q8_0.gguf"),
+    (Join-Path $resolvedModelDir "qwen-tokenizer-12hz-Q8_0.gguf")
 )
 
 $requiredDeterministicRefs = @(

@@ -68,7 +68,7 @@ log ""
 
 log "--- Test 1.1: Tokenizer ---"
 if [[ -x "./build/test_tokenizer" ]]; then
-    output=$(timeout 60 ./build/test_tokenizer --model models/qwen3-tts-0.6b-f16.gguf 2>&1)
+    output=$(timeout 60 ./build/test_tokenizer --model models/qwen-talker-0.6b-base-Q8_0.gguf 2>&1)
     rc=$?
     if [[ $rc -eq 0 ]] && echo "$output" | grep -q "All tests passed"; then
         pass "Tokenizer test"
@@ -110,7 +110,7 @@ PY
         fi
     fi
 
-    output=$(timeout 120 ./build/test_encoder --tokenizer models/qwen3-tts-0.6b-f16.gguf --audio clone.wav --reference reference/ref_audio_embedding.bin 2>&1)
+    output=$(timeout 120 ./build/test_encoder --tokenizer models/qwen-talker-0.6b-base-Q8_0.gguf --audio clone.wav --reference reference/ref_audio_embedding.bin 2>&1)
     rc=$?
     l2=$(echo "$output" | grep "L2 distance:" | head -1 | awk '{print $3}')
     if [[ $rc -eq 0 ]] && echo "$output" | grep -q "All tests passed"; then
@@ -126,7 +126,7 @@ log ""
 
 log "--- Test 1.3: Transformer ---"
 if [[ -x "./build/test_transformer" ]]; then
-    output=$(timeout 180 ./build/test_transformer --model models/qwen3-tts-0.6b-f16.gguf --ref-dir reference/ 2>&1)
+    output=$(timeout 180 ./build/test_transformer --model models/qwen-talker-0.6b-base-Q8_0.gguf --ref-dir reference/ 2>&1)
     rc=$?
     if [[ $rc -eq 0 ]] && echo "$output" | grep -q "All tests passed"; then
         pass "Transformer test (generates speech codes)"
@@ -141,7 +141,7 @@ log ""
 
 log "--- Test 1.4: Decoder ---"
 if [[ -x "./build/test_decoder" ]]; then
-    output=$(timeout 180 ./build/test_decoder --tokenizer models/qwen3-tts-tokenizer-f16.gguf --codes reference/speech_codes.bin --reference reference/decoded_audio.bin 2>&1)
+    output=$(timeout 180 ./build/test_decoder --tokenizer models/qwen-tokenizer-12hz-Q8_0.gguf --codes reference/speech_codes.bin --reference reference/decoded_audio.bin 2>&1)
     rc=$?
     if [[ $rc -eq 0 ]] && echo "$output" | grep -q "Decoded.*samples"; then
         samples=$(echo "$output" | grep "PASS: Decoded" | sed 's/.*Decoded \([0-9]*\) samples.*/\1/')
@@ -185,24 +185,24 @@ run_cli_test() {
     return 1
 }
 
-if [[ -x "./build/qwen3-tts-cli" ]] && [[ -f "models/qwen3-tts-0.6b-f16.gguf" ]]; then
-    run_cli_test "F16 basic synthesis" "$TEST_OUTPUT_DIR/test_f16_basic.wav" \
+if [[ -x "./build/qwen3-tts-cli" ]] && [[ -f "models/qwen-talker-0.6b-base-Q8_0.gguf" ]]; then
+    run_cli_test "Q8_0 basic synthesis" "$TEST_OUTPUT_DIR/test_q8_basic.wav" \
         -m models -t "Hello world" --max-tokens 100 || true
     log ""
     
-    run_cli_test "F16 voice cloning" "$TEST_OUTPUT_DIR/test_f16_clone.wav" \
+    run_cli_test "Q8_0 voice cloning" "$TEST_OUTPUT_DIR/test_q8_clone.wav" \
         -m models -t "Hello world" -r clone.wav --max-tokens 100 || true
     log ""
     
-    run_cli_test "F16 longer text" "$TEST_OUTPUT_DIR/test_f16_long.wav" \
+    run_cli_test "Q8_0 longer text" "$TEST_OUTPUT_DIR/test_q8_long.wav" \
         -m models -t "This is a longer sentence to test synthesis." -r clone.wav --max-tokens 200 || true
     log ""
     
-    run_cli_test "F16 temperature 0.5" "$TEST_OUTPUT_DIR/test_f16_temp.wav" \
+    run_cli_test "Q8_0 temperature 0.5" "$TEST_OUTPUT_DIR/test_q8_temp.wav" \
         -m models -t "Testing temperature" -r clone.wav --temperature 0.5 --max-tokens 100 || true
     log ""
 else
-    skip "F16 CLI tests (CLI or model not found)"
+    skip "Q8_0 CLI tests (CLI or model not found)"
 fi
 
 log "============================================"
@@ -210,8 +210,8 @@ log "SECTION 3: Q8_0 Model Verification"
 log "============================================"
 log ""
 
-if [[ -f "models/qwen3-tts-0.6b-q8_0.gguf" ]]; then
-    size=$(file_size_bytes "models/qwen3-tts-0.6b-q8_0.gguf")
+if [[ -f "models/qwen-talker-0.6b-base-Q8_0.gguf" ]]; then
+    size=$(file_size_bytes "models/qwen-talker-0.6b-base-Q8_0.gguf")
     log "Q8_0 model file size: $size bytes"
     pass "Q8_0 model file exists"
 else

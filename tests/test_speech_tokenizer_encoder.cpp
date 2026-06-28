@@ -167,7 +167,7 @@ projection_error report_projection_error(const char * name,
 } // namespace
 
 int main(int argc, char ** argv) {
-    std::string tokenizer_path = "models/qwen3-tts-tokenizer-f16.gguf";
+    std::string tokenizer_path = "models/qwen-tokenizer-12hz-Q8_0.gguf";
     if (argc > 1) {
         tokenizer_path = argv[1];
     }

@@ -89,10 +89,12 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
 
     auto & cfg = impl->model.config;
     cfg.text_vocab_size = get_u32_any({
+        "qwen3-tts.talker.text_vocab_size",
         "qwen3-tts.text.vocab_size",
         "qwen3-tts.text_vocab_size",
     }, 151936);
     cfg.text_embd_dim = get_u32_any({
+        "qwen3-tts.talker.text_hidden_size",
         "qwen3-tts.text.embedding_dim",
         "qwen3-tts.text_hidden_size",
     }, 2048);
@@ -130,6 +132,7 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
     }, 1000000.0f);
 
     cfg.codec_vocab_size = get_u32_any({
+        "qwen3-tts.talker.vocab_size",
         "qwen3-tts.talker.codec_vocab_size",
         "qwen3-tts.vocab_size",
     }, 3072);
@@ -139,6 +142,7 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
     }, 16);
 
     cfg.code_pred_layers = get_u32_any({
+        "qwen3-tts.code_pred.block_count",
         "qwen3-tts.code_pred.layer_count",
         "qwen3-tts.code_predictor.layer_count",
     }, 5);
@@ -187,16 +191,19 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
     }, 2150);
 
     cfg.tts_bos_token_id = get_u32_any({
+        "qwen3-tts.text.tts_bos_id",
         "qwen3-tts.tts_bos_token_id",
         "qwen3-tts.tts.bos_token_id",
         "qwen3-tts.tts.bos_id",
     }, 151672);
     cfg.tts_eos_token_id = get_u32_any({
+        "qwen3-tts.text.tts_eos_id",
         "qwen3-tts.tts_eos_token_id",
         "qwen3-tts.tts.eos_token_id",
         "qwen3-tts.tts.eos_id",
     }, 151673);
     cfg.tts_pad_token_id = get_u32_any({
+        "qwen3-tts.text.tts_pad_id",
         "qwen3-tts.tts_pad_token_id",
         "qwen3-tts.tts.pad_token_id",
         "qwen3-tts.tts.pad_id",
@@ -226,6 +233,7 @@ bool transformer_internal::ops::parse_config(TTSTransformer & self, struct gguf_
     }, 2050);
 
     cfg.tts_model_type = transformer_internal::normalize_speaker_name(get_str_any({
+        "qwen3-tts.model_type",
         "qwen3-tts.tts_model_type",
     }, "base"));
     cfg.supports_instruction = get_bool_any({

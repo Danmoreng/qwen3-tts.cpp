@@ -14,7 +14,7 @@
 int main() {
     // Load GGUF
     qwen3_tts::GGUFLoader loader;
-    if (!loader.open("models/qwen3-tts-tokenizer-f16.gguf")) {
+    if (!loader.open("models/qwen-tokenizer-12hz-Q8_0.gguf")) {
         fprintf(stderr, "Failed to open GGUF\n");
         return 1;
     }
@@ -53,7 +53,7 @@ int main() {
     
     ggml_backend_buffer_t buffer = nullptr;
     std::string error;
-    if (!qwen3_tts::load_tensor_data_from_file("models/qwen3-tts-tokenizer-f16.gguf", 
+    if (!qwen3_tts::load_tensor_data_from_file("models/qwen-tokenizer-12hz-Q8_0.gguf",
                                                 loader.get_ctx(), ctx, tensors, buffer, error)) {
         fprintf(stderr, "Failed to load tensor data: %s\n", error.c_str());
         return 1;

@@ -21,7 +21,7 @@ struct ggml_tensor * as_f16_conv_weight(struct ggml_context * ctx,
         return w;
     }
 
-    struct ggml_tensor * cast = ggml_cast(ctx, w, GGML_TYPE_F16);
+    struct ggml_tensor * cast = ggml_cont(ctx, ggml_cast(ctx, w, GGML_TYPE_F16));
     if (debug_name) {
         char name[64];
         snprintf(name, sizeof(name), "%s_weight_f16", debug_name);

@@ -115,6 +115,13 @@ struct ggml_tensor * add_bias_1d(struct ggml_context * ctx,
     return ggml_add(ctx, x, ggml_reshape_3d(ctx, b, 1, x->ne[1], 1));
 }
 
+struct ggml_tensor * as_f16_conv_weight(struct ggml_context * ctx, struct ggml_tensor * w) {
+    if (!w || w->type == GGML_TYPE_F16) {
+        return w;
+    }
+    return ggml_cont(ctx, ggml_cast(ctx, w, GGML_TYPE_F16));
+}
+
 struct ggml_tensor * causal_conv1d(struct ggml_context * ctx,
                                    const conv1d_weights & conv,
                                    struct ggml_tensor * x,
@@ -122,7 +129,7 @@ struct ggml_tensor * causal_conv1d(struct ggml_context * ctx,
                                    int pad_total) {
     const int64_t input_len = x->ne[0];
     const int64_t target_len = (input_len + stride - 1) / stride;
-    x = ggml_conv_1d(ctx, conv.w, x, stride, pad_total, 1);
+    x = ggml_conv_1d(ctx, as_f16_conv_weight(ctx, conv.w), x, stride, pad_total, 1);
     if (x->ne[0] > target_len) {
         x = ggml_view_3d(ctx, x, target_len, x->ne[1], x->ne[2],
                          x->nb[1], x->nb[2], 0);
@@ -138,7 +145,7 @@ struct ggml_tensor * causal_conv1d_w(struct ggml_context * ctx,
                                      int pad_total) {
     const int64_t input_len = x->ne[0];
     const int64_t target_len = (input_len + stride - 1) / stride;
-    x = ggml_conv_1d(ctx, w, x, stride, pad_total, 1);
+    x = ggml_conv_1d(ctx, as_f16_conv_weight(ctx, w), x, stride, pad_total, 1);
     if (x->ne[0] > target_len) {
         x = ggml_view_3d(ctx, x, target_len, x->ne[1], x->ne[2],
                          x->nb[1], x->nb[2], 0);
@@ -166,7 +173,7 @@ struct ggml_tensor * conv1d_replicate_left_w(struct ggml_context * ctx,
                                              int stride,
                                              int left_pad) {
     x = replicate_pad_left_1d(ctx, x, left_pad);
-    x = ggml_conv_1d(ctx, w, x, stride, 0, 1);
+    x = ggml_conv_1d(ctx, as_f16_conv_weight(ctx, w), x, stride, 0, 1);
     return ggml_cont(ctx, x);
 }
 
@@ -462,16 +469,39 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
 
     auto & model = impl_->model;
     auto & cfg = model.config;
-    cfg.sample_rate = loader.get_u32("qwen3-tts.tokenizer.sample_rate", 24000);
-    cfg.frame_rate = loader.get_f32("qwen3-tts.tokenizer.frame_rate", 12.5f);
-    cfg.hidden_size = loader.get_u32("qwen3-tts.tokenizer.encoder.hidden_size", 512);
-    cfg.n_layers = loader.get_u32("qwen3-tts.tokenizer.encoder.num_layers", 8);
-    cfg.n_heads = loader.get_u32("qwen3-tts.tokenizer.encoder.num_heads", 8);
+    cfg.sample_rate = loader.get_u32(
+        "qwen3-tts-tokenizer.sample_rate",
+        loader.get_u32("qwen3-tts-tokenizer.input_sample_rate",
+                       loader.get_u32("qwen3-tts.tokenizer.sample_rate", 24000)));
+    cfg.frame_rate = loader.get_f32(
+        "qwen3-tts-tokenizer.frame_rate",
+        loader.get_f32("qwen3-tts.tokenizer.frame_rate", 12.5f));
+    cfg.hidden_size = loader.get_u32(
+        "qwen3-tts-tokenizer.encoder.hidden_size",
+        loader.get_u32("qwen3-tts.tokenizer.encoder.hidden_size", 512));
+    cfg.n_layers = loader.get_u32(
+        "qwen3-tts-tokenizer.encoder.num_hidden_layers",
+        loader.get_u32("qwen3-tts-tokenizer.encoder.num_layers",
+                       loader.get_u32("qwen3-tts.tokenizer.encoder.num_layers", 8)));
+    cfg.n_heads = loader.get_u32(
+        "qwen3-tts-tokenizer.encoder.num_attention_heads",
+        loader.get_u32("qwen3-tts-tokenizer.encoder.num_heads",
+                       loader.get_u32("qwen3-tts.tokenizer.encoder.num_heads", 8)));
     cfg.head_dim = cfg.hidden_size / cfg.n_heads;
-    cfg.n_quantizers = loader.get_u32("qwen3-tts.tokenizer.encoder.num_quantizers", 32);
-    cfg.n_valid_quantizers = loader.get_u32("qwen3-tts.tokenizer.encoder.valid_quantizers", 16);
-    cfg.codebook_dim = loader.get_u32("qwen3-tts.tokenizer.encoder.codebook_dim", 256);
-    cfg.codebook_size = loader.get_u32("qwen3-tts.tokenizer.codebook_size", 2048);
+    cfg.n_quantizers = loader.get_u32(
+        "qwen3-tts-tokenizer.encoder.num_quantizers",
+        loader.get_u32("qwen3-tts.tokenizer.encoder.num_quantizers", 32));
+    cfg.n_valid_quantizers = loader.get_u32(
+        "qwen3-tts-tokenizer.encoder_valid_num_quantizers",
+        loader.get_u32("qwen3-tts-tokenizer.encoder.valid_quantizers",
+                       loader.get_u32("qwen3-tts.tokenizer.encoder.valid_quantizers", 16)));
+    cfg.codebook_dim = loader.get_u32(
+        "qwen3-tts-tokenizer.encoder.codebook_dim",
+        loader.get_u32("qwen3-tts.tokenizer.encoder.codebook_dim", 256));
+    cfg.codebook_size = loader.get_u32(
+        "qwen3-tts-tokenizer.codebook_size",
+        loader.get_u32("qwen3-tts-tokenizer.encoder.codebook_size",
+                       loader.get_u32("qwen3-tts.tokenizer.codebook_size", 2048)));
 
     int tok_enc_tensor_count = 0;
     const int64_t n_tensors = loader.get_n_tensors();

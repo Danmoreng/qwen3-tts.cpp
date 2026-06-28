@@ -296,11 +296,11 @@ add_test(NAME tokenizer_test
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME encoder_test
-    COMMAND test_encoder --tokenizer models/qwen3-tts-0.6b-f16.gguf --audio clone.wav --reference reference/ref_audio_embedding.bin
+    COMMAND test_encoder --tokenizer models/qwen-talker-0.6b-base-Q8_0.gguf --audio clone.wav --reference reference/ref_audio_embedding.bin
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME speech_tokenizer_encoder_load_test
-    COMMAND test_speech_tokenizer_encoder models/qwen3-tts-tokenizer-f16.gguf
+    COMMAND test_speech_tokenizer_encoder models/qwen-tokenizer-12hz-Q8_0.gguf
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME transformer_test
@@ -308,6 +308,6 @@ add_test(NAME transformer_test
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME decoder_test
-    COMMAND test_decoder --tokenizer models/qwen3-tts-tokenizer-f16.gguf --codes reference/det_speech_codes.bin --reference reference/det_decoded_audio.bin
+    COMMAND test_decoder --tokenizer models/qwen-tokenizer-12hz-Q8_0.gguf --codes reference/det_speech_codes.bin --reference reference/det_decoded_audio.bin
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )

@@ -492,7 +492,7 @@ if ([string]::IsNullOrWhiteSpace($QwenCppModels)) {
     $QwenCppModels = Join-Path $repoRoot "models"
 }
 if ([string]::IsNullOrWhiteSpace($QwenCppModelName)) {
-    $QwenCppModelName = if ($Variant -eq "1.7b-base") { "qwen3-tts-1.7b-base-f16.gguf" } else { "qwen3-tts-0.6b-f16.gguf" }
+    $QwenCppModelName = if ($Variant -eq "1.7b-base") { "qwen-talker-1.7b-base-Q8_0.gguf" } else { "qwen-talker-0.6b-base-Q8_0.gguf" }
 }
 
 $serveurRepo = Join-Path $WorkspaceRoot "qwentts.cpp-serveurperso"

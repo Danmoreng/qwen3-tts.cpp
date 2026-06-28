@@ -49,40 +49,40 @@ def main():
         ])
 
     # 4. Convert 1.7B Base to GGUF
-    base_gguf = MODELS_DIR / "qwen3-tts-1.7b-base-f16.gguf"
+    base_gguf = MODELS_DIR / "qwen-talker-1.7b-base-Q8_0.gguf"
     print(f"Converting 1.7B Base to GGUF: {base_gguf}...")
     run_cmd([
         VENV_PYTHON, (REPO_ROOT / "scripts" / "convert_tts_to_gguf.py").as_posix(),
         "--input", base_17b_dir.as_posix(),
         "--output", base_gguf.as_posix(),
-        "--type", "f16"
+        "--type", "q8_0"
     ])
 
     # 5. Convert 1.7B CustomVoice to GGUF
-    custom_gguf = MODELS_DIR / "qwen3-tts-1.7b-customvoice-f16.gguf"
+    custom_gguf = MODELS_DIR / "qwen-talker-1.7b-customvoice-Q8_0.gguf"
     print(f"Converting 1.7B CustomVoice to GGUF: {custom_gguf}...")
     run_cmd([
         VENV_PYTHON, (REPO_ROOT / "scripts" / "convert_tts_to_gguf.py").as_posix(),
         "--input", custom_voice_dir.as_posix(),
         "--output", custom_gguf.as_posix(),
-        "--type", "f16"
+        "--type", "q8_0"
     ])
 
     # 6. Convert Tokenizer to GGUF if missing
-    tokenizer_gguf = MODELS_DIR / "qwen3-tts-tokenizer-f16.gguf"
+    tokenizer_gguf = MODELS_DIR / "qwen-tokenizer-12hz-Q8_0.gguf"
     if not tokenizer_gguf.exists():
         print(f"Converting Tokenizer to GGUF: {tokenizer_gguf}...")
         run_cmd([
             VENV_PYTHON, (REPO_ROOT / "scripts" / "convert_tokenizer_to_gguf.py").as_posix(),
             "--input", tokenizer_dir.as_posix(),
             "--output", tokenizer_gguf.as_posix(),
-            "--type", "f16"
+            "--type", "q8_0"
         ])
 
     print("\nSetup complete!")
     print(f"Base Model: {base_gguf}")
-    if (MODELS_DIR / "qwen3-tts-1.7b-customvoice-f16.gguf").exists():
-        print(f"CustomVoice Model: {MODELS_DIR / 'qwen3-tts-1.7b-customvoice-f16.gguf'}")
+    if (MODELS_DIR / "qwen-talker-1.7b-customvoice-Q8_0.gguf").exists():
+        print(f"CustomVoice Model: {MODELS_DIR / 'qwen-talker-1.7b-customvoice-Q8_0.gguf'}")
     print(f"Tokenizer: {tokenizer_gguf}")
 
 if __name__ == "__main__":

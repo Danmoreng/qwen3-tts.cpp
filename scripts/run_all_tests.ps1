@@ -3,9 +3,9 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$ModelDir = "models",
-    [string]$ModelName06 = "qwen3-tts-0.6b-f16.gguf",
-    [string]$ModelName17Base = "qwen3-tts-1.7b-base-f16.gguf",
-    [string]$ModelName17Custom = "qwen3-tts-1.7b-customvoice-f16.gguf",
+    [string]$ModelName06 = "qwen-talker-0.6b-base-Q8_0.gguf",
+    [string]$ModelName17Base = "qwen-talker-1.7b-base-Q8_0.gguf",
+    [string]$ModelName17Custom = "qwen-talker-1.7b-customvoice-Q8_0.gguf",
     [string]$Model17Speaker = "vivian",
     [string]$ReferenceAudio = "examples/readme_clone_input.wav",
     [string]$OutputDir = "test_output",
@@ -423,7 +423,7 @@ if (-not $tokenizerExe -or -not $encoderExe -or -not $transformerExe -or -not $d
 $ttsModel = Join-Path $resolvedModelDir $ModelName06
 $ttsModel17Base = Join-Path $resolvedModelDir $ModelName17Base
 $ttsModel17Custom = Join-Path $resolvedModelDir $ModelName17Custom
-$tokModel = Join-Path $resolvedModelDir "qwen3-tts-tokenizer-f16.gguf"
+$tokModel = Join-Path $resolvedModelDir "qwen-tokenizer-12hz-Q8_0.gguf"
 $resolvedRefAudioArg = if ([System.IO.Path]::IsPathRooted($ReferenceAudio)) {
     $ReferenceAudio
 } else {
@@ -475,7 +475,7 @@ $preflightChecks = @(
     @{ Label = "TTS model (0.6B)";           Path = $ttsModel;       Required = $true;  Hint = "Place $ModelName06 under '$resolvedModelDir'." },
     @{ Label = "TTS model (1.7B Base)";      Path = $ttsModel17Base; Required = $run17B; Hint = "Place $ModelName17Base under '$resolvedModelDir'." },
     @{ Label = "TTS model (1.7B Custom)";    Path = $ttsModel17Custom; Required = $run17B; Hint = "Place $ModelName17Custom under '$resolvedModelDir'." },
-    @{ Label = "Tokenizer model";            Path = $tokModel;       Required = $true;  Hint = "Place qwen3-tts-tokenizer-f16.gguf under '$resolvedModelDir'." },
+    @{ Label = "Tokenizer model";            Path = $tokModel;       Required = $true;  Hint = "Place qwen-tokenizer-12hz-Q8_0.gguf under '$resolvedModelDir'." },
     @{ Label = "Reference audio";            Path = $refAudio;       Required = $true; Hint = "Use -ReferenceAudio or place examples/readme_clone_input.wav." },
     @{ Label = "Encoder reference embedding";Path = $encoderRef;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
     @{ Label = "Decoder codes";              Path = $decoderCodes;   Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
