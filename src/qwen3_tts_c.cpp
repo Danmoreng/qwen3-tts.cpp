@@ -42,6 +42,15 @@ static qwen3_tts::tts_params convert_params(qwen3_tts_params_t params) {
     return p;
 }
 
+static qwen3_tts::tts_streaming_params convert_streaming_params(qwen3_tts_streaming_params_t params) {
+    qwen3_tts::tts_streaming_params p;
+    p.generation = convert_params(params.generation);
+    p.chunk_sec = params.chunk_sec > 0.0f ? params.chunk_sec : p.chunk_sec;
+    p.left_context_sec = params.left_context_sec >= 0.0f ? params.left_context_sec : p.left_context_sec;
+    p.collect_audio = params.collect_audio != 0;
+    return p;
+}
+
 static qwen3_tts_result_t convert_result(const qwen3_tts::tts_result& res) {
     qwen3_tts_result_t r;
     r.audio_len = static_cast<int32_t>(res.audio.size());
@@ -136,6 +145,84 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     }
 
     auto result = ctx->tts.synthesize_with_speaker_embedding(text, speaker_embedding, convert_params(params));
+    return convert_result(result);
+}
+
+qwen3_tts_result_t qwen3_tts_synthesize_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+) {
+    if (!ctx || !text || !callback) {
+        qwen3_tts_result_t res = {0};
+        res.success = 0;
+        res.error_msg = strdup("Invalid context, text, or streaming callback");
+        return res;
+    }
+
+    qwen3_tts::tts_audio_chunk_callback_t cb =
+        [callback, user_data](const float* samples, int32_t n_samples, int32_t sample_rate) {
+            return callback(samples, n_samples, sample_rate, user_data) != 0;
+        };
+    auto result = ctx->tts.synthesize_streaming(text, cb, convert_streaming_params(params));
+    return convert_result(result);
+}
+
+qwen3_tts_result_t qwen3_tts_synthesize_with_voice_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* reference_audio,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+) {
+    if (!ctx || !text || !reference_audio || !callback) {
+        qwen3_tts_result_t res = {0};
+        res.success = 0;
+        res.error_msg = strdup("Invalid context, text, reference audio, or streaming callback");
+        return res;
+    }
+
+    qwen3_tts::tts_audio_chunk_callback_t cb =
+        [callback, user_data](const float* samples, int32_t n_samples, int32_t sample_rate) {
+            return callback(samples, n_samples, sample_rate, user_data) != 0;
+        };
+    auto result = ctx->tts.synthesize_with_voice_streaming(text, reference_audio, cb,
+                                                           convert_streaming_params(params));
+    return convert_result(result);
+}
+
+qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* speaker_embedding_file,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+) {
+    if (!ctx || !text || !speaker_embedding_file || !callback) {
+        qwen3_tts_result_t res = {0};
+        res.success = 0;
+        res.error_msg = strdup("Invalid context, text, speaker embedding file, or streaming callback");
+        return res;
+    }
+
+    std::vector<float> speaker_embedding;
+    if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
+        qwen3_tts_result_t res = {0};
+        res.success = 0;
+        res.error_msg = strdup("Failed to load speaker embedding file");
+        return res;
+    }
+
+    qwen3_tts::tts_audio_chunk_callback_t cb =
+        [callback, user_data](const float* samples, int32_t n_samples, int32_t sample_rate) {
+            return callback(samples, n_samples, sample_rate, user_data) != 0;
+        };
+    auto result = ctx->tts.synthesize_with_speaker_embedding_streaming(
+        text, speaker_embedding, cb, convert_streaming_params(params));
     return convert_result(result);
 }
 

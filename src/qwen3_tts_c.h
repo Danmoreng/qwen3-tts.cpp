@@ -42,6 +42,13 @@ typedef struct {
     int64_t t_total_ms;
 } qwen3_tts_result_t;
 
+typedef struct {
+    qwen3_tts_params_t generation;
+    float chunk_sec;
+    float left_context_sec;
+    int32_t collect_audio;
+} qwen3_tts_streaming_params_t;
+
 typedef enum {
     QWEN3_TTS_MODEL_KIND_UNKNOWN = 0,
     QWEN3_TTS_MODEL_KIND_BASE = 1,
@@ -60,6 +67,12 @@ typedef struct {
 } qwen3_tts_model_capabilities_t;
 
 typedef void (*qwen3_tts_progress_callback)(int tokens_generated, int max_tokens, void* user_data);
+typedef int32_t (*qwen3_tts_audio_chunk_callback)(
+    const float* samples,
+    int32_t n_samples,
+    int32_t sample_rate,
+    void* user_data
+);
 
 QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
 QWEN3_TTS_API void qwen3_tts_free(qwen3_tts_context_t* ctx);
@@ -89,6 +102,32 @@ QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     const char* text,
     const char* speaker_embedding_file,
     qwen3_tts_params_t params
+);
+
+QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+);
+
+QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_voice_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* reference_audio,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+);
+
+QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* speaker_embedding_file,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
 );
 
 QWEN3_TTS_API int32_t qwen3_tts_extract_speaker_embedding(

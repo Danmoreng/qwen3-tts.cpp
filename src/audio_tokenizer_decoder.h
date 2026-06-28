@@ -55,6 +55,10 @@ public:
     // Load model from GGUF file (tokenizer model)
     bool load_model(const std::string & model_path);
 
+    // Load model with a dedicated backend handle. This is useful when the
+    // decoder is interleaved with another long-lived CUDA scheduler.
+    bool load_model_dedicated(const std::string & model_path);
+
     // Release all model/runtime resources
     void unload_model();
     
@@ -64,6 +68,10 @@ public:
     // Returns: audio samples normalized to [-1, 1] at 24kHz
     bool decode(const int32_t * codes, int32_t n_frames,
                 std::vector<float> & samples);
+
+    // Drop the cached decode graph. Streaming may call this between chunks on
+    // CUDA backends to avoid reusing a graph with short rolling windows.
+    void clear_decode_cache();
     
     const audio_decoder_config & get_config() const;
     
@@ -73,6 +81,8 @@ public:
     
 private:
     friend struct decoder_internal::ops;
+
+    bool load_model_impl(const std::string & model_path, bool shared_backend);
 
     std::unique_ptr<audio_decoder_private> impl_;
 };

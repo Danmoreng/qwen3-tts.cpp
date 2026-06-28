@@ -108,4 +108,8 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
     return true;
 }
 
+void AudioTokenizerDecoder::clear_decode_cache() {
+    decoder_internal::ops::release_cached_decode_graph(*this);
+}
+
 } // namespace qwen3_tts

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -8,6 +9,8 @@ namespace qwen3_tts {
 class Qwen3TTS;
 struct tts_params;
 struct tts_result;
+struct tts_streaming_params;
+using tts_audio_chunk_callback_t = std::function<bool(const float *, int32_t, int32_t)>;
 namespace pipeline_internal {
 
 struct ops {
@@ -15,7 +18,9 @@ struct ops {
                                           const std::string & text,
                                           const float * speaker_embedding,
                                           const tts_params & params,
-                                          tts_result & result);
+                                          tts_result & result,
+                                          const tts_streaming_params * streaming_params = nullptr,
+                                          const tts_audio_chunk_callback_t * on_audio_chunk = nullptr);
 };
 
 struct process_memory_snapshot {

@@ -122,6 +122,7 @@ struct audio_decoder_model {
 
 struct audio_decoder_state {
     ggml_backend_t backend = nullptr;
+    bool backend_shared = true;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_sched_t sched = nullptr;
     std::vector<uint8_t> compute_meta;

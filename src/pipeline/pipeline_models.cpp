@@ -144,11 +144,13 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     audio_encoder_.unload_model();
     speech_encoder_.unload_model();
     audio_decoder_.unload_model();
+    streaming_audio_decoder_.unload_model();
     voice_prompt_cache_ = {};
     encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
     decoder_loaded_ = false;
+    streaming_decoder_loaded_ = false;
 
     std::string tts_model_path;
     std::string tokenizer_model_path;
@@ -239,6 +241,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     speech_encoder_loaded_ = false;
     transformer_loaded_ = false;
     decoder_loaded_ = false;
+    streaming_decoder_loaded_ = false;
 
     const char * low_mem_env = std::getenv("QWEN3_TTS_LOW_MEM");
     low_mem_mode_ = low_mem_env && low_mem_env[0] != '\0' && low_mem_env[0] != '0';
@@ -319,12 +322,14 @@ bool Qwen3TTS::load_speaker_encoder_only(const std::string & model_dir, const st
     audio_encoder_.unload_model();
     speech_encoder_.unload_model();
     audio_decoder_.unload_model();
+    streaming_audio_decoder_.unload_model();
     voice_prompt_cache_ = {};
     models_loaded_ = false;
     encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
     decoder_loaded_ = false;
+    streaming_decoder_loaded_ = false;
 
     std::vector<fs::path> tts_candidates;
     tts_model_path_ = choose_tts_model_path(model_dir, model_name, tts_candidates);

@@ -10,6 +10,27 @@
 
 namespace qwen3_tts {
 
+namespace {
+
+ggml_backend_t init_dedicated_decoder_backend(std::string & error_msg) {
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+    if (!backend) {
+        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+    }
+    if (!backend) {
+        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_ACCEL, nullptr);
+    }
+    if (!backend) {
+        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    }
+    if (!backend) {
+        error_msg = "Failed to initialize dedicated backend for AudioTokenizerDecoder";
+    }
+    return backend;
+}
+
+} // namespace
+
 AudioTokenizerDecoder::AudioTokenizerDecoder()
     : impl_(std::make_unique<audio_decoder_private>()) {
 }
@@ -45,8 +66,13 @@ void AudioTokenizerDecoder::unload_model() {
         state.sched = nullptr;
     }
     if (state.backend) {
-        release_preferred_backend(state.backend);
+        if (state.backend_shared) {
+            release_preferred_backend(state.backend);
+        } else {
+            ggml_backend_free(state.backend);
+        }
         state.backend = nullptr;
+        state.backend_shared = true;
     }
     if (state.backend_cpu) {
         ggml_backend_free(state.backend_cpu);
@@ -98,7 +124,8 @@ void decoder_internal::ops::normalize_codebooks(AudioTokenizerDecoder & self) {
     }
 }
 
-bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
+bool AudioTokenizerDecoder::load_model_impl(const std::string & model_path,
+                                            bool shared_backend) {
     auto & model = impl_->model;
     auto & state = impl_->state;
     auto & error_msg = impl_->error_msg;
@@ -383,7 +410,10 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
         upload_if_present(model.vq_rest_codebook[i]);
     }
 
-    state.backend = init_preferred_backend("AudioTokenizerDecoder", &error_msg);
+    state.backend_shared = shared_backend;
+    state.backend = shared_backend
+        ? init_preferred_backend("AudioTokenizerDecoder", &error_msg)
+        : init_dedicated_decoder_backend(error_msg);
     if (!state.backend) {
         return false;
     }
@@ -414,6 +444,14 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     state.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_DEC_MAX_NODES + ggml_graph_overhead());
 
     return true;
+}
+
+bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
+    return load_model_impl(model_path, true);
+}
+
+bool AudioTokenizerDecoder::load_model_dedicated(const std::string & model_path) {
+    return load_model_impl(model_path, false);
 }
 
 void free_audio_decoder_model(audio_decoder_model & model) {

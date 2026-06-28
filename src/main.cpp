@@ -203,6 +203,9 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --seed <n>             RNG seed for sampling (default: -1=random)\n");
     fprintf(stderr, "  --max-tokens <n>       Maximum audio tokens (default: 4096)\n");
     fprintf(stderr, "  --repeat <n>           Run synthesis n times in one process (default: 1)\n");
+    fprintf(stderr, "  --stream               Use streaming synthesis API and collect chunks for WAV output\n");
+    fprintf(stderr, "  --stream-chunk-sec <s> Streaming codec chunk duration (default: 1.0)\n");
+    fprintf(stderr, "  --stream-left-context-sec <s> Streaming decoder left context (default: 2.0)\n");
     fprintf(stderr, "  --repetition-penalty <val> Repetition penalty (default: 1.05)\n");
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
@@ -245,8 +248,10 @@ int main(int argc, char ** argv) {
     std::string dump_speaker_embedding_file;
     std::string extract_speaker_embedding_file;
     int repeat_count = 1;
+    bool use_streaming = false;
     
     qwen3_tts::tts_params params;
+    qwen3_tts::tts_streaming_params stream_params;
     params.print_progress = true;
     
     // Parse arguments
@@ -382,6 +387,20 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             repeat_count = std::stoi(args[i]);
+        } else if (arg == "--stream") {
+            use_streaming = true;
+        } else if (arg == "--stream-chunk-sec") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing stream chunk duration\n");
+                return 1;
+            }
+            stream_params.chunk_sec = std::stof(args[i]);
+        } else if (arg == "--stream-left-context-sec") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing stream left context duration\n");
+                return 1;
+            }
+            stream_params.left_context_sec = std::stof(args[i]);
         } else if (arg == "--repetition-penalty") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing repetition-penalty value\n");
@@ -508,6 +527,10 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
+    if (use_streaming) {
+        stream_params.generation = params;
+        stream_params.collect_audio = true;
+    }
     
     // Initialize TTS
     qwen3_tts::Qwen3TTS tts;
@@ -565,15 +588,26 @@ int main(int argc, char ** argv) {
         }
 
         qwen3_tts::tts_result result;
+        qwen3_tts::tts_audio_chunk_callback_t stream_callback =
+            [](const float * samples, int32_t n_samples, int32_t sample_rate) {
+                (void) samples;
+                fprintf(stderr, "\rStreaming chunk: %d samples @ %d Hz", n_samples, sample_rate);
+                return true;
+            };
 
         if (!speaker_embedding_file.empty()) {
             fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
             fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
                     speaker_embedding_file.c_str(), speaker_embedding_from_file.size());
-            result = tts.synthesize_with_speaker_embedding(text, speaker_embedding_from_file, params);
+            result = use_streaming
+                ? tts.synthesize_with_speaker_embedding_streaming(text, speaker_embedding_from_file,
+                                                                  stream_callback, stream_params)
+                : tts.synthesize_with_speaker_embedding(text, speaker_embedding_from_file, params);
         } else if (reference_audio.empty()) {
             fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
-            result = tts.synthesize(text, params);
+            result = use_streaming
+                ? tts.synthesize_streaming(text, stream_callback, stream_params)
+                : tts.synthesize(text, params);
         } else {
             std::vector<float> speaker_embedding;
             int64_t encode_ms = 0;
@@ -593,7 +627,9 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
                     fprintf(stderr, "Speaker embedding will be extracted again for ICL synthesis.\n");
                 }
-                result = tts.synthesize_with_voice(text, reference_audio, params);
+                result = use_streaming
+                    ? tts.synthesize_with_voice_streaming(text, reference_audio, stream_callback, stream_params)
+                    : tts.synthesize_with_voice(text, reference_audio, params);
             } else {
                 if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
                     fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
@@ -611,7 +647,10 @@ int main(int argc, char ** argv) {
                     }
                     fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
                 }
-                result = tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
+                result = use_streaming
+                    ? tts.synthesize_with_speaker_embedding_streaming(text, speaker_embedding,
+                                                                      stream_callback, stream_params)
+                    : tts.synthesize_with_speaker_embedding(text, speaker_embedding, params);
                 if (result.success) {
                     result.t_encode_ms = encode_ms;
                     result.t_total_ms += encode_ms;

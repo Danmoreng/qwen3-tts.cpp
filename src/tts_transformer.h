@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -73,6 +74,12 @@ struct tts_transformer_config {
     bool supports_instruction = false;
     std::map<std::string, int32_t> speaker_id_map;
 };
+
+// Called once per generated, non-thinking audio frame.
+// Return false to abort generation.
+using tts_code_frame_callback_t = std::function<bool(const int32_t * frame_codes,
+                                                     int32_t n_codebooks,
+                                                     int32_t frame_index)>;
 
 // TTS Transformer class
 class TTSTransformer {
@@ -165,7 +172,8 @@ public:
                   int32_t n_reference_tokens = 0,
                   const int32_t * reference_codes = nullptr,
                   int32_t n_reference_frames = 0,
-                  int32_t n_reference_codebooks = 0);
+                  int32_t n_reference_codebooks = 0,
+                  const tts_code_frame_callback_t * frame_callback = nullptr);
     
     const tts_transformer_config & get_config() const;
     

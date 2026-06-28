@@ -128,6 +128,21 @@ struct tts_model_capabilities {
 // Progress callback type
 using tts_progress_callback_t = std::function<void(int tokens_generated, int max_tokens)>;
 
+// Audio chunk callback type for streaming synthesis.
+// Return false to stop synthesis early.
+using tts_audio_chunk_callback_t = std::function<bool(const float * samples,
+                                                      int32_t n_samples,
+                                                      int32_t sample_rate)>;
+
+// Streaming synthesis options. The regular tts_params stay nested so the
+// streaming API is additive and does not change the default batch path.
+struct tts_streaming_params {
+    tts_params generation;
+    float chunk_sec = 1.0f;
+    float left_context_sec = 2.0f;
+    bool collect_audio = false;
+};
+
 // Main TTS class that orchestrates the full pipeline
 class Qwen3TTS {
 public:
@@ -169,6 +184,29 @@ public:
                                                  const std::vector<float> & speaker_embedding,
                                                  const tts_params & params = tts_params());
 
+    // Streaming variants emit decoded audio chunks while frames are generated.
+    // The normal synthesize* APIs remain the buffered full-audio path.
+    tts_result synthesize_streaming(const std::string & text,
+                                    const tts_audio_chunk_callback_t & on_audio_chunk,
+                                    const tts_streaming_params & params = tts_streaming_params());
+
+    tts_result synthesize_with_voice_streaming(const std::string & text,
+                                               const std::string & reference_audio,
+                                               const tts_audio_chunk_callback_t & on_audio_chunk,
+                                               const tts_streaming_params & params = tts_streaming_params());
+
+    tts_result synthesize_with_voice_streaming(const std::string & text,
+                                               const float * ref_samples,
+                                               int32_t n_ref_samples,
+                                               const tts_audio_chunk_callback_t & on_audio_chunk,
+                                               const tts_streaming_params & params = tts_streaming_params());
+
+    tts_result synthesize_with_speaker_embedding_streaming(
+        const std::string & text,
+        const std::vector<float> & speaker_embedding,
+        const tts_audio_chunk_callback_t & on_audio_chunk,
+        const tts_streaming_params & params = tts_streaming_params());
+
     // Extract speaker embedding from reference audio file (WAV)
     bool extract_speaker_embedding(const std::string & reference_audio,
                                    std::vector<float> & speaker_embedding,
@@ -209,6 +247,7 @@ private:
     AudioTokenizerEncoder audio_encoder_;
     SpeechTokenizerEncoder speech_encoder_;
     AudioTokenizerDecoder audio_decoder_;
+    AudioTokenizerDecoder streaming_audio_decoder_;
     voice_prompt_cache_entry voice_prompt_cache_;
     
     bool models_loaded_ = false;
@@ -216,6 +255,7 @@ private:
     bool speech_encoder_loaded_ = false;
     bool transformer_loaded_ = false;
     bool decoder_loaded_ = false;
+    bool streaming_decoder_loaded_ = false;
     bool low_mem_mode_ = false;
     std::string error_msg_;
     std::string tts_model_path_;
