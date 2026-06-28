@@ -66,11 +66,31 @@ typedef struct {
     int32_t model_kind; // qwen3_tts_model_kind_t
 } qwen3_tts_model_capabilities_t;
 
+typedef enum {
+    QWEN3_TTS_TEXT_ALIGNMENT_NONE = 0,
+    QWEN3_TTS_TEXT_ALIGNMENT_ESTIMATED = 1,
+    QWEN3_TTS_TEXT_ALIGNMENT_EXACT = 2,
+} qwen3_tts_text_alignment_kind_t;
+
+// Streaming audio chunk metadata. Ranges are end-exclusive.
+// samples is valid only for the duration of the callback.
+typedef struct {
+    const float* samples;
+    int32_t n_samples;
+    int32_t sample_rate;
+    int64_t start_sample;
+    int64_t end_sample;
+    int32_t start_frame;
+    int32_t end_frame;
+    int32_t start_text_byte;
+    int32_t end_text_byte;
+    int32_t text_alignment_kind; // qwen3_tts_text_alignment_kind_t
+    float confidence;
+} qwen3_tts_audio_chunk_t;
+
 typedef void (*qwen3_tts_progress_callback)(int tokens_generated, int max_tokens, void* user_data);
 typedef int32_t (*qwen3_tts_audio_chunk_callback)(
-    const float* samples,
-    int32_t n_samples,
-    int32_t sample_rate,
+    const qwen3_tts_audio_chunk_t* chunk,
     void* user_data
 );
 

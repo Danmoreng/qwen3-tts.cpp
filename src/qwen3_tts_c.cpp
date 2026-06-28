@@ -71,6 +71,22 @@ static qwen3_tts_result_t convert_result(const qwen3_tts::tts_result& res) {
     return r;
 }
 
+static qwen3_tts_audio_chunk_t convert_audio_chunk(const qwen3_tts::tts_audio_chunk & chunk) {
+    qwen3_tts_audio_chunk_t out;
+    out.samples = chunk.samples;
+    out.n_samples = chunk.n_samples;
+    out.sample_rate = chunk.sample_rate;
+    out.start_sample = chunk.start_sample;
+    out.end_sample = chunk.end_sample;
+    out.start_frame = chunk.start_frame;
+    out.end_frame = chunk.end_frame;
+    out.start_text_byte = chunk.start_text_byte;
+    out.end_text_byte = chunk.end_text_byte;
+    out.text_alignment_kind = chunk.text_alignment_kind;
+    out.confidence = chunk.confidence;
+    return out;
+}
+
 qwen3_tts_context_t* qwen3_tts_init() {
     return new qwen3_tts_context();
 }
@@ -163,8 +179,9 @@ qwen3_tts_result_t qwen3_tts_synthesize_streaming(
     }
 
     qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const float* samples, int32_t n_samples, int32_t sample_rate) {
-            return callback(samples, n_samples, sample_rate, user_data) != 0;
+        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
+            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
+            return callback(&c_chunk, user_data) != 0;
         };
     auto result = ctx->tts.synthesize_streaming(text, cb, convert_streaming_params(params));
     return convert_result(result);
@@ -186,8 +203,9 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_voice_streaming(
     }
 
     qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const float* samples, int32_t n_samples, int32_t sample_rate) {
-            return callback(samples, n_samples, sample_rate, user_data) != 0;
+        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
+            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
+            return callback(&c_chunk, user_data) != 0;
         };
     auto result = ctx->tts.synthesize_with_voice_streaming(text, reference_audio, cb,
                                                            convert_streaming_params(params));
@@ -218,8 +236,9 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_streaming(
     }
 
     qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const float* samples, int32_t n_samples, int32_t sample_rate) {
-            return callback(samples, n_samples, sample_rate, user_data) != 0;
+        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
+            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
+            return callback(&c_chunk, user_data) != 0;
         };
     auto result = ctx->tts.synthesize_with_speaker_embedding_streaming(
         text, speaker_embedding, cb, convert_streaming_params(params));

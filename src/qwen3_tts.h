@@ -128,11 +128,31 @@ struct tts_model_capabilities {
 // Progress callback type
 using tts_progress_callback_t = std::function<void(int tokens_generated, int max_tokens)>;
 
+enum tts_text_alignment_kind {
+    TTS_TEXT_ALIGNMENT_NONE = 0,
+    TTS_TEXT_ALIGNMENT_ESTIMATED = 1,
+    TTS_TEXT_ALIGNMENT_EXACT = 2,
+};
+
+// Audio chunk metadata for streaming synthesis. Ranges are end-exclusive.
+// Text byte ranges refer to the original input text and are currently estimated.
+struct tts_audio_chunk {
+    const float * samples = nullptr;
+    int32_t n_samples = 0;
+    int32_t sample_rate = 0;
+    int64_t start_sample = 0;
+    int64_t end_sample = 0;
+    int32_t start_frame = 0;
+    int32_t end_frame = 0;
+    int32_t start_text_byte = -1;
+    int32_t end_text_byte = -1;
+    int32_t text_alignment_kind = TTS_TEXT_ALIGNMENT_NONE;
+    float confidence = 0.0f;
+};
+
 // Audio chunk callback type for streaming synthesis.
 // Return false to stop synthesis early.
-using tts_audio_chunk_callback_t = std::function<bool(const float * samples,
-                                                      int32_t n_samples,
-                                                      int32_t sample_rate)>;
+using tts_audio_chunk_callback_t = std::function<bool(const tts_audio_chunk & chunk)>;
 
 // Streaming synthesis options. The regular tts_params stay nested so the
 // streaming API is additive and does not change the default batch path.

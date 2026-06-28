@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <vector>
 
 namespace qwen3_tts {
 using pipeline_internal::format_bytes;
@@ -77,6 +78,221 @@ int32_t duration_sec_to_codec_frames(const audio_decoder_config & cfg,
     return std::max<int32_t>(min_frames, frames);
 }
 
+class text_span_estimator {
+public:
+    void reset(const std::string & text, int32_t sample_rate) {
+        text_ = &text;
+        sample_rate_ = sample_rate > 0 ? sample_rate : 24000;
+        segments_.clear();
+        predicted_total_samples_ = 0;
+        build_segments(text);
+        assign_segment_timeline();
+    }
+
+    void span_for_samples(int64_t start_sample,
+                          int64_t end_sample,
+                          int32_t & start_byte,
+                          int32_t & end_byte,
+                          int32_t & kind,
+                          float & confidence) const {
+        start_byte = -1;
+        end_byte = -1;
+        kind = TTS_TEXT_ALIGNMENT_NONE;
+        confidence = 0.0f;
+        if (!text_ || text_->empty() || segments_.empty() || predicted_total_samples_ <= 0) {
+            return;
+        }
+
+        const int64_t midpoint_sample = start_sample + std::max<int64_t>(0, end_sample - start_sample) / 2;
+        const size_t segment_index = segment_index_for_sample(midpoint_sample);
+        start_byte = (int32_t) segments_[segment_index].start_byte;
+        end_byte = (int32_t) segments_[segment_index].end_byte;
+        if (end_byte < start_byte) {
+            end_byte = start_byte;
+        }
+        kind = TTS_TEXT_ALIGNMENT_ESTIMATED;
+        confidence = 0.55f;
+    }
+
+private:
+    struct text_segment {
+        size_t start_byte = 0;
+        size_t end_byte = 0;
+        double seconds = 0.0;
+        int64_t start_sample = 0;
+        int64_t end_sample = 0;
+    };
+
+    static size_t utf8_char_len(char c) {
+        const unsigned char uc = (unsigned char) c;
+        if ((uc & 0x80) == 0) return 1;
+        if ((uc & 0xE0) == 0xC0) return 2;
+        if ((uc & 0xF0) == 0xE0) return 3;
+        if ((uc & 0xF8) == 0xF0) return 4;
+        return 1;
+    }
+
+    static bool is_ascii_space(char c) {
+        const unsigned char uc = (unsigned char) c;
+        return uc <= 0x20 || uc == 0x7F;
+    }
+
+    static bool is_ascii_strong_boundary(char c) {
+        return c == '.' || c == '!' || c == '?' || c == '\n' || c == '\r';
+    }
+
+    static bool is_ascii_weak_boundary(char c) {
+        return c == ',' || c == ';' || c == ':';
+    }
+
+    static bool is_ascii_punctuation(char c) {
+        const unsigned char uc = (unsigned char) c;
+        return (uc < 128) && (
+            (uc >= 33 && uc <= 47) ||
+            (uc >= 58 && uc <= 64) ||
+            (uc >= 91 && uc <= 96) ||
+            (uc >= 123 && uc <= 126));
+    }
+
+    void build_segments(const std::string & text) {
+        size_t segment_start = std::string::npos;
+        int32_t words_in_segment = 0;
+        bool in_word = false;
+
+        for (size_t i = 0; i < text.size();) {
+            const size_t len = utf8_char_len(text[i]);
+            const size_t next = std::min(text.size(), i + len);
+            const bool ascii = len == 1;
+            const char c = text[i];
+            const bool space = ascii && is_ascii_space(c);
+            const bool punctuation = ascii && is_ascii_punctuation(c);
+            const bool strong_boundary = ascii && is_ascii_strong_boundary(c);
+            const bool weak_boundary = ascii && is_ascii_weak_boundary(c);
+
+            if (segment_start == std::string::npos && !space) {
+                segment_start = i;
+            }
+
+            if (space || punctuation) {
+                in_word = false;
+            } else if (!in_word) {
+                words_in_segment++;
+                in_word = true;
+            }
+
+            const bool breakable = space || punctuation;
+            const bool full_phrase = breakable && words_in_segment >= 5;
+            const bool long_phrase = breakable &&
+                segment_start != std::string::npos &&
+                next - segment_start >= 48;
+            const bool boundary =
+                segment_start != std::string::npos &&
+                (strong_boundary ||
+                 (weak_boundary && words_in_segment >= 2) ||
+                 full_phrase ||
+                 long_phrase);
+
+            if (boundary) {
+                const double pause = strong_boundary ? 0.28 : (weak_boundary ? 0.16 : 0.04);
+                append_segment(text, segment_start, next, pause);
+                segment_start = std::string::npos;
+                words_in_segment = 0;
+                in_word = false;
+            }
+
+            i = next;
+        }
+
+        if (segment_start != std::string::npos) {
+            append_segment(text, segment_start, text.size(), 0.12);
+        }
+        if (segments_.empty() && !text.empty()) {
+            append_segment(text, 0, text.size(), 0.0);
+        }
+    }
+
+    void append_segment(const std::string & text, size_t raw_start, size_t raw_end, double pause_sec) {
+        size_t start = raw_start;
+        size_t end = std::min(raw_end, text.size());
+        while (start < end && is_ascii_space(text[start])) {
+            start++;
+        }
+        while (end > start && is_ascii_space(text[end - 1])) {
+            end--;
+        }
+        if (start >= end) {
+            return;
+        }
+
+        int32_t chars = 0;
+        int32_t words = 0;
+        bool in_word = false;
+        for (size_t i = start; i < end;) {
+            const size_t len = utf8_char_len(text[i]);
+            const bool ascii = len == 1;
+            const char c = text[i];
+            const bool separator = ascii && (is_ascii_space(c) || is_ascii_punctuation(c));
+            if (!separator && !in_word) {
+                words++;
+                in_word = true;
+            } else if (separator) {
+                in_word = false;
+            }
+            chars++;
+            i = std::min(end, i + len);
+        }
+
+        text_segment segment;
+        segment.start_byte = start;
+        segment.end_byte = end;
+        segment.seconds = std::max(0.28,
+                                   (double) std::max(words, 1) * 0.34 +
+                                   (double) chars * 0.018 +
+                                   pause_sec);
+        segments_.push_back(segment);
+    }
+
+    void assign_segment_timeline() {
+        double total_seconds = 0.0;
+        for (const text_segment & segment : segments_) {
+            total_seconds += segment.seconds;
+        }
+        total_seconds = std::max(0.35, total_seconds);
+        predicted_total_samples_ = (int64_t) (total_seconds * (double) sample_rate_ + 0.5);
+
+        double cursor_seconds = 0.0;
+        for (size_t i = 0; i < segments_.size(); ++i) {
+            text_segment & segment = segments_[i];
+            segment.start_sample = (int64_t) (cursor_seconds * (double) sample_rate_ + 0.5);
+            cursor_seconds += segment.seconds;
+            segment.end_sample = (i + 1 == segments_.size())
+                ? predicted_total_samples_
+                : (int64_t) (cursor_seconds * (double) sample_rate_ + 0.5);
+            if (segment.end_sample <= segment.start_sample) {
+                segment.end_sample = segment.start_sample + 1;
+            }
+        }
+    }
+
+    size_t segment_index_for_sample(int64_t sample) const {
+        if (segments_.empty()) {
+            return 0;
+        }
+        const int64_t clamped = std::max<int64_t>(0, sample);
+        for (size_t i = 0; i < segments_.size(); ++i) {
+            if (clamped < segments_[i].end_sample) {
+                return i;
+            }
+        }
+        return segments_.size() - 1;
+    }
+
+    const std::string * text_ = nullptr;
+    int32_t sample_rate_ = 24000;
+    int64_t predicted_total_samples_ = 0;
+    std::vector<text_segment> segments_;
+};
+
 class chunked_audio_stream {
 public:
     bool init(AudioTokenizerDecoder * decoder,
@@ -86,6 +302,7 @@ public:
               const tts_audio_chunk_callback_t * callback,
               bool collect_audio,
               std::vector<float> * collected_audio,
+              const text_span_estimator * text_estimator,
               std::string * error) {
         decoder_ = decoder;
         n_codebooks_ = n_codebooks;
@@ -94,10 +311,13 @@ public:
         callback_ = callback;
         collect_audio_ = collect_audio;
         collected_audio_ = collected_audio;
+        text_estimator_ = text_estimator;
         error_ = error;
         codes_.clear();
         total_frames_ = 0;
         emit_start_frame_ = 0;
+        preloaded_frames_ = 0;
+        emitted_samples_ = 0;
         cancelled_ = false;
         return decoder_ && n_codebooks_ > 0 && callback_ && *callback_;
     }
@@ -109,6 +329,7 @@ public:
         codes_.insert(codes_.end(), codes, codes + (size_t) n_frames * n_codebooks_);
         total_frames_ = n_frames;
         emit_start_frame_ = n_frames;
+        preloaded_frames_ = n_frames;
     }
 
     bool push_frame(const int32_t * frame_codes) {
@@ -184,14 +405,31 @@ private:
         const float * emit = decoded.data() + drop;
         const int32_t n_emit = (int32_t) (decoded.size() - drop);
         if (n_emit > 0) {
+            tts_audio_chunk chunk;
+            chunk.samples = emit;
+            chunk.n_samples = n_emit;
+            chunk.sample_rate = decoder_->get_config().sample_rate;
+            chunk.start_sample = emitted_samples_;
+            chunk.end_sample = emitted_samples_ + n_emit;
+            chunk.start_frame = std::max<int32_t>(0, emit_start_frame_ - preloaded_frames_);
+            chunk.end_frame = std::max<int32_t>(chunk.start_frame, end_frame - preloaded_frames_);
+            if (text_estimator_) {
+                text_estimator_->span_for_samples(chunk.start_sample,
+                                                  chunk.end_sample,
+                                                  chunk.start_text_byte,
+                                                  chunk.end_text_byte,
+                                                  chunk.text_alignment_kind,
+                                                  chunk.confidence);
+            }
             if (collect_audio_ && collected_audio_) {
                 collected_audio_->insert(collected_audio_->end(), emit, emit + n_emit);
             }
-            if (!(*callback_)(emit, n_emit, decoder_->get_config().sample_rate)) {
+            if (!(*callback_)(chunk)) {
                 cancelled_ = true;
                 set_error("Streaming audio callback requested cancellation");
                 return false;
             }
+            emitted_samples_ = chunk.end_sample;
         }
         emit_start_frame_ = end_frame;
         return true;
@@ -203,9 +441,12 @@ private:
     int32_t left_context_frames_ = 0;
     int32_t total_frames_ = 0;
     int32_t emit_start_frame_ = 0;
+    int32_t preloaded_frames_ = 0;
+    int64_t emitted_samples_ = 0;
     const tts_audio_chunk_callback_t * callback_ = nullptr;
     bool collect_audio_ = false;
     std::vector<float> * collected_audio_ = nullptr;
+    const text_span_estimator * text_estimator_ = nullptr;
     std::string * error_ = nullptr;
     bool cancelled_ = false;
     int64_t decode_ms_ = 0;
@@ -806,6 +1047,7 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
 
     const bool streaming = streaming_params && on_audio_chunk && *on_audio_chunk;
     chunked_audio_stream stream;
+    text_span_estimator stream_text_estimator;
     std::string stream_error;
     if (streaming) {
         if (!self.streaming_decoder_loaded_) {
@@ -829,9 +1071,11 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
         const int32_t chunk_frames = duration_sec_to_codec_frames(decoder_cfg, streaming_params->chunk_sec, 1);
         const int32_t left_context_frames =
             duration_sec_to_codec_frames(decoder_cfg, streaming_params->left_context_sec, 0);
+        stream_text_estimator.reset(text, decoder_cfg.sample_rate);
         if (!stream.init(&self.streaming_audio_decoder_, self.transformer_.get_config().n_codebooks,
                          chunk_frames, left_context_frames, on_audio_chunk,
-                         streaming_params->collect_audio, &result.audio, &stream_error)) {
+                         streaming_params->collect_audio, &result.audio,
+                         &stream_text_estimator, &stream_error)) {
             result.error_msg = "Failed to initialize streaming decoder";
             return result;
         }

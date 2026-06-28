@@ -589,9 +589,18 @@ int main(int argc, char ** argv) {
 
         qwen3_tts::tts_result result;
         qwen3_tts::tts_audio_chunk_callback_t stream_callback =
-            [](const float * samples, int32_t n_samples, int32_t sample_rate) {
-                (void) samples;
-                fprintf(stderr, "\rStreaming chunk: %d samples @ %d Hz", n_samples, sample_rate);
+            [](const qwen3_tts::tts_audio_chunk & chunk) {
+                (void) chunk.samples;
+                fprintf(stderr,
+                        "\rStreaming chunk: samples %lld-%lld (%d) frames %d-%d text %d-%d @ %d Hz",
+                        (long long) chunk.start_sample,
+                        (long long) chunk.end_sample,
+                        chunk.n_samples,
+                        chunk.start_frame,
+                        chunk.end_frame,
+                        chunk.start_text_byte,
+                        chunk.end_text_byte,
+                        chunk.sample_rate);
                 return true;
             };
 

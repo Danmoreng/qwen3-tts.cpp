@@ -13,6 +13,11 @@ int64_t now_ms() {
         clock::now().time_since_epoch()).count();
 }
 
+bool backend_requires_decode_graph_rebuild(ggml_backend_t backend) {
+    ggml_backend_dev_t device = backend ? ggml_backend_get_device(backend) : nullptr;
+    return device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
 } // namespace
 
 bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
@@ -104,6 +109,10 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
 
     ggml_backend_sched_reset(state.sched);
     timing.total_ms = now_ms() - t_total_start;
+
+    if (backend_requires_decode_graph_rebuild(state.backend)) {
+        decoder_internal::ops::release_cached_decode_graph(*this);
+    }
 
     return true;
 }
