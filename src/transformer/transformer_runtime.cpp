@@ -3,6 +3,7 @@
 #include "transformer/transformer_internal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
