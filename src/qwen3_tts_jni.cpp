@@ -17,6 +17,59 @@ static jfieldID g_lang_id_field = nullptr;
 static jfieldID g_instruction_field = nullptr;
 static jfieldID g_speaker_field = nullptr;
 
+static jobject make_native_result(JNIEnv* env, qwen3_tts_result_t c_result) {
+    if (g_result_class == nullptr || g_result_constructor == nullptr) {
+        return nullptr;
+    }
+
+    jfloatArray audio_array = nullptr;
+    if (c_result.audio_len > 0 && c_result.audio != nullptr) {
+        audio_array = env->NewFloatArray(c_result.audio_len);
+        if (audio_array != nullptr) {
+            env->SetFloatArrayRegion(audio_array, 0, c_result.audio_len, c_result.audio);
+        } else {
+            env->ExceptionClear();
+        }
+    }
+
+    jstring error_msg = nullptr;
+    if (c_result.error_msg) {
+        error_msg = env->NewStringUTF(c_result.error_msg);
+        if (error_msg == nullptr) {
+            env->ExceptionClear();
+        }
+    }
+
+    return env->NewObject(g_result_class, g_result_constructor,
+                          audio_array,
+                          (jint)c_result.sample_rate,
+                          (jboolean)(c_result.success != 0),
+                          error_msg,
+                          (jlong)c_result.t_total_ms);
+}
+
+static void fill_params_from_java(JNIEnv* env, jobject params, qwen3_tts_params_t* c_params,
+                                  jstring* j_instruction, const char** c_instruction,
+                                  jstring* j_speaker, const char** c_speaker) {
+    if (params != nullptr && g_lang_id_field != nullptr) {
+        c_params->language_id = env->GetIntField(params, g_lang_id_field);
+    }
+    if (params != nullptr && g_instruction_field != nullptr) {
+        *j_instruction = (jstring)env->GetObjectField(params, g_instruction_field);
+        if (*j_instruction != nullptr) {
+            *c_instruction = env->GetStringUTFChars(*j_instruction, nullptr);
+            c_params->instruction = *c_instruction;
+        }
+    }
+    if (params != nullptr && g_speaker_field != nullptr) {
+        *j_speaker = (jstring)env->GetObjectField(params, g_speaker_field);
+        if (*j_speaker != nullptr) {
+            *c_speaker = env->GetStringUTFChars(*j_speaker, nullptr);
+            c_params->speaker = *c_speaker;
+        }
+    }
+}
+
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
@@ -191,37 +244,167 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     if (c_instruction) env->ReleaseStringUTFChars(j_instruction, c_instruction);
     if (c_speaker) env->ReleaseStringUTFChars(j_speaker, c_speaker);
 
-    if (g_result_class == nullptr || g_result_constructor == nullptr) {
-        qwen3_tts_free_result(c_result);
+    jobject result_obj = make_native_result(env, c_result);
+    qwen3_tts_free_result(c_result);
+    return result_obj;
+}
+
+JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynthesizeStreaming(
+    JNIEnv* env,
+    jobject thiz,
+    jlong ctx_ptr,
+    jstring text,
+    jstring reference_wav,
+    jstring speaker_embedding_path,
+    jobject params,
+    jfloat chunk_seconds,
+    jfloat left_context_seconds,
+    jboolean collect_audio,
+    jobject callback
+) {
+    if (ctx_ptr == 0 || text == nullptr || callback == nullptr) return nullptr;
+
+    const char* c_text = env->GetStringUTFChars(text, nullptr);
+    if (c_text == nullptr) return nullptr;
+
+    const char* c_ref_wav = nullptr;
+    const char* c_speaker_embedding = nullptr;
+    if (reference_wav != nullptr) {
+        c_ref_wav = env->GetStringUTFChars(reference_wav, nullptr);
+        if (c_ref_wav == nullptr) {
+            env->ReleaseStringUTFChars(text, c_text);
+            return nullptr;
+        }
+    }
+    if (speaker_embedding_path != nullptr) {
+        c_speaker_embedding = env->GetStringUTFChars(speaker_embedding_path, nullptr);
+        if (c_speaker_embedding == nullptr) {
+            if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+            env->ReleaseStringUTFChars(text, c_text);
+            return nullptr;
+        }
+    }
+
+    jclass callback_class = env->GetObjectClass(callback);
+    jmethodID on_audio_chunk = env->GetMethodID(
+        callback_class,
+        "onAudioChunk",
+        "([FIJJIIIIIF)Z"
+    );
+    env->DeleteLocalRef(callback_class);
+    if (on_audio_chunk == nullptr) {
+        if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+        if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
+        env->ReleaseStringUTFChars(text, c_text);
         return nullptr;
     }
 
-    jfloatArray audio_array = nullptr;
-    if (c_result.audio_len > 0 && c_result.audio != nullptr) {
-        audio_array = env->NewFloatArray(c_result.audio_len);
-        if (audio_array != nullptr) {
-            env->SetFloatArrayRegion(audio_array, 0, c_result.audio_len, c_result.audio);
-        } else {
-            // NewFloatArray threw OutOfMemoryError, clear it so we can safely return null or handle it
-            env->ExceptionClear();
+    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr, nullptr};
+
+    jstring j_instruction = nullptr;
+    const char* c_instruction = nullptr;
+    jstring j_speaker = nullptr;
+    const char* c_speaker = nullptr;
+    fill_params_from_java(env, params, &c_params, &j_instruction, &c_instruction, &j_speaker, &c_speaker);
+
+    qwen3_tts_streaming_params_t c_stream_params = {
+        c_params,
+        chunk_seconds,
+        left_context_seconds,
+        collect_audio ? 1 : 0
+    };
+
+    jobject callback_ref = env->NewGlobalRef(callback);
+    struct CallbackState {
+        JNIEnv* env;
+        jobject callback;
+        jmethodID method;
+    } state = {env, callback_ref, on_audio_chunk};
+
+    qwen3_tts_audio_chunk_callback c_callback =
+        [](const qwen3_tts_audio_chunk_t* chunk, void* user_data) -> int32_t {
+        CallbackState* state = static_cast<CallbackState*>(user_data);
+        if (chunk == nullptr || state == nullptr || state->env == nullptr || state->callback == nullptr) {
+            return 0;
         }
+
+        JNIEnv* env = state->env;
+        jfloatArray audio = env->NewFloatArray(chunk->n_samples);
+        if (audio == nullptr) {
+            env->ExceptionClear();
+            return 0;
+        }
+        if (chunk->n_samples > 0 && chunk->samples != nullptr) {
+            env->SetFloatArrayRegion(audio, 0, chunk->n_samples, chunk->samples);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                env->DeleteLocalRef(audio);
+                return 0;
+            }
+        }
+
+        jboolean keep_going = env->CallBooleanMethod(
+            state->callback,
+            state->method,
+            audio,
+            (jint)chunk->sample_rate,
+            (jlong)chunk->start_sample,
+            (jlong)chunk->end_sample,
+            (jint)chunk->start_frame,
+            (jint)chunk->end_frame,
+            (jint)chunk->start_text_byte,
+            (jint)chunk->end_text_byte,
+            (jint)chunk->text_alignment_kind,
+            (jfloat)chunk->confidence
+        );
+        env->DeleteLocalRef(audio);
+
+        if (env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+            return 0;
+        }
+
+        return keep_going == JNI_TRUE ? 1 : 0;
+    };
+
+    qwen3_tts_result_t c_result;
+    if (c_speaker_embedding && strlen(c_speaker_embedding) > 0) {
+        c_result = qwen3_tts_synthesize_with_speaker_embedding_streaming(
+            reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+            c_text,
+            c_speaker_embedding,
+            c_stream_params,
+            c_callback,
+            &state
+        );
+    } else if (c_ref_wav && strlen(c_ref_wav) > 0) {
+        c_result = qwen3_tts_synthesize_with_voice_streaming(
+            reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+            c_text,
+            c_ref_wav,
+            c_stream_params,
+            c_callback,
+            &state
+        );
+    } else {
+        c_result = qwen3_tts_synthesize_streaming(
+            reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+            c_text,
+            c_stream_params,
+            c_callback,
+            &state
+        );
     }
 
-    jstring error_msg = nullptr;
-    if (c_result.error_msg) {
-        error_msg = env->NewStringUTF(c_result.error_msg);
-        if (error_msg == nullptr) {
-            env->ExceptionClear();
-        }
-    }
+    env->DeleteGlobalRef(callback_ref);
+    if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+    if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
+    if (c_instruction) env->ReleaseStringUTFChars(j_instruction, c_instruction);
+    if (c_speaker) env->ReleaseStringUTFChars(j_speaker, c_speaker);
+    env->ReleaseStringUTFChars(text, c_text);
 
-    jobject result_obj = env->NewObject(g_result_class, g_result_constructor, 
-                                        audio_array, 
-                                        (jint)c_result.sample_rate, 
-                                        (jboolean)(c_result.success != 0), 
-                                        error_msg, 
-                                        (jlong)c_result.t_total_ms);
-
+    jobject result_obj = make_native_result(env, c_result);
     qwen3_tts_free_result(c_result);
     return result_obj;
 }
