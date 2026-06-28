@@ -140,6 +140,7 @@ public:
                                        std::vector<int32_t> & output,
                                        float temperature = 0.9f,
                                        int32_t top_k = 50,
+                                       float top_p = 1.0f,
                                        int32_t trace_frame = -1);
     
     // Generate speech codes autoregressively
@@ -154,6 +155,7 @@ public:
                   float repetition_penalty = 1.05f,
                   float temperature = 0.9f,
                   int32_t top_k = 50,
+                  float top_p = 1.0f,
                   const int32_t * instruct_tokens = nullptr,
                   int32_t n_instruct_tokens = 0,
                   const int32_t * reference_tokens = nullptr,

@@ -26,6 +26,53 @@ int32_t argmax_code_pred(const float * data, int32_t n) {
     return max_idx;
 }
 
+void apply_top_p_code_pred(float * logits, int32_t n, float top_p) {
+    if (top_p <= 0.0f || top_p >= 1.0f) {
+        return;
+    }
+
+    float max_logit = -INFINITY;
+    for (int32_t i = 0; i < n; ++i) {
+        if (std::isfinite(logits[i]) && logits[i] > max_logit) {
+            max_logit = logits[i];
+        }
+    }
+    if (!std::isfinite(max_logit)) {
+        return;
+    }
+
+    std::vector<std::pair<float, int32_t>> sorted;
+    sorted.reserve(n);
+    double sum = 0.0;
+    for (int32_t i = 0; i < n; ++i) {
+        if (!std::isfinite(logits[i])) {
+            continue;
+        }
+        const float p = expf(logits[i] - max_logit);
+        sorted.push_back({p, i});
+        sum += p;
+    }
+    if (sum <= 0.0 || sorted.empty()) {
+        return;
+    }
+
+    for (auto & item : sorted) {
+        item.first = (float) ((double) item.first / sum);
+    }
+    std::sort(sorted.begin(), sorted.end(),
+              [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                  return a.first > b.first;
+              });
+
+    float cumulative = 0.0f;
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        if (i > 0 && cumulative >= top_p) {
+            logits[sorted[i].second] = -INFINITY;
+        }
+        cumulative += sorted[i].first;
+    }
+}
+
 } // namespace
 
 bool TTSTransformer::get_hidden_states(std::vector<float> & hidden) const {
@@ -94,6 +141,7 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
                                                                     std::vector<int32_t> & output,
                                                                     float temperature,
                                                                     int32_t top_k,
+                                                                    float top_p,
                                                                     int32_t trace_frame) {
     auto & impl = self.impl_;
     auto & error_msg = self.error_msg_;
@@ -142,6 +190,8 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
                 }
             }
         }
+
+        apply_top_p_code_pred(logits_ptr, vocab_size, top_p);
 
         float max_logit = *std::max_element(logits_ptr, logits_ptr + vocab_size);
         double sum = 0.0;
@@ -238,6 +288,7 @@ bool transformer_internal::ops::predict_codes_autoregressive_coreml(TTSTransform
 bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t codebook_0_token,
                                                   std::vector<int32_t> & output,
                                                   float temperature, int32_t top_k,
+                                                  float top_p,
                                                   int32_t trace_frame) {
     if (!impl_->model.ctx) {
         error_msg_ = "Model not loaded";
@@ -254,7 +305,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #endif
 
     if (impl_->use_coreml_code_predictor && impl_->coreml_code_predictor.is_loaded()) {
-        if (transformer_internal::ops::predict_codes_autoregressive_coreml(*this, hidden, codebook_0_token, output, temperature, top_k, trace_frame)) {
+        if (transformer_internal::ops::predict_codes_autoregressive_coreml(*this, hidden, codebook_0_token, output, temperature, top_k, top_p, trace_frame)) {
             return true;
         }
         if (impl_->skip_ggml_code_pred_layers) {
@@ -298,6 +349,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                 }
             }
         }
+        apply_top_p_code_pred(logits_ptr, vocab_size, top_p);
         float max_logit = *std::max_element(logits_ptr, logits_ptr + vocab_size);
         double sum = 0.0;
         for (int32_t i = 0; i < vocab_size; ++i) {

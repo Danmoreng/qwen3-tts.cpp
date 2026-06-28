@@ -23,6 +23,53 @@ int32_t argmax_generate(const float * data, int32_t n) {
     return max_idx;
 }
 
+void apply_top_p_generate(float * logits, int32_t n, float top_p) {
+    if (top_p <= 0.0f || top_p >= 1.0f) {
+        return;
+    }
+
+    float max_logit = -INFINITY;
+    for (int32_t i = 0; i < n; ++i) {
+        if (std::isfinite(logits[i]) && logits[i] > max_logit) {
+            max_logit = logits[i];
+        }
+    }
+    if (!std::isfinite(max_logit)) {
+        return;
+    }
+
+    std::vector<std::pair<float, int32_t>> sorted;
+    sorted.reserve(n);
+    double sum = 0.0;
+    for (int32_t i = 0; i < n; ++i) {
+        if (!std::isfinite(logits[i])) {
+            continue;
+        }
+        const float p = expf(logits[i] - max_logit);
+        sorted.push_back({p, i});
+        sum += p;
+    }
+    if (sum <= 0.0 || sorted.empty()) {
+        return;
+    }
+
+    for (auto & item : sorted) {
+        item.first = (float) ((double) item.first / sum);
+    }
+    std::sort(sorted.begin(), sorted.end(),
+              [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                  return a.first > b.first;
+              });
+
+    float cumulative = 0.0f;
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        if (i > 0 && cumulative >= top_p) {
+            logits[sorted[i].second] = -INFINITY;
+        }
+        cumulative += sorted[i].first;
+    }
+}
+
 } // namespace
 
 bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
@@ -32,6 +79,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                               float repetition_penalty,
                               float temperature,
                               int32_t top_k,
+                              float top_p,
                               const int32_t * instruct_tokens,
                               int32_t n_instruct_tokens,
                               const int32_t * reference_tokens,
@@ -217,6 +265,8 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                 }
             }
 
+            apply_top_p_generate(logits.data(), cfg.codec_vocab_size, top_p);
+
             float max_logit = *std::max_element(logits.data(), logits.data() + cfg.codec_vocab_size);
             double sum = 0.0;
             for (int32_t i = 0; i < cfg.codec_vocab_size; ++i) {
@@ -265,7 +315,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 #endif
         std::vector<int32_t> codes_1_15;
         if (!predict_codes_autoregressive(last_hidden_.data(), frame_codes[0], codes_1_15,
-                                          temperature, top_k, frame)) {
+                                          temperature, top_k, top_p, frame)) {
             return false;
         }
 #ifdef QWEN3_TTS_TIMING

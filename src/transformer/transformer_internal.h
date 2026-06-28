@@ -28,6 +28,7 @@ struct ops {
                                                     std::vector<int32_t> & output,
                                                     float temperature,
                                                     int32_t top_k,
+                                                    float top_p,
                                                     int32_t trace_frame);
 
     static bool build_prefill_graph(TTSTransformer & self,
