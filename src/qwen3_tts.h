@@ -23,6 +23,13 @@ struct speech_codes {
     int32_t n_codebooks = 0;
 };
 
+struct icl_prompt {
+    std::vector<float> speaker_embedding;
+    std::string reference_text;
+    std::vector<int32_t> reference_token_ids;
+    speech_codes reference_codes;
+};
+
 // TTS generation parameters
 struct tts_params {
     // Maximum number of audio tokens to generate
@@ -175,6 +182,9 @@ public:
 
     // Load only the speaker encoder tensors needed by extract_speaker_embedding().
     bool load_speaker_encoder_only(const std::string & model_dir, const std::string & model_name = "");
+
+    // Load only the components needed to extract reusable full-ICL prompts.
+    bool load_icl_prompt_encoder_only(const std::string & model_dir, const std::string & model_name = "");
     
     // Generate speech from text
     // text: input text to synthesize
@@ -231,6 +241,14 @@ public:
     bool extract_speaker_embedding(const std::string & reference_audio,
                                    std::vector<float> & speaker_embedding,
                                    int64_t * encode_time_ms = nullptr);
+
+    // Extract a reusable full-ICL prompt from reference audio and transcript.
+    // The resulting prompt contains the speaker embedding and reference speech
+    // codes, so later synthesis does not need to re-run either audio encoder.
+    bool extract_icl_prompt(const std::string & reference_audio,
+                            const std::string & reference_text,
+                            icl_prompt & prompt,
+                            int64_t * encode_time_ms = nullptr);
     
     // Set progress callback
     void set_progress_callback(tts_progress_callback_t callback);
@@ -271,6 +289,7 @@ private:
     voice_prompt_cache_entry voice_prompt_cache_;
     
     bool models_loaded_ = false;
+    bool text_tokenizer_loaded_ = false;
     bool encoder_loaded_ = false;
     bool speech_encoder_loaded_ = false;
     bool transformer_loaded_ = false;
@@ -300,5 +319,11 @@ bool load_speaker_embedding_file(const std::string & path,
 // Utility: Save speaker embedding as JSON (.json) or float32 binary
 bool save_speaker_embedding_file(const std::string & path,
                                  const std::vector<float> & embedding);
+
+bool load_icl_prompt_file(const std::string & path,
+                          icl_prompt & prompt);
+
+bool save_icl_prompt_file(const std::string & path,
+                          const icl_prompt & prompt);
 
 } // namespace qwen3_tts

@@ -1,4 +1,5 @@
 #include "qwen3_tts.h"
+#include "gguf_loader.h"
 #include "pipeline/pipeline_internal.h"
 
 #include <algorithm>
@@ -575,7 +576,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
             }
             if (!speech_encoder_loaded_) {
                 const int64_t t_speech_encoder_load_start = get_time_ms();
-                if (!speech_encoder_.load_model(tokenizer_model_path_)) {
+                if (!speech_encoder_.load_model(tokenizer_model_path_, true)) {
                     result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
                     return result;
                 }
@@ -780,7 +781,7 @@ tts_result Qwen3TTS::synthesize_with_voice_streaming(
                 return result;
             }
             if (!speech_encoder_loaded_) {
-                if (!speech_encoder_.load_model(tokenizer_model_path_)) {
+                if (!speech_encoder_.load_model(tokenizer_model_path_, true)) {
                     result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
                     return result;
                 }
@@ -912,6 +913,132 @@ bool Qwen3TTS::extract_speaker_embedding(const std::string & reference_audio,
     if (encode_time_ms) {
         *encode_time_ms = get_time_ms() - t_encode_start;
     }
+    return true;
+}
+
+bool Qwen3TTS::extract_icl_prompt(const std::string & reference_audio,
+                                  const std::string & reference_text,
+                                  icl_prompt & prompt,
+                                  int64_t * encode_time_ms) {
+    if (tts_model_path_.empty() || tokenizer_model_path_.empty()) {
+        error_msg_ = "ICL prompt extraction encoders not loaded";
+        return false;
+    }
+    if (!encoder_loaded_ && speaker_encoder_model_path_.empty()) {
+        error_msg_ = "Speaker encoder not loaded";
+        return false;
+    }
+    if (reference_text.empty()) {
+        error_msg_ = "ICL prompt extraction requires reference text";
+        return false;
+    }
+
+    std::vector<float> ref_samples;
+    int ref_sample_rate = 0;
+    if (!load_audio_file(reference_audio, ref_samples, ref_sample_rate)) {
+        error_msg_ = "Failed to load reference audio: " + reference_audio;
+        return false;
+    }
+
+    const int target_rate = 24000;
+    if (ref_sample_rate != target_rate) {
+        fprintf(stderr, "Resampling audio from %d Hz to %d Hz...\n", ref_sample_rate, target_rate);
+        std::vector<float> resampled;
+        resample_linear(ref_samples.data(), (int) ref_samples.size(), ref_sample_rate, resampled, target_rate);
+        ref_samples = std::move(resampled);
+    }
+
+    const int64_t t_encode_start = get_time_ms();
+    if (!encoder_loaded_) {
+        if (speaker_encoder_model_path_.empty()) {
+            error_msg_ = "Internal error: missing TTS model path for lazy encoder load";
+            return false;
+        }
+        int64_t t_encoder_load_start = get_time_ms();
+        if (!audio_encoder_.load_model(speaker_encoder_model_path_)) {
+            error_msg_ = "Failed to load speaker encoder: " + audio_encoder_.get_error();
+            return false;
+        }
+        encoder_loaded_ = true;
+        fprintf(stderr, "  Speaker encoder lazy-loaded in %lld ms\n",
+                (long long) (get_time_ms() - t_encoder_load_start));
+        log_memory_usage("icl/after-encoder-load");
+    }
+
+    icl_prompt extracted;
+    fprintf(stderr, "  Encoding ICL speaker embedding...\n");
+    if (!audio_encoder_.encode(ref_samples.data(), (int32_t) ref_samples.size(),
+                               extracted.speaker_embedding)) {
+        error_msg_ = "Failed to extract speaker embedding: " + audio_encoder_.get_error();
+        return false;
+    }
+    fprintf(stderr, "  ICL speaker embedding encoded: %zu floats\n",
+            extracted.speaker_embedding.size());
+
+    const int expected_dim = audio_encoder_.get_config().embedding_dim;
+    if ((int) extracted.speaker_embedding.size() != expected_dim) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "Speaker embedding dimension mismatch after ICL extraction: got %zu, expected %d",
+                 extracted.speaker_embedding.size(), expected_dim);
+        error_msg_ = buf;
+        return false;
+    }
+    fprintf(stderr, "  ICL speaker embedding validated\n");
+
+    if (tokenizer_model_path_.empty()) {
+        error_msg_ = "Internal error: missing tokenizer model path for speech tokenizer encoder";
+        return false;
+    }
+    if (!speech_encoder_loaded_) {
+        const int64_t t_speech_encoder_load_start = get_time_ms();
+        if (!speech_encoder_.load_model(tokenizer_model_path_, !models_loaded_)) {
+            error_msg_ = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
+            return false;
+        }
+        speech_encoder_loaded_ = true;
+        fprintf(stderr, "  Speech tokenizer encoder lazy-loaded in %lld ms\n",
+                (long long) (get_time_ms() - t_speech_encoder_load_start));
+        log_memory_usage("icl/after-speech-encoder-load");
+    }
+
+    if (!speech_encoder_.encode(ref_samples.data(), (int32_t) ref_samples.size(),
+                                extracted.reference_codes)) {
+        error_msg_ = "Failed to tokenize reference audio: " + speech_encoder_.get_error();
+        return false;
+    }
+    if (!models_loaded_) {
+        speech_encoder_.unload_model();
+        speech_encoder_loaded_ = false;
+    }
+
+    if (!text_tokenizer_loaded_) {
+        const int64_t t_tokenizer_start = get_time_ms();
+        GGUFLoader loader;
+        if (!loader.open(tts_model_path_)) {
+            error_msg_ = "Failed to open TTS model for text tokenizer: " + loader.get_error();
+            return false;
+        }
+        if (!tokenizer_.load_from_gguf(loader.get_ctx())) {
+            error_msg_ = "Failed to load text tokenizer: " + tokenizer_.get_error();
+            return false;
+        }
+        text_tokenizer_loaded_ = true;
+        fprintf(stderr, "  Text tokenizer lazy-loaded in %lld ms\n",
+                (long long) (get_time_ms() - t_tokenizer_start));
+    }
+
+    extracted.reference_text = reference_text;
+    extracted.reference_token_ids = tokenizer_.encode_reference_for_tts(reference_text);
+    if (extracted.reference_token_ids.empty()) {
+        error_msg_ = "Failed to tokenize reference text";
+        return false;
+    }
+
+    if (encode_time_ms) {
+        *encode_time_ms = get_time_ms() - t_encode_start;
+    }
+    prompt = std::move(extracted);
     return true;
 }
 

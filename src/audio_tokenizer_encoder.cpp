@@ -15,8 +15,6 @@ AudioTokenizerEncoder::~AudioTokenizerEncoder() {
 void AudioTokenizerEncoder::unload_model() {
     auto & state = impl_->state;
 
-    free_speaker_encoder_model(impl_->model);
-
     if (state.sched) {
         ggml_backend_sched_free(state.sched);
         state.sched = nullptr;
@@ -33,6 +31,7 @@ void AudioTokenizerEncoder::unload_model() {
     state.compute_meta.clear();
     state.mel_filterbank.clear();
     state.stft_window.clear();
+    free_speaker_encoder_model(impl_->model);
 }
 
 const speaker_encoder_config & AudioTokenizerEncoder::get_config() const {

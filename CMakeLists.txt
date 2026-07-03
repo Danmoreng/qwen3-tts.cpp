@@ -179,6 +179,7 @@ target_link_libraries(audio_tokenizer_decoder PUBLIC Threads::Threads)
 # Qwen3 TTS library (full pipeline)
 add_library(qwen3_tts STATIC
     src/common/audio_io.cpp
+    src/common/icl_prompt_io.cpp
     src/common/speaker_embedding_io.cpp
     src/pipeline/pipeline_models.cpp
     src/pipeline/pipeline_runtime.cpp
@@ -211,6 +212,7 @@ if(QWEN3_TTS_BUILD_SHARED)
         src/qwen3_tts_jni.cpp
     )
     target_link_libraries(qwen3_tts_jni PRIVATE qwen3_tts JNI::JNI)
+    target_compile_definitions(qwen3_tts_jni PRIVATE QWEN3_TTS_STATIC)
     target_compile_definitions(qwen3_tts PRIVATE QWEN3_TTS_EXPORT)
 endif()
 

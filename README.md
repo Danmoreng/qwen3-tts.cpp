@@ -24,6 +24,7 @@ voice cloning, backend selection, and Windows/Linux packaging.
 - Voice cloning from reference WAV files
 - ICL voice cloning with reference transcript and optional reference speech codes
 - Reusable speaker embeddings in JSON or raw float32 binary format
+- Reusable full-ICL voice prompts containing speaker embedding, transcript tokens, and reference speech codes
 - Standalone speaker-embedding extraction with `--extract-speaker-embedding`
 - Named CustomVoice speakers
 - Style / instruction prompts where supported by the loaded model
@@ -299,6 +300,24 @@ ICL voice cloning with a reference transcript:
   -o cloned_icl.wav
 ```
 
+Extract a reusable full-ICL prompt and synthesize from it later:
+
+```bash
+./build/qwen3-tts-cli -m models \
+  -r reference.wav \
+  --reference-text "Transcript of the reference audio." \
+  --extract-icl-prompt voice_prompt.json
+
+./build/qwen3-tts-cli -m models \
+  --icl-prompt voice_prompt.json \
+  -t "This run reuses the full ICL acoustic prompt." \
+  -o cloned_from_icl_prompt.wav
+```
+
+The saved ICL prompt includes the speaker embedding, tokenized reference
+transcript, and reference speech codes. Later synthesis skips reference-audio
+encoding and reports `Speaker encode: 0 ms`.
+
 Extract a speaker embedding and synthesize from it later:
 
 ```bash
@@ -354,10 +373,12 @@ facing audio, prefer seeded sampling when reproducibility is needed.
 | `--reference-text-file <file>` | Read ICL transcript from a file | None |
 | `--reference-token-ids <file>` | Reference prompt token IDs | None |
 | `--reference-codes <file>` | Reference speech codes as text or JSON integers | None |
+| `--icl-prompt <file>` | Reuse a saved full-ICL voice prompt | None |
 | `--speaker <name>` | Named CustomVoice speaker | None |
 | `--speaker-embedding <file>` | Reuse saved speaker embedding | None |
 | `--dump-speaker-embedding <file>` | Save embedding while running synthesis from `--reference` | None |
 | `--extract-speaker-embedding <file>` | Extract speaker embedding from `--reference` and exit | None |
+| `--extract-icl-prompt <file>` | Extract full-ICL prompt from `--reference` plus transcript and exit | None |
 | `--dump-generated-codes <file>` | Save generated speech codes | None |
 | `--dump-decoder-codes <file>` | Save vocoder-input speech codes | None |
 | `--temperature <value>` | Sampling temperature; `0` means greedy | `0.9` |
@@ -370,8 +391,8 @@ facing audio, prefer seeded sampling when reproducibility is needed.
 | `--instruction`, `--instruct` | Style / voice instruction prompt | None |
 | `-j, --threads <n>` | CPU thread count | `4` |
 
-`--reference`, `--speaker`, and `--speaker-embedding` are mutually exclusive
-speaker-conditioning modes.
+`--reference`, `--speaker`, `--speaker-embedding`, and `--icl-prompt` are
+mutually exclusive speaker-conditioning modes.
 
 ## Architecture
 
@@ -411,6 +432,14 @@ The CLI is one frontend. The repository also exposes:
 - C ABI: `src/qwen3_tts_c.h`
 - Optional JNI shared library with `-DQWEN3_TTS_BUILD_SHARED=ON`
 - Kotlin Multiplatform wrapper sources under `shared/`
+
+The C++/C/JNI/Kotlin surfaces include full-ICL prompt preparation and reuse:
+load the prompt encoders with `load_icl_prompt_encoder_only` /
+`qwen3_tts_load_icl_prompt_encoder` /
+`loadIclPromptEncoder`, create a prompt with `extract_icl_prompt` /
+`qwen3_tts_extract_icl_prompt` / `extractIclPrompt`, then synthesize with
+`synthesize_with_speaker_embedding` plus the prompt fields or the convenience
+C/JNI/Kotlin `synthesizeWithIclPrompt` helpers.
 
 Build the JNI target:
 

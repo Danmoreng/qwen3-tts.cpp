@@ -31,7 +31,7 @@ public:
     SpeechTokenizerEncoder();
     ~SpeechTokenizerEncoder();
 
-    bool load_model(const std::string & tokenizer_model_path);
+    bool load_model(const std::string & tokenizer_model_path, bool force_cpu = false);
     void unload_model();
 
     bool encode(const float * samples, int32_t n_samples, speech_codes & codes);

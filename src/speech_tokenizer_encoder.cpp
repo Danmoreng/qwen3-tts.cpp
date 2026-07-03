@@ -60,6 +60,7 @@ struct speech_tokenizer_encoder_model {
 struct speech_tokenizer_encoder_state {
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
+    bool backend_shared = true;
     ggml_backend_sched_t sched = nullptr;
     std::vector<uint8_t> compute_meta;
     std::vector<int32_t> positions;
@@ -443,8 +444,13 @@ void SpeechTokenizerEncoder::unload_model() {
         state.sched = nullptr;
     }
     if (state.backend) {
-        release_preferred_backend(state.backend);
+        if (state.backend_shared) {
+            release_preferred_backend(state.backend);
+        } else {
+            ggml_backend_free(state.backend);
+        }
         state.backend = nullptr;
+        state.backend_shared = true;
     }
     if (state.backend_cpu) {
         ggml_backend_free(state.backend_cpu);
@@ -458,7 +464,7 @@ void SpeechTokenizerEncoder::unload_model() {
     error_msg_.clear();
 }
 
-bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path) {
+bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path, bool force_cpu) {
     unload_model();
 
     GGUFLoader loader;
@@ -596,7 +602,8 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
 
     if (!load_tensor_data_from_file(tokenizer_model_path, loader.get_ctx(), model.ctx,
                                     model.tensors, model.buffer, error_msg_,
-                                    get_preferred_backend_type())) {
+                                    force_cpu ? GGML_BACKEND_DEVICE_TYPE_CPU
+                                              : get_preferred_backend_type())) {
         return false;
     }
 
@@ -625,7 +632,17 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
             tok_enc_tensor_count, cfg.hidden_size, cfg.n_quantizers, cfg.n_valid_quantizers);
 
     auto & state = impl_->state;
-    state.backend = init_preferred_backend("SpeechTokenizerEncoder", &error_msg_);
+    if (force_cpu) {
+        state.backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        state.backend_shared = false;
+        if (!state.backend) {
+            error_msg_ = "Failed to initialize CPU backend for SpeechTokenizerEncoder";
+            return false;
+        }
+    } else {
+        state.backend = init_preferred_backend("SpeechTokenizerEncoder", &error_msg_);
+        state.backend_shared = true;
+    }
     if (!state.backend) {
         return false;
     }

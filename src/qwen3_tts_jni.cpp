@@ -199,6 +199,30 @@ JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoad
     return result != 0 ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoadIclPromptEncoder(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring model_dir, jstring model_name
+) {
+    if (ctx_ptr == 0 || model_dir == nullptr) return JNI_FALSE;
+    const char* c_model_dir = env->GetStringUTFChars(model_dir, nullptr);
+    if (c_model_dir == nullptr) return JNI_FALSE;
+
+    const char* c_model_name = nullptr;
+    if (model_name != nullptr) {
+        c_model_name = env->GetStringUTFChars(model_name, nullptr);
+        if (c_model_name == nullptr) {
+            env->ReleaseStringUTFChars(model_dir, c_model_dir);
+            return JNI_FALSE;
+        }
+    }
+
+    int32_t result = qwen3_tts_load_icl_prompt_encoder_with_name(
+        reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr), c_model_dir, c_model_name);
+
+    if (c_model_name) env->ReleaseStringUTFChars(model_name, c_model_name);
+    env->ReleaseStringUTFChars(model_dir, c_model_dir);
+    return result != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynthesize(
     JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring text, jstring reference_wav, jstring speaker_embedding_path, jobject params
 ) {
@@ -263,6 +287,40 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     env->ReleaseStringUTFChars(text, c_text);
     if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
     if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
+    if (c_instruction) env->ReleaseStringUTFChars(j_instruction, c_instruction);
+    if (c_speaker) env->ReleaseStringUTFChars(j_speaker, c_speaker);
+
+    jobject result_obj = make_native_result(env, c_result);
+    qwen3_tts_free_result(c_result);
+    return result_obj;
+}
+
+JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynthesizeWithIclPrompt(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring text, jstring icl_prompt_path, jobject params
+) {
+    if (ctx_ptr == 0 || text == nullptr || icl_prompt_path == nullptr) return nullptr;
+
+    const char* c_text = env->GetStringUTFChars(text, nullptr);
+    if (c_text == nullptr) return nullptr;
+    const char* c_icl_prompt = env->GetStringUTFChars(icl_prompt_path, nullptr);
+    if (c_icl_prompt == nullptr) {
+        env->ReleaseStringUTFChars(text, c_text);
+        return nullptr;
+    }
+
+    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr, nullptr};
+
+    jstring j_instruction = nullptr;
+    const char* c_instruction = nullptr;
+    jstring j_speaker = nullptr;
+    const char* c_speaker = nullptr;
+    fill_params_from_java(env, params, &c_params, &j_instruction, &c_instruction, &j_speaker, &c_speaker);
+
+    qwen3_tts_result_t c_result = qwen3_tts_synthesize_with_icl_prompt(
+        reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr), c_text, c_icl_prompt, c_params);
+
+    env->ReleaseStringUTFChars(text, c_text);
+    env->ReleaseStringUTFChars(icl_prompt_path, c_icl_prompt);
     if (c_instruction) env->ReleaseStringUTFChars(j_instruction, c_instruction);
     if (c_speaker) env->ReleaseStringUTFChars(j_speaker, c_speaker);
 
@@ -448,6 +506,39 @@ JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeExtr
         reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr), c_ref_wav, c_output_path);
 
     env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+    env->ReleaseStringUTFChars(output_path, c_output_path);
+    return ok != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeExtractIclPrompt(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring reference_wav, jstring reference_text, jstring output_path
+) {
+    if (ctx_ptr == 0 || reference_wav == nullptr || reference_text == nullptr || output_path == nullptr) {
+        return JNI_FALSE;
+    }
+
+    const char* c_ref_wav = env->GetStringUTFChars(reference_wav, nullptr);
+    if (c_ref_wav == nullptr) return JNI_FALSE;
+    const char* c_reference_text = env->GetStringUTFChars(reference_text, nullptr);
+    if (c_reference_text == nullptr) {
+        env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+        return JNI_FALSE;
+    }
+    const char* c_output_path = env->GetStringUTFChars(output_path, nullptr);
+    if (c_output_path == nullptr) {
+        env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+        env->ReleaseStringUTFChars(reference_text, c_reference_text);
+        return JNI_FALSE;
+    }
+
+    const int32_t ok = qwen3_tts_extract_icl_prompt(
+        reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+        c_ref_wav,
+        c_reference_text,
+        c_output_path);
+
+    env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+    env->ReleaseStringUTFChars(reference_text, c_reference_text);
     env->ReleaseStringUTFChars(output_path, c_output_path);
     return ok != 0 ? JNI_TRUE : JNI_FALSE;
 }

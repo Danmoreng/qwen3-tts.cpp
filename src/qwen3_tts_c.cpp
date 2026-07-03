@@ -72,6 +72,27 @@ static qwen3_tts_result_t convert_result(const qwen3_tts::tts_result& res) {
     return r;
 }
 
+static qwen3_tts_result_t make_error_result(const char * message) {
+    qwen3_tts_result_t res = {0};
+    res.success = 0;
+    res.error_msg = strdup(message ? message : "Unknown error");
+    return res;
+}
+
+static bool load_icl_prompt_params(const char * icl_prompt_file,
+                                   qwen3_tts::icl_prompt & prompt,
+                                   qwen3_tts::tts_params & params,
+                                   qwen3_tts_result_t & error_result) {
+    if (!qwen3_tts::load_icl_prompt_file(icl_prompt_file, prompt)) {
+        error_result = make_error_result("Failed to load ICL prompt file");
+        return false;
+    }
+    params.reference_text = prompt.reference_text;
+    params.reference_token_ids = prompt.reference_token_ids;
+    params.reference_codes = prompt.reference_codes;
+    return true;
+}
+
 static qwen3_tts_audio_chunk_t convert_audio_chunk(const qwen3_tts::tts_audio_chunk & chunk) {
     qwen3_tts_audio_chunk_t out;
     out.samples = chunk.samples;
@@ -128,6 +149,22 @@ int32_t qwen3_tts_load_models_with_name(
     return ctx->tts.load_models(model_dir, model_name ? model_name : "") ? 1 : 0;
 }
 
+int32_t qwen3_tts_load_icl_prompt_encoder(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir
+) {
+    return qwen3_tts_load_icl_prompt_encoder_with_name(ctx, model_dir, nullptr);
+}
+
+int32_t qwen3_tts_load_icl_prompt_encoder_with_name(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir,
+    const char* model_name
+) {
+    if (!ctx || !model_dir) return 0;
+    return ctx->tts.load_icl_prompt_encoder_only(model_dir, model_name ? model_name : "") ? 1 : 0;
+}
+
 qwen3_tts_result_t qwen3_tts_synthesize(
     qwen3_tts_context_t* ctx, 
     const char* text, 
@@ -181,6 +218,27 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     }
 
     auto result = ctx->tts.synthesize_with_speaker_embedding(text, speaker_embedding, convert_params(params));
+    return convert_result(result);
+}
+
+qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* icl_prompt_file,
+    qwen3_tts_params_t params
+) {
+    if (!ctx || !text || !icl_prompt_file) {
+        return make_error_result("Invalid context, text, or ICL prompt file");
+    }
+
+    qwen3_tts::icl_prompt prompt;
+    qwen3_tts::tts_params native_params = convert_params(params);
+    qwen3_tts_result_t error_result = {0};
+    if (!load_icl_prompt_params(icl_prompt_file, prompt, native_params, error_result)) {
+        return error_result;
+    }
+
+    auto result = ctx->tts.synthesize_with_speaker_embedding(text, prompt.speaker_embedding, native_params);
     return convert_result(result);
 }
 
@@ -265,6 +323,35 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_streaming(
     return convert_result(result);
 }
 
+qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* icl_prompt_file,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+) {
+    if (!ctx || !text || !icl_prompt_file || !callback) {
+        return make_error_result("Invalid context, text, ICL prompt file, or streaming callback");
+    }
+
+    qwen3_tts::icl_prompt prompt;
+    qwen3_tts::tts_streaming_params native_params = convert_streaming_params(params);
+    qwen3_tts_result_t error_result = {0};
+    if (!load_icl_prompt_params(icl_prompt_file, prompt, native_params.generation, error_result)) {
+        return error_result;
+    }
+
+    qwen3_tts::tts_audio_chunk_callback_t cb =
+        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
+            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
+            return callback(&c_chunk, user_data) != 0;
+        };
+    auto result = ctx->tts.synthesize_with_speaker_embedding_streaming(
+        text, prompt.speaker_embedding, cb, native_params);
+    return convert_result(result);
+}
+
 int32_t qwen3_tts_extract_speaker_embedding(
     qwen3_tts_context_t* ctx,
     const char* reference_audio,
@@ -278,6 +365,22 @@ int32_t qwen3_tts_extract_speaker_embedding(
     }
 
     return qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding) ? 1 : 0;
+}
+
+int32_t qwen3_tts_extract_icl_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* reference_audio,
+    const char* reference_text,
+    const char* output_path
+) {
+    if (!ctx || !reference_audio || !reference_text || !output_path) return 0;
+
+    qwen3_tts::icl_prompt prompt;
+    if (!ctx->tts.extract_icl_prompt(reference_audio, reference_text, prompt, nullptr)) {
+        return 0;
+    }
+
+    return qwen3_tts::save_icl_prompt_file(output_path, prompt) ? 1 : 0;
 }
 
 qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(qwen3_tts_context_t* ctx) {

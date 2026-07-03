@@ -94,6 +94,49 @@ std::string choose_tts_model_path(const std::string & model_dir,
     return tts_model_path;
 }
 
+std::string choose_tokenizer_model_path(const std::string & model_dir,
+                                        const std::string & tts_model_path) {
+    std::vector<fs::path> tokenizer_candidates;
+    if (fs::exists(model_dir) && fs::is_directory(model_dir)) {
+        for (const auto & entry : fs::directory_iterator(model_dir)) {
+            if (!entry.is_regular_file()) continue;
+            std::string filename_lower = to_lower(entry.path().filename().string());
+            std::string ext = to_lower(entry.path().extension().string());
+            if (ext == ".gguf" && filename_lower.find("tokenizer") != std::string::npos) {
+                tokenizer_candidates.push_back(entry.path());
+            }
+        }
+    }
+
+    const std::vector<std::string> preferred_exact = {
+        "qwen-tokenizer-12hz-q8_0.gguf",
+        "qwen-tokenizer-12hz-bf16.gguf",
+        "qwen-tokenizer-12hz-f32.gguf",
+    };
+    for (const auto & preferred : preferred_exact) {
+        for (const auto & path : tokenizer_candidates) {
+            if (to_lower(path.filename().string()) == preferred) {
+                return path.string();
+            }
+        }
+    }
+
+    const bool prefer_qwen_talker =
+        to_lower(fs::path(tts_model_path).filename().string()).find("qwen-talker") != std::string::npos;
+    if (prefer_qwen_talker) {
+        for (const auto & path : tokenizer_candidates) {
+            if (to_lower(path.filename().string()).find("qwen-tokenizer-12hz") != std::string::npos) {
+                return path.string();
+            }
+        }
+    }
+
+    if (!tokenizer_candidates.empty()) {
+        return tokenizer_candidates.front().string();
+    }
+    return model_dir + "/qwen-tokenizer-12hz-Q8_0.gguf";
+}
+
 std::string find_speaker_encoder_model(const std::string & tts_model_path,
                                        const std::vector<fs::path> & tts_candidates,
                                        int32_t expected_embedding_dim) {
@@ -146,6 +189,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     audio_decoder_.unload_model();
     streaming_audio_decoder_.unload_model();
     voice_prompt_cache_ = {};
+    text_tokenizer_loaded_ = false;
     encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
@@ -153,8 +197,6 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     streaming_decoder_loaded_ = false;
 
     std::string tts_model_path;
-    std::string tokenizer_model_path;
-    std::vector<fs::path> tokenizer_candidates;
     std::vector<fs::path> tts_candidates;
 
     if (fs::exists(model_dir) && fs::is_directory(model_dir)) {
@@ -168,7 +210,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
 
             if (ext == ".gguf") {
                 if (filename_lower.find("tokenizer") != std::string::npos) {
-                    tokenizer_candidates.push_back(entry.path());
+                    continue;
                 } else if (filename_lower.find("qwen-talker") != std::string::npos ||
                            filename_lower.find("full") != std::string::npos) {
                     tts_candidates.push_back(entry.path());
@@ -191,44 +233,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
             tts_model_path = model_dir + "/qwen-talker-0.6b-base-Q8_0.gguf";
         }
     }
-    const auto choose_tokenizer = [&](const bool prefer_qwen_talker) -> std::string {
-        const std::vector<std::string> preferred_exact =
-            std::vector<std::string>{
-                "qwen-tokenizer-12hz-q8_0.gguf",
-                "qwen-tokenizer-12hz-bf16.gguf",
-                "qwen-tokenizer-12hz-f32.gguf",
-            };
-        for (const auto & preferred : preferred_exact) {
-            for (const auto & path : tokenizer_candidates) {
-                std::string filename = path.filename().string();
-                std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
-                if (filename == preferred) {
-                    return path.string();
-                }
-            }
-        }
-        for (const auto & path : tokenizer_candidates) {
-            std::string filename = path.filename().string();
-            std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
-            if (prefer_qwen_talker && filename.find("qwen-tokenizer-12hz") != std::string::npos) {
-                return path.string();
-            }
-        }
-        if (!tokenizer_candidates.empty()) {
-            return tokenizer_candidates.front().string();
-        }
-        return {};
-    };
-
-    if (tokenizer_model_path.empty()) {
-        std::string tts_model_name_lower = fs::path(tts_model_path).filename().string();
-        std::transform(tts_model_name_lower.begin(), tts_model_name_lower.end(), tts_model_name_lower.begin(), ::tolower);
-        const bool prefer_qwen_talker_tokenizer = tts_model_name_lower.find("qwen-talker") != std::string::npos;
-        tokenizer_model_path = choose_tokenizer(prefer_qwen_talker_tokenizer);
-    }
-    if (tokenizer_model_path.empty()) {
-        tokenizer_model_path = model_dir + "/qwen-tokenizer-12hz-Q8_0.gguf";
-    }
+    const std::string tokenizer_model_path = choose_tokenizer_model_path(model_dir, tts_model_path);
 
     fprintf(stderr, "  TTS model path:       %s\n", tts_model_path.c_str());
     fprintf(stderr, "  Tokenizer model path: %s\n", tokenizer_model_path.c_str());
@@ -263,6 +268,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
             error_msg_ = "Failed to load text tokenizer: " + tokenizer_.get_error();
             return false;
         }
+        text_tokenizer_loaded_ = true;
         fprintf(stderr, "  Text tokenizer loaded: vocab_size=%d (%lld ms)\n",
                 tokenizer_.get_config().vocab_size,
                 (long long) (get_time_ms() - t_tokenizer_start));
@@ -358,6 +364,62 @@ bool Qwen3TTS::load_speaker_encoder_only(const std::string & model_dir, const st
             (long long) (get_time_ms() - t_start));
     log_memory_usage("speaker-load/end");
 
+    return true;
+}
+
+bool Qwen3TTS::load_icl_prompt_encoder_only(const std::string & model_dir, const std::string & model_name) {
+    configure_ggml_logging_once();
+
+    const int64_t t_start = get_time_ms();
+    log_memory_usage("icl-load/start");
+
+    transformer_.unload_model();
+    audio_encoder_.unload_model();
+    speech_encoder_.unload_model();
+    audio_decoder_.unload_model();
+    streaming_audio_decoder_.unload_model();
+    voice_prompt_cache_ = {};
+    models_loaded_ = false;
+    text_tokenizer_loaded_ = false;
+    encoder_loaded_ = false;
+    transformer_loaded_ = false;
+    speech_encoder_loaded_ = false;
+    decoder_loaded_ = false;
+    streaming_decoder_loaded_ = false;
+
+    std::vector<fs::path> tts_candidates;
+    tts_model_path_ = choose_tts_model_path(model_dir, model_name, tts_candidates);
+    tokenizer_model_path_ = choose_tokenizer_model_path(model_dir, tts_model_path_);
+    decoder_model_path_ = tokenizer_model_path_;
+
+    const int32_t expected_dim = get_talker_embedding_length(tts_model_path_);
+    speaker_encoder_model_path_ = find_speaker_encoder_model(tts_model_path_, tts_candidates, expected_dim);
+    if (speaker_encoder_model_path_.empty()) {
+        error_msg_ = "No speaker encoder tensors found for model: " + tts_model_path_;
+        return false;
+    }
+
+    fprintf(stderr, "  TTS model path:              %s\n", tts_model_path_.c_str());
+    fprintf(stderr, "  Tokenizer model path:        %s\n", tokenizer_model_path_.c_str());
+    fprintf(stderr, "  Speaker encoder model path:  %s\n", speaker_encoder_model_path_.c_str());
+
+    fprintf(stderr, "  Text tokenizer: deferred (loaded after speaker encode)\n");
+
+    const int64_t t_encoder_start = get_time_ms();
+    if (!audio_encoder_.load_model(speaker_encoder_model_path_)) {
+        error_msg_ = "Failed to load speaker encoder: " + audio_encoder_.get_error();
+        return false;
+    }
+    encoder_loaded_ = true;
+    fprintf(stderr, "  Speaker encoder loaded: embedding_dim=%d (%lld ms)\n",
+            audio_encoder_.get_config().embedding_dim,
+            (long long) (get_time_ms() - t_encoder_start));
+
+    fprintf(stderr, "  Speech tokenizer encoder: deferred (loaded after speaker encode)\n");
+
+    fprintf(stderr, "ICL prompt encoder-only load complete in %lld ms\n",
+            (long long) (get_time_ms() - t_start));
+    log_memory_usage("icl-load/end");
     return true;
 }
 

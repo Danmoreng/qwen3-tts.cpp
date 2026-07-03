@@ -120,6 +120,44 @@ static bool load_speech_codes_file(const std::string & path,
     if (!read_text_file(path, content, error)) {
         return false;
     }
+    auto parse_int_field = [&](const char * key, int32_t & out) {
+        const std::string needle = std::string("\"") + key + "\"";
+        const size_t key_pos = content.find(needle);
+        if (key_pos == std::string::npos) {
+            return;
+        }
+        const size_t colon = content.find(':', key_pos);
+        if (colon == std::string::npos) {
+            return;
+        }
+        std::stringstream ss(content.substr(colon + 1));
+        int32_t value = 0;
+        if (ss >> value) {
+            out = value;
+        }
+    };
+    parse_int_field("frames", codes.n_frames);
+    parse_int_field("codebooks", codes.n_codebooks);
+
+    const size_t codes_key = content.find("\"codes\"");
+    if (codes_key != std::string::npos) {
+        const size_t begin = content.find('[', codes_key);
+        if (begin != std::string::npos) {
+            int depth = 0;
+            for (size_t i = begin; i < content.size(); ++i) {
+                if (content[i] == '[') {
+                    ++depth;
+                } else if (content[i] == ']') {
+                    --depth;
+                    if (depth == 0) {
+                        content = content.substr(begin + 1, i - begin - 1);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     for (char & ch : content) {
         const unsigned char c = (unsigned char) ch;
         if (!std::isdigit(c) && ch != '-') {
@@ -142,8 +180,9 @@ static bool load_speech_codes_file(const std::string & path,
         error = "no integer speech codes found in: " + path;
         return false;
     }
-    codes.n_frames = 0;
-    codes.n_codebooks = 0;
+    if (codes.n_codebooks > 0 && codes.n_frames == 0) {
+        codes.n_frames = (int32_t) (codes.codes.size() / (size_t) codes.n_codebooks);
+    }
     return true;
 }
 
@@ -191,12 +230,14 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --reference-text-file <file> Read ICL reference transcript from file\n");
     fprintf(stderr, "  --reference-token-ids <file> Reference prompt token IDs for ICL voice cloning\n");
     fprintf(stderr, "  --reference-codes <file> Reference speech codes as integer text/JSON array\n");
+    fprintf(stderr, "  --icl-prompt <file> Use precomputed full ICL voice prompt (.json)\n");
     fprintf(stderr, "  --dump-generated-codes <file> Save generated speech codes for debugging\n");
     fprintf(stderr, "  --dump-decoder-codes <file> Save decoder-input speech codes for debugging\n");
     fprintf(stderr, "  --speaker <name>       Named speaker (CustomVoice models)\n");
     fprintf(stderr, "  --speaker-embedding <file> Use precomputed speaker embedding (.json/.bin)\n");
     fprintf(stderr, "  --dump-speaker-embedding <file> Save extracted embedding from --reference\n");
     fprintf(stderr, "  --extract-speaker-embedding <file> Extract embedding from --reference and exit\n");
+    fprintf(stderr, "  --extract-icl-prompt <file> Extract reusable ICL prompt from --reference and reference text\n");
     fprintf(stderr, "  --temperature <val>    Sampling temperature (default: 0.9, 0=greedy)\n");
     fprintf(stderr, "  --top-k <n>            Top-k sampling (default: 50, 0=disabled)\n");
     fprintf(stderr, "  --top-p <val>          Top-p sampling (default: 1.0)\n");
@@ -244,9 +285,11 @@ int main(int argc, char ** argv) {
     std::string reference_text_file;
     std::string reference_token_ids_file;
     std::string reference_codes_file;
+    std::string icl_prompt_file;
     std::string speaker_embedding_file;
     std::string dump_speaker_embedding_file;
     std::string extract_speaker_embedding_file;
+    std::string extract_icl_prompt_file;
     int repeat_count = 1;
     bool use_streaming = false;
     
@@ -315,6 +358,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             reference_codes_file = args[i];
+        } else if (arg == "--icl-prompt") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing ICL prompt file\n");
+                return 1;
+            }
+            icl_prompt_file = args[i];
         } else if (arg == "--dump-generated-codes") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing generated codes output file\n");
@@ -351,6 +400,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             extract_speaker_embedding_file = args[i];
+        } else if (arg == "--extract-icl-prompt") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing ICL prompt output file\n");
+                return 1;
+            }
+            extract_icl_prompt_file = args[i];
         } else if (arg == "--temperature") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing temperature value\n");
@@ -453,7 +508,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
     
-    if (text.empty() && extract_speaker_embedding_file.empty()) {
+    if (text.empty() && extract_speaker_embedding_file.empty() && extract_icl_prompt_file.empty()) {
         fprintf(stderr, "Error: text is required\n");
         print_usage(args[0].c_str());
         return 1;
@@ -465,6 +520,11 @@ int main(int argc, char ** argv) {
 
     if (!reference_audio.empty() && !speaker_embedding_file.empty()) {
         fprintf(stderr, "Error: --reference and --speaker-embedding are mutually exclusive\n");
+        return 1;
+    }
+    if (!icl_prompt_file.empty() &&
+        (!reference_audio.empty() || !speaker_embedding_file.empty() || !params.speaker.empty())) {
+        fprintf(stderr, "Error: --icl-prompt is mutually exclusive with --reference, --speaker-embedding, and --speaker\n");
         return 1;
     }
     if (!speaker_embedding_file.empty() && !params.speaker.empty()) {
@@ -481,6 +541,10 @@ int main(int argc, char ** argv) {
     }
     if (!extract_speaker_embedding_file.empty() && reference_audio.empty()) {
         fprintf(stderr, "Error: --extract-speaker-embedding requires --reference\n");
+        return 1;
+    }
+    if (!extract_icl_prompt_file.empty() && reference_audio.empty()) {
+        fprintf(stderr, "Error: --extract-icl-prompt requires --reference\n");
         return 1;
     }
     if (!reference_text_file.empty()) {
@@ -506,6 +570,13 @@ int main(int argc, char ** argv) {
             return 1;
         }
         params.reference_codes = std::move(codes);
+    }
+    if (!icl_prompt_file.empty() &&
+        (!params.reference_text.empty() ||
+         !params.reference_token_ids.empty() ||
+         params.reference_codes.has_value())) {
+        fprintf(stderr, "Error: --icl-prompt is mutually exclusive with --reference-text, --reference-token-ids, and --reference-codes\n");
+        return 1;
     }
     const bool has_reference_prompt =
         !params.reference_text.empty() || !params.reference_token_ids.empty();
@@ -558,6 +629,32 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
+    if (!extract_icl_prompt_file.empty()) {
+        fprintf(stderr, "Loading ICL prompt encoders from: %s\n", model_dir.c_str());
+        if (!tts.load_icl_prompt_encoder_only(model_dir, model_name)) {
+            fprintf(stderr, "Error: %s\n", tts.get_error().c_str());
+            return 1;
+        }
+
+        qwen3_tts::icl_prompt prompt;
+        int64_t encode_ms = 0;
+        if (!tts.extract_icl_prompt(reference_audio, params.reference_text, prompt, &encode_ms)) {
+            fprintf(stderr, "Error: failed to extract ICL prompt: %s\n", tts.get_error().c_str());
+            return 1;
+        }
+        if (!qwen3_tts::save_icl_prompt_file(extract_icl_prompt_file, prompt)) {
+            fprintf(stderr, "Error: failed to save ICL prompt: %s\n", extract_icl_prompt_file.c_str());
+            return 1;
+        }
+        fprintf(stderr, "ICL prompt saved to: %s\n", extract_icl_prompt_file.c_str());
+        fprintf(stderr, "ICL prompt encode: %lld ms (speaker=%zu floats, ref=%d frames x %d codebooks)\n",
+                (long long) encode_ms,
+                prompt.speaker_embedding.size(),
+                prompt.reference_codes.n_frames,
+                prompt.reference_codes.n_codebooks);
+        return 0;
+    }
+
     fprintf(stderr, "Loading models from: %s\n", model_dir.c_str());
     if (!tts.load_models(model_dir, model_name)) {
         fprintf(stderr, "Error: %s\n", tts.get_error().c_str());
@@ -570,6 +667,19 @@ int main(int argc, char ** argv) {
     });
 
     std::vector<float> speaker_embedding_from_file;
+    qwen3_tts::icl_prompt icl_prompt_from_file;
+    if (!icl_prompt_file.empty()) {
+        if (!qwen3_tts::load_icl_prompt_file(icl_prompt_file, icl_prompt_from_file)) {
+            fprintf(stderr, "Error: failed to load ICL prompt: %s\n", icl_prompt_file.c_str());
+            return 1;
+        }
+        if (icl_prompt_from_file.speaker_embedding.size() != 1024 &&
+            icl_prompt_from_file.speaker_embedding.size() != 2048) {
+            fprintf(stderr,
+                    "Warning: ICL prompt speaker embedding has %zu dimensions; expected 1024 (0.6B) or 2048 (1.7B)\n",
+                    icl_prompt_from_file.speaker_embedding.size());
+        }
+    }
     if (!speaker_embedding_file.empty()) {
         if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding_from_file)) {
             fprintf(stderr, "Error: failed to load speaker embedding: %s\n", speaker_embedding_file.c_str());
@@ -604,7 +714,24 @@ int main(int argc, char ** argv) {
                 return true;
             };
 
-        if (!speaker_embedding_file.empty()) {
+        if (!icl_prompt_file.empty()) {
+            qwen3_tts::tts_params icl_params = params;
+            icl_params.reference_text = icl_prompt_from_file.reference_text;
+            icl_params.reference_token_ids = icl_prompt_from_file.reference_token_ids;
+            icl_params.reference_codes = icl_prompt_from_file.reference_codes;
+            qwen3_tts::tts_streaming_params icl_stream_params = stream_params;
+            icl_stream_params.generation = icl_params;
+            fprintf(stderr, "Synthesizing with provided ICL prompt: \"%s\"\n", text.c_str());
+            fprintf(stderr, "ICL prompt: %s (speaker=%zu floats, ref=%d frames x %d codebooks)\n",
+                    icl_prompt_file.c_str(),
+                    icl_prompt_from_file.speaker_embedding.size(),
+                    icl_prompt_from_file.reference_codes.n_frames,
+                    icl_prompt_from_file.reference_codes.n_codebooks);
+            result = use_streaming
+                ? tts.synthesize_with_speaker_embedding_streaming(text, icl_prompt_from_file.speaker_embedding,
+                                                                  stream_callback, icl_stream_params)
+                : tts.synthesize_with_speaker_embedding(text, icl_prompt_from_file.speaker_embedding, icl_params);
+        } else if (!speaker_embedding_file.empty()) {
             fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
             fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
                     speaker_embedding_file.c_str(), speaker_embedding_from_file.size());

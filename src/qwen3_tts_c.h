@@ -8,7 +8,9 @@ extern "C" {
 #endif
 
 #ifdef _WIN32
-#  if defined(QWEN3_TTS_EXPORT) || defined(COMPILING_DLL)
+#  if defined(QWEN3_TTS_STATIC)
+#    define QWEN3_TTS_API
+#  elif defined(QWEN3_TTS_EXPORT) || defined(COMPILING_DLL)
 #    define QWEN3_TTS_API __declspec(dllexport)
 #  else
 #    define QWEN3_TTS_API __declspec(dllimport)
@@ -113,6 +115,17 @@ QWEN3_TTS_API int32_t qwen3_tts_load_models_with_name(
     const char* model_name
 );
 
+QWEN3_TTS_API int32_t qwen3_tts_load_icl_prompt_encoder(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_load_icl_prompt_encoder_with_name(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir,
+    const char* model_name
+);
+
 QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize(
     qwen3_tts_context_t* ctx, 
     const char* text, 
@@ -130,6 +143,13 @@ QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     qwen3_tts_context_t* ctx,
     const char* text,
     const char* speaker_embedding_file,
+    qwen3_tts_params_t params
+);
+
+QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* icl_prompt_file,
     qwen3_tts_params_t params
 );
 
@@ -159,9 +179,25 @@ QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_str
     void* user_data
 );
 
+QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt_streaming(
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* icl_prompt_file,
+    qwen3_tts_streaming_params_t params,
+    qwen3_tts_audio_chunk_callback callback,
+    void* user_data
+);
+
 QWEN3_TTS_API int32_t qwen3_tts_extract_speaker_embedding(
     qwen3_tts_context_t* ctx,
     const char* reference_audio,
+    const char* output_path
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_extract_icl_prompt(
+    qwen3_tts_context_t* ctx,
+    const char* reference_audio,
+    const char* reference_text,
     const char* output_path
 );
 

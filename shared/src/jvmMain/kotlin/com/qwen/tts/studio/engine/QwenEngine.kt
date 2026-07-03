@@ -24,6 +24,9 @@ actual class QwenEngine actual constructor() {
     actual fun loadModels(modelDir: String, modelName: String?): Boolean =
         nativeLoadModels(nativePtr, modelDir, modelName)
 
+    actual fun loadIclPromptEncoder(modelDir: String, modelName: String?): Boolean =
+        nativeLoadIclPromptEncoder(nativePtr, modelDir, modelName)
+
     actual fun synthesize(
         text: String,
         referenceWav: String?,
@@ -32,8 +35,18 @@ actual class QwenEngine actual constructor() {
     ): NativeResult =
         nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, params)
 
+    actual fun synthesizeWithIclPrompt(
+        text: String,
+        iclPromptPath: String,
+        params: NativeParams
+    ): NativeResult =
+        nativeSynthesizeWithIclPrompt(nativePtr, text, iclPromptPath, params)
+
     actual fun extractSpeakerEmbedding(referenceWav: String, outputPath: String): Boolean =
         nativeExtractSpeakerEmbedding(nativePtr, referenceWav, outputPath)
+
+    actual fun extractIclPrompt(referenceWav: String, referenceText: String, outputPath: String): Boolean =
+        nativeExtractIclPrompt(nativePtr, referenceWav, referenceText, outputPath)
 
     actual fun getAvailableSpeakers(): List<String> {
         val raw = nativeGetAvailableSpeakers(nativePtr).orEmpty()
@@ -58,6 +71,7 @@ actual class QwenEngine actual constructor() {
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
     private external fun nativeLoadModels(ptr: Long, modelDir: String, modelName: String?): Boolean
+    private external fun nativeLoadIclPromptEncoder(ptr: Long, modelDir: String, modelName: String?): Boolean
     private external fun nativeSynthesize(
         ptr: Long,
         text: String,
@@ -65,9 +79,21 @@ actual class QwenEngine actual constructor() {
         speakerEmbeddingPath: String?,
         params: NativeParams?
     ): NativeResult
+    private external fun nativeSynthesizeWithIclPrompt(
+        ptr: Long,
+        text: String,
+        iclPromptPath: String,
+        params: NativeParams?
+    ): NativeResult
     private external fun nativeExtractSpeakerEmbedding(
         ptr: Long,
         referenceWav: String,
+        outputPath: String
+    ): Boolean
+    private external fun nativeExtractIclPrompt(
+        ptr: Long,
+        referenceWav: String,
+        referenceText: String,
         outputPath: String
     ): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
