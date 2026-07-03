@@ -26,6 +26,9 @@ function New-EmptyWavAudioStats([string]$path, [string]$errorMessage) {
         PeakDbFS       = [double]::NegativeInfinity
         RmsDbFS        = [double]::NegativeInfinity
         NonZeroSamples = 0
+        SilenceThreshold = 0.001
+        SilentSampleRatio = 0.0
+        LongestSilenceSec = 0.0
     }
 }
 
@@ -121,6 +124,10 @@ function Get-WavAudioStats {
             $peak = 0.0
             $sumSquares = 0.0
             $nonZero = 0
+            $silenceThreshold = 0.001
+            $silentSamples = 0
+            $currentSilentRun = 0
+            $longestSilentRun = 0
 
             for ($i = 0; $i -lt $sampleCount; $i++) {
                 $offset = $i * $bytesPerSample
@@ -148,11 +155,21 @@ function Get-WavAudioStats {
                 if ($abs -gt $peak) {
                     $peak = $abs
                 }
+                if ($abs -lt $silenceThreshold) {
+                    $silentSamples++
+                    $currentSilentRun++
+                    if ($currentSilentRun -gt $longestSilentRun) {
+                        $longestSilentRun = $currentSilentRun
+                    }
+                } else {
+                    $currentSilentRun = 0
+                }
                 $sumSquares += $v * $v
             }
 
             $rms = [Math]::Sqrt($sumSquares / [double]$sampleCount)
             $frames = [double]$sampleCount / [double]$channels
+            $longestSilentFrames = [double]$longestSilentRun / [double]$channels
 
             return [PSCustomObject]@{
                 Path           = $Path
@@ -172,6 +189,9 @@ function Get-WavAudioStats {
                 PeakDbFS       = ConvertTo-DbFs $peak
                 RmsDbFS        = ConvertTo-DbFs $rms
                 NonZeroSamples = $nonZero
+                SilenceThreshold = $silenceThreshold
+                SilentSampleRatio = [double]$silentSamples / [double]$sampleCount
+                LongestSilenceSec = $longestSilentFrames / [double]$sampleRate
             }
         } finally {
             $br.Dispose()

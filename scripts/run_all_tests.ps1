@@ -12,6 +12,7 @@ param(
     [switch]$BuildFirst,
     [switch]$BuildMissingTargets,
     [switch]$RequireComponentTests,
+    [switch]$RequireIclSmoke,
     [switch]$Skip17B,
     [switch]$PrepareAssets,
     [switch]$GenerateMissingAssets
@@ -57,6 +58,16 @@ function Find-FirstExisting([string[]]$paths) {
         if (Test-Path $p) {
             return $p
         }
+    }
+    return $null
+}
+
+function Find-StudioModelDir() {
+    $candidate = Join-Path $env:USERPROFILE ".qwen-tts-studio\models"
+    if ((Test-Path -LiteralPath (Join-Path $candidate "qwen-talker-0.6b-base-Q8_0.gguf")) -and
+        (Test-Path -LiteralPath (Join-Path $candidate "qwen-talker-1.7b-base-Q8_0.gguf")) -and
+        (Test-Path -LiteralPath (Join-Path $candidate "qwen-tokenizer-12hz-Q8_0.gguf"))) {
+        return (Resolve-Path -LiteralPath $candidate).Path
     }
     return $null
 }
@@ -349,7 +360,12 @@ if ($hadDebugDumpEnv) {
 }
 
 $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repoRoot $BuildDir }
-$resolvedModelDir = if ([System.IO.Path]::IsPathRooted($ModelDir)) { $ModelDir } else { Join-Path $repoRoot $ModelDir }
+$studioModelDir = Find-StudioModelDir
+if ($ModelDir -eq "models" -and $studioModelDir) {
+    $resolvedModelDir = $studioModelDir
+} else {
+    $resolvedModelDir = if ([System.IO.Path]::IsPathRooted($ModelDir)) { $ModelDir } else { Join-Path $repoRoot $ModelDir }
+}
 $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $repoRoot $OutputDir }
 
 if ($BuildFirst) {
@@ -593,6 +609,37 @@ if (-not $cliExe) {
         }
     } else {
         Add-Skip "CLI voice cloning (reference audio missing)"
+    }
+
+    if ($RequireIclSmoke) {
+        $referenceTextFile = Join-Path $repoRoot "reference_text.txt"
+        if ($refAudio -and (Test-Path $referenceTextFile)) {
+            $iclOut = Join-Path $resolvedOutputDir "regression_icl_reference_text.wav"
+            Write-Host ""
+            Write-Host "--- CLI ICL voice cloning with reference text ---"
+            $iclRes = Invoke-CommandCapture -exe $cliExe -commandArgs @(
+                "-m", $resolvedModelDir,
+                "-t", "This is a longer ICL smoke test. The output should contain clear spoken audio, not only noise or silence.",
+                "-r", $refAudio,
+                "--reference-text-file", $referenceTextFile,
+                "--temperature", "0.9",
+                "--top-k", "50",
+                "--top-p", "1.0",
+                "--seed", "42",
+                "--max-tokens", "48",
+                "-o", $iclOut
+            )
+            if ($iclRes.ExitCode -eq 0) {
+                Validate-WavOutput -testName "CLI ICL voice cloning with reference text" -wavPath $iclOut -minDurationSec 1.0 -maxDurationSec 8.0 | Out-Null
+            } else {
+                Add-Fail "CLI ICL voice cloning with reference text (exit code: $($iclRes.ExitCode))"
+                Write-OutputTail -output $iclRes.Output
+            }
+        } else {
+            Add-Fail "CLI ICL voice cloning with reference text (reference audio/text missing)"
+        }
+    } else {
+        Add-Skip "CLI ICL voice cloning with reference text (enable with -RequireIclSmoke)"
     }
 }
 

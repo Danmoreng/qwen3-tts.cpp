@@ -111,19 +111,20 @@ def _move_prompt(prompt, device: str | None = None):
 
 
 def _create_voice_prompt(model, args: argparse.Namespace):
+    ref_text = "" if args.xvec_only else args.reference_text
     if args.backend == "faster":
         base = model.model
         prompt_items = base.create_voice_clone_prompt(
             ref_audio=args.reference_audio,
-            ref_text="",
-            x_vector_only_mode=True,
+            ref_text=ref_text,
+            x_vector_only_mode=args.xvec_only,
         )
         return base._prompt_items_to_voice_clone_prompt(prompt_items)
 
     prompt_items = model.create_voice_clone_prompt(
         ref_audio=args.reference_audio,
-        ref_text="",
-        x_vector_only_mode=True,
+        ref_text=ref_text,
+        x_vector_only_mode=args.xvec_only,
     )
     return model._prompt_items_to_voice_clone_prompt(prompt_items)
 
@@ -162,7 +163,60 @@ def _generate_voice_clone(model, args: argparse.Namespace):
             kwargs["x_vector_only_mode"] = args.xvec_only
         kwargs["non_streaming_mode"] = args.non_streaming_mode
 
+    if args.streaming:
+        if args.backend != "faster":
+            raise ValueError("--streaming is currently supported only with --backend faster")
+        kwargs["chunk_size"] = args.chunk_size
+        kwargs["parity_mode"] = args.parity_mode
+        chunks = []
+        sample_rate = 24000
+        ttfa_s = None
+        t0 = time.perf_counter()
+        for chunk, sample_rate, timing in model.generate_voice_clone_streaming(**kwargs):
+            _sync_cuda()
+            if ttfa_s is None:
+                ttfa_s = time.perf_counter() - t0
+            chunks.append(np.asarray(chunk, dtype=np.float32).reshape(-1))
+        _sync_cuda()
+        synth_s = time.perf_counter() - t0
+        wav = np.concatenate(chunks) if chunks else np.zeros(1, dtype=np.float32)
+        return [wav], sample_rate, {
+            "streaming": True,
+            "chunk_size": args.chunk_size,
+            "ttfa_seconds": ttfa_s,
+            "synth_seconds": synth_s,
+        }
+
     return model.generate_voice_clone(**kwargs)
+
+
+def _warmup_faster_streaming(model, args: argparse.Namespace) -> float:
+    if args.backend != "faster" or not args.streaming or args.warmup_tokens <= 0:
+        return 0.0
+
+    kwargs = {
+        "text": args.text[:50] if len(args.text) > 50 else args.text,
+        "language": args.language,
+        "max_new_tokens": args.warmup_tokens,
+        "temperature": args.temperature,
+        "top_k": args.top_k,
+        "top_p": args.top_p,
+        "do_sample": not args.greedy,
+        "repetition_penalty": args.repetition_penalty,
+        "non_streaming_mode": args.non_streaming_mode,
+    }
+    if args.prompt_artifact:
+        kwargs["voice_clone_prompt"] = _load_voice_prompt(Path(args.prompt_artifact), args.device_map)
+    else:
+        kwargs["ref_audio"] = args.reference_audio
+        kwargs["ref_text"] = args.reference_text
+        kwargs["xvec_only"] = args.xvec_only
+
+    _sync_cuda()
+    t0 = time.perf_counter()
+    model.generate_voice_clone(**kwargs)
+    _sync_cuda()
+    return time.perf_counter() - t0
 
 
 def main() -> int:
@@ -185,6 +239,10 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--greedy", action="store_true")
     parser.add_argument("--xvec-only", action="store_true")
+    parser.add_argument("--streaming", action="store_true")
+    parser.add_argument("--chunk-size", type=int, default=8)
+    parser.add_argument("--parity-mode", action="store_true")
+    parser.add_argument("--warmup-tokens", type=int, default=20)
     parser.add_argument("--non-streaming-mode", action="store_true")
     parser.add_argument("--device-map", default="cuda")
     parser.add_argument("--dtype", choices=["auto", "float32", "float16", "bfloat16"], default="bfloat16")
@@ -220,10 +278,18 @@ def main() -> int:
         print("BENCHMARK_JSON " + json.dumps(result, sort_keys=True))
         return 0
 
+    warmup_s = _warmup_faster_streaming(model, args)
+
     t0 = time.perf_counter()
-    wavs, sample_rate = _generate_voice_clone(model, args)
-    _sync_cuda()
-    synth_s = time.perf_counter() - t0
+    generated = _generate_voice_clone(model, args)
+    if isinstance(generated, tuple) and len(generated) == 3:
+        wavs, sample_rate, extra_metrics = generated
+        synth_s = float(extra_metrics.get("synth_seconds", 0.0))
+    else:
+        wavs, sample_rate = generated
+        _sync_cuda()
+        synth_s = time.perf_counter() - t0
+        extra_metrics = {}
 
     out = Path(args.output)
     _write_wav(out, wavs, int(sample_rate))
@@ -239,7 +305,9 @@ def main() -> int:
         "rtf_audio_per_wall": duration_s / (load_s + synth_s) if load_s + synth_s > 0 else 0.0,
         "rtf_audio_per_synth": duration_s / synth_s if synth_s > 0 else 0.0,
         "sample_rate": int(sample_rate),
+        "warmup_seconds": warmup_s,
     }
+    result.update(extra_metrics)
     print("BENCHMARK_JSON " + json.dumps(result, sort_keys=True))
     return 0
 

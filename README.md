@@ -36,53 +36,95 @@ voice cloning, backend selection, and Windows/Linux packaging.
 ## Benchmarks
 
 These numbers are local Windows CUDA measurements from the framework comparison
-harness. Each row is the average of three voice-clone runs. Speaker encoding is
-measured as a separate encode phase, and speech synthesis is measured with a
-precomputed speaker embedding.
+harness. They report the best-case warm generation path for each framework:
+model load, process startup, reference trimming, speaker encoding, and voice
+prompt construction are excluded where the framework exposes separate timers.
+The primary metric is `RTF`, computed as generated audio duration divided by
+`Generate+Decode` seconds. Higher is better.
 
 Test setup:
 
 - Windows, CUDA backend, NVIDIA GeForce RTX 5080 Laptop GPU 16 GB
 - `max_tokens=128`, `threads=4`, sampled decoding with temperature `0.9`,
   top-k `50`, top-p `1.0`, repetition penalty `1.05`
-- `Speaker encode` is the standalone encode command wall time; for
-  `qwen3-tts.cpp`, `--extract-speaker-embedding` loads only speaker-encoder
-  tensors, not the transformer or vocoder
-- `Speech synthesis` and `RTF` use the internal synthesis timer, excluding model
-  load time
-- Higher RTF is better
+- Reference audio is trimmed to 5.95 s before benchmarking
+- `qwen3-tts.cpp` uses a resident CLI repeat (`BenchmarkScope=session_repeat`)
+  and the Q8_0 GGUF models from `%USERPROFILE%\.qwen-tts-studio\models`
+- `faster-qwen3-tts` uses warm CUDA-graphs streaming with `chunk_size=8`
+- `audio.cpp` uses one warm offline session with repeated requests and BF16
+  weights; it does not expose the speaker-embedding-only path used in the first
+  table, so that row is shown as `-`
+- Serveurperso's CLI does not expose an equivalent resident repeat mode here;
+  its rows use internal `TalkerDecode + CodecDecode` timers
 
-### 1.7B Base
+### Speaker-Embedding Voice Clone
 
-| Engine | Model / dtype | Speaker encode | Speech synthesis | Audio | RTF |
-|--------|---------------|----------------|------------------|-------|-----|
-| `qwen3-tts.cpp` | GGUF Q8_0 | 1.890 s | 1.460 s | 6.670 s | 4.580 |
-| `ServeurpersoCom/qwentts.cpp` | GGUF Q8_0 | 2.530 s | 3.230 s | 6.720 s | 2.080 |
-| `audio.cpp` | HF weights, F16 | 1.380 s | 5.888 s | 5.600 s | 0.953 |
-| `faster-qwen3-tts` | HF weights, BF16 | 11.466 s | 17.832 s | 7.120 s | 0.401 |
-| Official Python | HF weights, BF16 | 12.160 s | 22.550 s | 6.800 s | 0.303 |
+This is the lightweight voice-clone path: extract a speaker embedding once, then
+generate from that embedding without prepending reference speech codes.
 
-### 0.6B Base
+| Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
+|--------|----------------------|---------|----------------------|---------|
+| `qwen3-tts.cpp` GGUF Q8_0 | 0.965 s | 6.973 | 1.077 s | 6.251 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 0.925 s | 7.314 | 0.890 s | 7.911 |
+| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 2.775 s | 2.797 | 2.835 s | 2.342 |
+| `audio.cpp` | - | - | - | - |
 
-| Engine | Model / dtype | Speaker encode | Speech synthesis | Audio | RTF |
-|--------|---------------|----------------|------------------|-------|-----|
-| `qwen3-tts.cpp` | GGUF Q8_0 | 1.930 s | 1.240 s | 6.880 s | 5.580 |
-| `ServeurpersoCom/qwentts.cpp` | GGUF Q8_0 | 2.120 s | 2.950 s | 6.480 s | 2.200 |
-| `audio.cpp` | HF weights, F32 | 1.275 s | 5.777 s | 5.920 s | 1.025 |
-| `faster-qwen3-tts` | HF weights, BF16 | 12.391 s | 17.358 s | 6.400 s | 0.369 |
-| Official Python | HF weights, BF16 | 12.919 s | 23.348 s | 7.360 s | 0.315 |
+### Full ICL Voice Clone
 
-The 0.6B `audio.cpp` row uses F32 weights.
+This is the heavier voice-clone path: encode/tokenize the reference audio and
+prepend reference speech codes plus transcript context. The table still reports
+only warm `Generate+Decode` time, not reference prompt construction.
+
+| Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
+|--------|----------------------|---------|----------------------|---------|
+| `qwen3-tts.cpp` GGUF Q8_0 | 1.416 s | 7.235 | 1.809 s | 5.662 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 1.309 s | 7.943 | 1.299 s | 7.887 |
+| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 3.825 s | 2.678 | 4.448 s | 2.302 |
+| `audio.cpp` HF BF16, warm session | 5.217 s | 1.949 | 5.962 s | 1.704 |
 
 The comparison harness is:
 
 ```powershell
+$models = "$env:USERPROFILE\.qwen-tts-studio\models"
+
+# Speaker-embedding voice clone.
 .\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso `
-  -Variant 1.7b-base -BenchmarkMode split -Runs 3
+  -Variant 1.7b-base -BenchmarkMode split -Runs 3 `
+  -ReferenceMaxSec 5.95 -QwenCppModels $models -QwenCppSessionRepeats 2
+.\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
+  -Variant 1.7b-base -BenchmarkMode split -Runs 3 `
+  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
 .\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso `
   -Variant 0.6b-base -BenchmarkMode split -Runs 3 `
-  -QwenCppModelName qwen-talker-0.6b-base-Q8_0.gguf
+  -ReferenceMaxSec 5.95 -QwenCppModels $models -QwenCppSessionRepeats 2
+.\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
+  -Variant 0.6b-base -BenchmarkMode split -Runs 3 `
+  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
+
+# Full ICL path: reference transcript + reference speech codes are part of the workload.
+.\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso,audio_cpp `
+  -Variant 1.7b-base -BenchmarkMode full -Runs 3 `
+  -ReferenceMaxSec 5.95 -QwenCppModels $models `
+  -QwenCppSessionRepeats 2 -AudioCppSessionRepeats 2
+.\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso,audio_cpp `
+  -Variant 0.6b-base -BenchmarkMode full -Runs 3 `
+  -ReferenceMaxSec 5.95 -QwenCppModels $models `
+  -QwenCppSessionRepeats 2 -AudioCppSessionRepeats 2
+
+# Faster CUDA-graphs streaming path. Report separately from process/CLI rows.
+.\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
+  -Variant 1.7b-base -BenchmarkMode full -Runs 3 `
+  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
+.\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
+  -Variant 0.6b-base -BenchmarkMode full -Runs 3 `
+  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
 ```
+
+The raw and summary CSVs include `PromptMode`, `BenchmarkScope`,
+`ModelFormat`, `Precision`, `GenerationSeconds`,
+`RTF_AudioPerGeneration`, `ReferenceAudioSec`, and silence metrics. Use the
+generation columns for best-case throughput. Keep Q8/GGUF rows separate from HF
+FP16/BF16/F32 rows when publishing results.
 
 ## Quick Start
 
@@ -281,16 +323,23 @@ CustomVoice speaker:
   -o styled.wav
 ```
 
-Greedy decoding:
+Reproducible sampled decoding:
 
 ```bash
 ./build/qwen3-tts-cli -m models \
   -t "Hello!" \
-  --temperature 0 \
-  --top-k 0 \
+  --temperature 0.9 \
+  --top-k 50 \
+  --top-p 1.0 \
+  --seed 42 \
   --max-tokens 256 \
-  -o greedy.wav
+  -o seeded.wav
 ```
+
+`--temperature 0` enables greedy argmax decoding. It is useful for low-level
+debugging and reference comparisons, but speaker-embedding-only synthesis can
+collapse to near-silent repeated speech codes with greedy decoding. For user
+facing audio, prefer seeded sampling when reproducibility is needed.
 
 ## CLI Options
 

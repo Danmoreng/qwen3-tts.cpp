@@ -36,6 +36,15 @@ function Find-FirstExisting([string[]]$paths) {
     return $null
 }
 
+function Find-StudioModelDir() {
+    $candidate = Join-Path $env:USERPROFILE ".qwen-tts-studio\models"
+    if ((Test-Path -LiteralPath (Join-Path $candidate "qwen-talker-0.6b-base-Q8_0.gguf")) -and
+        (Test-Path -LiteralPath (Join-Path $candidate "qwen-tokenizer-12hz-Q8_0.gguf"))) {
+        return (Resolve-Path -LiteralPath $candidate).Path
+    }
+    return $null
+}
+
 function Resolve-BinaryPath([string]$name, [string]$buildDir, [string]$config) {
     $candidates = @(
         (Join-Path $buildDir "$config\$name.exe"),
@@ -177,7 +186,12 @@ function Get-GitCommit([string]$repoRoot) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repoRoot $BuildDir }
-$resolvedModelDir = if ([System.IO.Path]::IsPathRooted($ModelDir)) { $ModelDir } else { Join-Path $repoRoot $ModelDir }
+$studioModelDir = Find-StudioModelDir
+if ($ModelDir -eq "models" -and $studioModelDir) {
+    $resolvedModelDir = $studioModelDir
+} else {
+    $resolvedModelDir = if ([System.IO.Path]::IsPathRooted($ModelDir)) { $ModelDir } else { Join-Path $repoRoot $ModelDir }
+}
 $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $repoRoot $OutputDir }
 
 $cliExe = Resolve-BinaryPath -name "qwen3-tts-cli" -buildDir $resolvedBuildDir -config $Configuration
