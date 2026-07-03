@@ -568,6 +568,19 @@ JNIEXPORT jstring JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetAv
     return result;
 }
 
+JNIEXPORT jstring JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetLastError(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr
+) {
+    if (ctx_ptr == 0) return nullptr;
+
+    char* error = qwen3_tts_get_last_error(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr));
+    if (!error) return nullptr;
+
+    jstring result = env->NewStringUTF(error);
+    qwen3_tts_free_string(error);
+    return result;
+}
+
 JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetModelCapabilities(
     JNIEnv* env, jobject thiz, jlong ctx_ptr
 ) {
