@@ -239,7 +239,13 @@ function Get-BenchmarkInternalMetrics([string]$Implementation, [string]$LogText)
     } elseif ($Implementation -eq "serveurperso") {
         $metrics.InternalTotalMs = Get-RegexMetric $LogText "\[Perf\]\s+Total\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
         $metrics.InternalEncodeMs = Get-RegexMetric $LogText "\[Perf\]\s+PromptBuild\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
-        $metrics.InternalGenerateMs = Get-RegexMetric $LogText "\[Perf\]\s+TalkerDecode\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
+        $talkerDecodeMs = Get-RegexMetric $LogText "\[Perf\]\s+TalkerDecode\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
+        $codePredictorMs = Get-RegexMetric $LogText "\[Perf\]\s+CodePredictor\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
+        if ($null -ne $talkerDecodeMs -and $null -ne $codePredictorMs) {
+            $metrics.InternalGenerateMs = [double]$talkerDecodeMs + [double]$codePredictorMs
+        } else {
+            $metrics.InternalGenerateMs = $talkerDecodeMs
+        }
         $metrics.InternalDecodeMs = Get-RegexMetric $LogText "\[Perf\]\s+CodecDecode\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
         $metrics.InternalTtfaMs = Get-RegexMetric $LogText "\[Perf\]\s+TTFA\s+([0-9]+(?:\.[0-9]+)?)\s+ms"
     } elseif ($Implementation -eq "audio_cpp") {
