@@ -127,6 +127,14 @@ int32_t qwen3_tts_set_backend_preference(int32_t preference) {
     return qwen3_tts::set_backend_preference(native_preference) ? 1 : 0;
 }
 
+int32_t qwen3_tts_set_cpu_threads(int32_t n_threads) {
+    return qwen3_tts::set_cpu_thread_count(n_threads) ? 1 : 0;
+}
+
+int32_t qwen3_tts_get_cpu_threads() {
+    return qwen3_tts::get_cpu_thread_count();
+}
+
 int32_t qwen3_tts_get_compiled_backend_mask() {
     return qwen3_tts::get_compiled_backend_mask();
 }

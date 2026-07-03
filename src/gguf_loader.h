@@ -82,9 +82,13 @@ bool load_tensor_data_from_file(
 
 // Helper to initialize backend with GPU preference and CPU fallback
 ggml_backend_t init_preferred_backend(const char * component_name, std::string * error_msg);
+ggml_backend_t init_cpu_backend(const char * component_name, std::string * error_msg);
 void release_preferred_backend(ggml_backend_t backend);
 bool set_backend_preference(backend_preference preference);
 backend_preference get_backend_preference();
+int32_t default_cpu_thread_count();
+bool set_cpu_thread_count(int32_t n_threads);
+int32_t get_cpu_thread_count();
 enum ggml_backend_dev_type get_preferred_backend_type();
 int32_t get_compiled_backend_mask();
 std::string get_active_backend_name();

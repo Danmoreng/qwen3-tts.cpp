@@ -46,7 +46,7 @@ The primary metric is `RTF`, computed as generated audio duration divided by
 Test setup:
 
 - Windows, CUDA backend, NVIDIA GeForce RTX 5080 Laptop GPU 16 GB
-- `max_tokens=128`, `threads=4`, sampled decoding with temperature `0.9`,
+- `max_tokens=128`, CPU threads set to physical cores, sampled decoding with temperature `0.9`,
   top-k `50`, top-p `1.0`, repetition penalty `1.05`
 - Reference audio is trimmed to 5.95 s before benchmarking
 - `qwen3-tts.cpp` uses a resident CLI repeat (`BenchmarkScope=session_repeat`)
@@ -389,7 +389,7 @@ facing audio, prefer seeded sampling when reproducibility is needed.
 | `--repetition-penalty <value>` | Repetition penalty | `1.05` |
 | `-l, --language <lang>` | `en ru zh ja ko de fr es it pt` | `en` |
 | `--instruction`, `--instruct` | Style / voice instruction prompt | None |
-| `-j, --threads <n>` | CPU thread count | `4` |
+| `-j, --threads <n>` | CPU thread count | physical cores |
 
 `--reference`, `--speaker`, `--speaker-embedding`, and `--icl-prompt` are
 mutually exclusive speaker-conditioning modes.

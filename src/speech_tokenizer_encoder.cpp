@@ -633,7 +633,7 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
 
     auto & state = impl_->state;
     if (force_cpu) {
-        state.backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        state.backend = init_cpu_backend("SpeechTokenizerEncoder", &error_msg_);
         state.backend_shared = false;
         if (!state.backend) {
             error_msg_ = "Failed to initialize CPU backend for SpeechTokenizerEncoder";
@@ -651,7 +651,7 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
     fprintf(stderr, "  SpeechTokenizerEncoder backend: %s\n", device_name);
 
     if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        state.backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        state.backend_cpu = init_cpu_backend("SpeechTokenizerEncoder fallback", &error_msg_);
         if (!state.backend_cpu) {
             error_msg_ = "Failed to initialize CPU fallback backend for SpeechTokenizerEncoder";
             return false;

@@ -163,7 +163,7 @@ bool TTSTransformer::load_model(const std::string & model_path) {
     fprintf(stderr, "  TTSTransformer backend: %s\n", device_name);
 
     if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        impl_->state.backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        impl_->state.backend_cpu = init_cpu_backend("TTSTransformer fallback", &error_msg_);
         if (!impl_->state.backend_cpu) {
             error_msg_ = "Failed to initialize CPU fallback backend for TTSTransformer";
             return false;

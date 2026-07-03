@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 namespace qwen3_tts {
 
@@ -11,6 +12,7 @@ struct shared_backend_state {
     ggml_backend_t backend = nullptr;
     int32_t ref_count = 0;
     backend_preference preference = backend_preference::auto_select;
+    int32_t cpu_n_threads = 0;
     std::string active_backend_name;
 };
 
@@ -19,8 +21,38 @@ shared_backend_state & get_shared_backend_state() {
     return state;
 }
 
+int32_t sanitize_thread_count(int32_t n_threads) {
+    return n_threads > 0 ? n_threads : default_cpu_thread_count();
+}
+
+void configure_cpu_backend_threads(ggml_backend_t backend) {
+    if (!backend) {
+        return;
+    }
+
+    ggml_backend_dev_t device = ggml_backend_get_device(backend);
+    if (!device || ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+    if (!reg) {
+        return;
+    }
+
+    auto set_fn =
+        (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+    if (set_fn) {
+        set_fn(backend, get_cpu_thread_count());
+    }
+}
+
 ggml_backend_t init_backend_by_type(enum ggml_backend_dev_type type) {
-    return ggml_backend_init_by_type(type, nullptr);
+    ggml_backend_t backend = ggml_backend_init_by_type(type, nullptr);
+    if (type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        configure_cpu_backend_threads(backend);
+    }
+    return backend;
 }
 
 std::string backend_name(ggml_backend_t backend) {
@@ -83,8 +115,23 @@ ggml_backend_t init_preferred_backend(const char * component_name, std::string *
         shared.active_backend_name = backend_name(backend);
         fprintf(stderr, "  Native backend preference: %d\n", static_cast<int>(shared.preference));
         fprintf(stderr, "  Native active backend: %s\n", shared.active_backend_name.c_str());
+        if (ggml_backend_get_device(backend) &&
+            ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            fprintf(stderr, "  Native CPU threads: %d\n", get_cpu_thread_count());
+        }
     }
 
+    return backend;
+}
+
+ggml_backend_t init_cpu_backend(const char * component_name, std::string * error_msg) {
+    if (error_msg) error_msg->clear();
+
+    ggml_backend_t backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!backend && error_msg) {
+        const char * name = component_name ? component_name : "component";
+        *error_msg = "Failed to initialize CPU backend for " + std::string(name);
+    }
     return backend;
 }
 
@@ -115,6 +162,28 @@ bool set_backend_preference(backend_preference preference) {
     }
     shared.preference = preference;
     return true;
+}
+
+int32_t default_cpu_thread_count() {
+    int32_t n_threads = (int32_t) (std::thread::hardware_concurrency() / 2);
+    return n_threads > 0 ? n_threads : 1;
+}
+
+bool set_cpu_thread_count(int32_t n_threads) {
+    auto & shared = get_shared_backend_state();
+    shared.cpu_n_threads = sanitize_thread_count(n_threads);
+    if (shared.backend) {
+        configure_cpu_backend_threads(shared.backend);
+    }
+    return true;
+}
+
+int32_t get_cpu_thread_count() {
+    auto & shared = get_shared_backend_state();
+    if (shared.cpu_n_threads <= 0) {
+        shared.cpu_n_threads = default_cpu_thread_count();
+    }
+    return shared.cpu_n_threads;
 }
 
 backend_preference get_backend_preference() {
@@ -229,22 +298,22 @@ bool load_tensor_data_from_file(
     std::string & error_msg,
     enum ggml_backend_dev_type preferred_backend_type
 ) {
-    ggml_backend_t backend = ggml_backend_init_by_type(preferred_backend_type, nullptr);
+    ggml_backend_t backend = init_backend_by_type(preferred_backend_type);
     const backend_preference preference = get_backend_preference();
     const bool allow_fallback = preference == backend_preference::auto_select &&
         preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_CPU;
     if (!backend && allow_fallback) {
         if (preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
-            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+            backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
         }
         if (!backend && preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_GPU) {
-            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+            backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
         }
         if (!backend && preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_ACCEL) {
-            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_ACCEL, nullptr);
+            backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_ACCEL);
         }
         if (!backend) {
-            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+            backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         }
     }
     if (!backend) {

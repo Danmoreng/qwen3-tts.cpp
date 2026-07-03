@@ -159,6 +159,18 @@ JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSetB
     return qwen3_tts_set_backend_preference(static_cast<int32_t>(preference)) != 0 ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSetCpuThreads(
+    JNIEnv* env, jobject thiz, jint n_threads
+) {
+    return qwen3_tts_set_cpu_threads(static_cast<int32_t>(n_threads)) != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetCpuThreads(
+    JNIEnv* env, jobject thiz
+) {
+    return static_cast<jint>(qwen3_tts_get_cpu_threads());
+}
+
 JNIEXPORT jint JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetCompiledBackendMask(
     JNIEnv* env, jobject thiz
 ) {

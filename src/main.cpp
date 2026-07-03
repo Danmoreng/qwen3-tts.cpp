@@ -1,4 +1,5 @@
 #include "qwen3_tts.h"
+#include "gguf_loader.h"
 
 #include <cctype>
 #include <cstdio>
@@ -251,7 +252,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
     fprintf(stderr, "  --instruct <text>      Voice steering instructions (e.g. \"whispering\")\n");
-    fprintf(stderr, "  -j, --threads <n>      Number of threads (default: 4)\n");
+    fprintf(stderr, "  -j, --threads <n>      CPU thread count (default: physical cores)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Example:\n");
@@ -292,6 +293,7 @@ int main(int argc, char ** argv) {
     std::string extract_icl_prompt_file;
     int repeat_count = 1;
     bool use_streaming = false;
+    bool threads_set = false;
     
     qwen3_tts::tts_params params;
     qwen3_tts::tts_streaming_params stream_params;
@@ -494,12 +496,19 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             params.n_threads = std::stoi(args[i]);
+            threads_set = true;
         } else {
             fprintf(stderr, "Error: unknown argument: %s\n", arg.c_str());
             print_usage(args[0].c_str());
             return 1;
         }
     }
+
+    if (!qwen3_tts::set_cpu_thread_count(threads_set ? params.n_threads : qwen3_tts::default_cpu_thread_count())) {
+        fprintf(stderr, "Error: failed to set CPU thread count\n");
+        return 1;
+    }
+    params.n_threads = qwen3_tts::get_cpu_thread_count();
     
     // Validate required arguments
     if (model_dir.empty()) {

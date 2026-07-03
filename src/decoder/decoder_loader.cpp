@@ -21,7 +21,7 @@ ggml_backend_t init_dedicated_decoder_backend(std::string & error_msg) {
         backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_ACCEL, nullptr);
     }
     if (!backend) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        backend = init_cpu_backend("AudioTokenizerDecoder", &error_msg);
     }
     if (!backend) {
         error_msg = "Failed to initialize dedicated backend for AudioTokenizerDecoder";
@@ -423,7 +423,7 @@ bool AudioTokenizerDecoder::load_model_impl(const std::string & model_path,
     fprintf(stderr, "  AudioTokenizerDecoder backend: %s\n", device_name);
 
     if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        state.backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        state.backend_cpu = init_cpu_backend("AudioTokenizerDecoder fallback", &error_msg);
         if (!state.backend_cpu) {
             error_msg = "Failed to initialize CPU fallback backend for AudioTokenizerDecoder";
             return false;
