@@ -337,6 +337,9 @@ class Qwen3TTSConverter:
         # For 2D+ tensors, use the specified output type
         if self.output_type == "f32":
             return data.astype(np.float32), gguf.GGMLQuantizationType.F32
+        elif self.output_type == "bf16":
+            bf16 = gguf.quants.quantize(data.astype(np.float32), gguf.GGMLQuantizationType.BF16)
+            return bf16, gguf.GGMLQuantizationType.BF16
         elif self.output_type == "f16":
             return data.astype(np.float16), gguf.GGMLQuantizationType.F16
         elif self.output_type == "q8_0":
@@ -478,6 +481,8 @@ class Qwen3TTSConverter:
         # File type
         if self.output_type == "f32":
             ftype = "F32"
+        elif self.output_type == "bf16":
+            ftype = "BF16"
         elif self.output_type == "f16":
             ftype = "F16"
         elif self.output_type == "q8_0":
@@ -636,9 +641,9 @@ def main():
     )
     parser.add_argument(
         "--type", "-t",
-        choices=["f16", "f32", "q8_0", "q4_k"],
+        choices=["f16", "f32", "bf16", "q8_0", "q4_k"],
         default="f16",
-        help="Output data type (default: f16). q8_0 provides ~50%% size reduction, q4_k provides ~70%% size reduction."
+        help="Output data type (default: f16). bf16 matches the common PyTorch CUDA dtype; q8_0 provides ~50%% size reduction, q4_k provides ~70%% size reduction."
     )
     parser.add_argument(
         "--verbose", "-v",

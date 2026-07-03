@@ -105,6 +105,8 @@ typedef int32_t (*qwen3_tts_audio_chunk_callback)(
 QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
 QWEN3_TTS_API void qwen3_tts_free(qwen3_tts_context_t* ctx);
 QWEN3_TTS_API int32_t qwen3_tts_set_backend_preference(int32_t preference);
+QWEN3_TTS_API int32_t qwen3_tts_set_cpu_threads(int32_t n_threads);
+QWEN3_TTS_API int32_t qwen3_tts_get_cpu_threads();
 QWEN3_TTS_API int32_t qwen3_tts_get_compiled_backend_mask();
 QWEN3_TTS_API char* qwen3_tts_get_active_backend_name();
 

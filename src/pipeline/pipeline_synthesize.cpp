@@ -1206,9 +1206,6 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
             result.error_msg = "Failed to initialize streaming decoder";
             return result;
         }
-        if (reference_codes_ptr) {
-            stream.preload_context(reference_codes_ptr->codes.data(), reference_codes_ptr->n_frames);
-        }
     }
 
     std::vector<int32_t> generated_codes;
@@ -1271,19 +1268,8 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
 
     if (streaming) {
         if (!params.dump_decoder_codes_path.empty()) {
-            std::vector<int32_t> decoder_codes;
-            const int32_t decoder_frames = reference_codes_ptr ? n_frames + reference_codes_ptr->n_frames : n_frames;
-            const std::vector<int32_t> * dump_codes = &generated_codes;
-            if (reference_codes_ptr) {
-                decoder_codes.reserve(reference_codes_ptr->codes.size() + generated_codes.size());
-                decoder_codes.insert(decoder_codes.end(),
-                                     reference_codes_ptr->codes.begin(),
-                                     reference_codes_ptr->codes.end());
-                decoder_codes.insert(decoder_codes.end(), generated_codes.begin(), generated_codes.end());
-                dump_codes = &decoder_codes;
-            }
-            if (!write_codes_file(params.dump_decoder_codes_path, *dump_codes,
-                                  decoder_frames, n_codebooks, result.error_msg)) {
+            if (!write_codes_file(params.dump_decoder_codes_path, generated_codes,
+                                  n_frames, n_codebooks, result.error_msg)) {
                 return result;
             }
         }
@@ -1351,20 +1337,10 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
         }
     }
 
-    std::vector<int32_t> decoder_codes;
-    const int32_t decoder_frames = reference_codes_ptr ? n_frames + reference_codes_ptr->n_frames : n_frames;
+    const int32_t decoder_frames = n_frames;
     const int32_t * decoder_code_data = generated_codes.data();
-    if (reference_codes_ptr) {
-        decoder_codes.reserve(reference_codes_ptr->codes.size() + generated_codes.size());
-        decoder_codes.insert(decoder_codes.end(),
-                             reference_codes_ptr->codes.begin(),
-                             reference_codes_ptr->codes.end());
-        decoder_codes.insert(decoder_codes.end(), generated_codes.begin(), generated_codes.end());
-        decoder_code_data = decoder_codes.data();
-    }
     if (!params.dump_decoder_codes_path.empty()) {
-        const auto & dump_codes = reference_codes_ptr ? decoder_codes : generated_codes;
-        if (!write_codes_file(params.dump_decoder_codes_path, dump_codes,
+        if (!write_codes_file(params.dump_decoder_codes_path, generated_codes,
                               decoder_frames, n_codebooks, result.error_msg)) {
             return result;
         }
@@ -1383,18 +1359,6 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
     result.decode_graph_rebuilt = decoder_timing.graph_rebuilt;
     result.decode_frames = decoder_timing.n_frames;
     result.decode_samples = decoder_timing.n_samples;
-    if (reference_codes_ptr) {
-        const int64_t cut = decoder_frames > 0
-            ? (int64_t) ((double) reference_codes_ptr->n_frames /
-                         (double) decoder_frames *
-                         (double) result.audio.size())
-            : 0;
-        if (cut < 0 || cut > (int64_t) result.audio.size()) {
-            result.error_msg = "ICL reference trim is out of range";
-            return result;
-        }
-        result.audio.erase(result.audio.begin(), result.audio.begin() + cut);
-    }
     result.t_decode_ms = get_time_ms() - t_decode_start;
     sample_memory("synth/after-decode");
 

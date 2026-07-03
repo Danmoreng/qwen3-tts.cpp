@@ -140,7 +140,7 @@ bool AudioTokenizerEncoder::load_model(const std::string & model_path) {
     fprintf(stderr, "  AudioTokenizerEncoder backend: %s\n", device_name);
 
     if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        state.backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        state.backend_cpu = init_cpu_backend("AudioTokenizerEncoder fallback", &error_msg_);
         if (!state.backend_cpu) {
             error_msg_ = "Failed to initialize CPU fallback backend for AudioTokenizerEncoder";
             return false;
