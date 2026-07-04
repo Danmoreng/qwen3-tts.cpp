@@ -46,7 +46,12 @@ def main() -> None:
             print(f"EXPECTATION SCHEMA FAILED: {failure}")
         raise SystemExit(1)
 
+    negative_failures = validate_payload(make_invalid_payload())
+    if not negative_failures:
+        raise SystemExit("negative expectation schema check unexpectedly passed")
+
     print(f"Python parity expectation schema passed: {args.expectations}")
+    print("Negative expectation schema check failed as expected.")
 
 
 def validate_payload(payload: dict[str, Any]) -> list[str]:
@@ -102,6 +107,36 @@ def validate_payload(payload: dict[str, Any]) -> list[str]:
             )
 
     return failures
+
+
+def make_invalid_payload() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "fixtures": {
+            "speaker_only": {
+                "text": "Synthetic bad fixture",
+                "max_tokens": 1,
+                "max_frames": 1,
+                "expect": {
+                    "match_percent_at_least": 101.0,
+                    "first_diff_frame": 0,
+                    "first_diff_codebook": 99,
+                    "first_diff_token_a": 1,
+                    "first_diff_token_b": 2,
+                    "first_diff_cosine_at_least": 0.0,
+                    "first_diff_max_abs_at_most": 1.0,
+                    "first_diff_category": "not_a_category",
+                    "first_diff_max_abs_over_margin_at_least": 1.0,
+                },
+            },
+            "icl": {
+                "text": "",
+                "max_tokens": 0,
+                "max_frames": 0,
+                "expect": {},
+            },
+        },
+    }
 
 
 if __name__ == "__main__":

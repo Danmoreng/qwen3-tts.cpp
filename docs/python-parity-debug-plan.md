@@ -330,7 +330,8 @@ Candidate gates:
   checkpoint.
 - `scripts/test_python_parity_expectations_smoke.py` validates the checked-in
   expectation metadata schema, required fields, category values, and basic
-  numeric ranges without running full model fixtures.
+  numeric ranges without running full model fixtures; it also checks that a
+  deliberately invalid metadata payload is rejected.
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata and first-diff classification for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/parity_trace_summary.py` also emits `first_diff_classification`
@@ -562,11 +563,17 @@ Targeted BF16 variant experiment:
   utilization was `0%`.
 - A model-free expectation metadata smoke now validates
   `tests/fixtures/python_parity_expectations.json` before the full parity
-  fixtures consume it. `run_all_tests.ps1 -ParityFixturesOnly` passed with
+  fixtures consume it and verifies that invalid metadata fails schema checks.
+  `run_all_tests.ps1 -ParityFixturesOnly` passed with
   helper smokes plus both full fixtures (`PASS: 7`, `FAIL: 0`, `SKIP: 4`).
-  Follow-up no-debug timing used the idle-GPU guard and 3 repeats: warm
-  generate median `873.65 ms`, code predictor `492.65 ms`, pipeline `903.0 ms`,
-  RTF `0.2305`; pre-run GPU utilization was `0%`.
+  Follow-up no-debug timing used the idle-GPU guard and 3 repeats. The current
+  comparison run measured warm generate median `1069.85 ms`, code predictor
+  `614.8 ms`, pipeline `1104.0 ms`, RTF `0.282`, about `+22%` versus the
+  previous same-session expectation-schema timing baseline (`873.65 ms`
+  generate, `903.0 ms` pipeline), with no failures under the `30%` smoke
+  threshold; pre-run GPU utilization was `0%`. This change touches only test
+  and doc files, so treat the slower run as a timing-noise observation rather
+  than a production-code regression.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
