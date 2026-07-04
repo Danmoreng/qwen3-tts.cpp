@@ -32,6 +32,7 @@ speaker-only trace setup:
 | Source checkpoint precision | The local `Qwen3-TTS-12Hz-1.7B-Base/model.safetensors` checkpoint stores all `480/480` tensors as BF16, including code-predictor layer-4 MLP weights. `scripts/inspect_safetensors_dtypes.py` makes this check repeatable. Targeted F32 GGUF storage cannot recover precision that is not present in the source checkpoint. | Verified |
 | Speaker-only BF16 generation parity | With Python speaker embedding, corrected non-streaming/base prompt layout, `do_sample=True`, and `top_k=1`, frames `0..8` match exactly. First divergence is frame `9`, codebook `6`: Python token `517`, C++ token `9`. | Late drift |
 | Python CPU BF16 trace | CPU BF16 PyTorch is not a reliable parity proxy for the current CUDA/GGUF path: it matches only `94/160` tokens against C++ over the 10-frame fixture and first diverges at frame `0`, codebook `14`. | Diagnostic only |
+| Python CUDA BF16 trace | CUDA BF16 PyTorch is also not a stronger top-token oracle for the current GGUF path. Speaker-only matches `94/160` tokens and first diverges at frame `0`, codebook `14`; ICL matches `3/16` tokens and first diverges at frame `0`, codebook `3`. Both first divergences are BF16 top-logit ties in Python. | Diagnostic only |
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
 | Greedy path | Greedy currently produces invalid/repetitive output and should not be used as the main parity gate until fixed. | Known failing |
 | No-debug performance guard | Alternating clean-baseline/current CUDA timing run showed no regression after debug-only trace hooks: current median `Total generate` was `872.1 ms` vs baseline `882.2 ms` for the 64-token speaker-only benchmark. | Verified |
@@ -280,6 +281,19 @@ Current result:
   - The aggregate trajectory summary reports the frame `9` Python top-1 margin is `0.0517x` the smallest prior Python margin, while the frame `9` max-absolute logit difference is `0.9411x` the prior maximum.
 - After the step `5` flip, subsequent codebooks in frame `9` diverge autoregressively.
 - Python CPU BF16 is much less aligned than Python CPU F32 for this local setup, so use CPU F32 traces for structural debugging unless a CUDA BF16 Python trace is available.
+- Python CUDA BF16 was checked after the GPU became idle and is not a better
+  top-token parity oracle than CPU F32:
+  - Speaker-only CUDA BF16 vs C++ matched `94/160` tokens and first diverged at
+    frame `0`, codebook `14`: Python token `1213` vs C++ token `812`.
+    Python's top logits for tokens `1213` and `812` were exactly tied at
+    `29.375`, while C++ favored token `812` by `0.022070`.
+  - ICL CUDA BF16 vs C++ matched `3/16` tokens and first diverged at frame `0`,
+    codebook `3`: Python token `483` vs C++ token `1151`. Python's top logits
+    for tokens `1151` and `483` were exactly tied at `18.25`, while C++ favored
+    token `1151` by `0.071327`.
+  - These traces are useful evidence that BF16 quantization creates hard
+    near-tie/tie cases, but the CPU F32 trace remains the cleaner structural
+    debugging reference.
 - ICL frame `0` now matches through codebook `7`; codebook `8` flips between a tight top-3:
   - Python: token `499` at `21.591181`
   - C++: token `1481` at `21.595354`, token `499` at `21.593187`
@@ -361,9 +375,10 @@ implementation bug.
 Next practical step: do not pursue F32 GGUF storage variants from the current
 local HF checkpoint. It is entirely BF16, so those variants cannot recover
 source precision and the single `code_pred.blk.4.ffn_down.weight` test produced
-identical parity summaries. The remaining useful options are a true F32-source
-checkpoint experiment if such a checkpoint exists, a CUDA BF16 Python reference
-trace once the GPU is idle, or accepting the current late-frame near-ties as
+identical parity summaries. CUDA BF16 Python traces were checked and are less
+useful as top-token gates because they introduce frame-0 BF16 ties. The
+remaining useful options are a true F32-source checkpoint experiment if such a
+checkpoint exists, or accepting the current late-frame near-ties as
 BF16/PyTorch-vs-GGML numerical drift.
 
 Latest speaker performance smoke after adding the fixture runner was
@@ -469,6 +484,10 @@ Targeted BF16 variant experiment:
 - Wait-guard validation with threshold `50`, wait `2s`, poll `1s` saw the GPU
   settle to `0%` and ran a 3-repeat smoke: warm generate median `1108.05 ms`,
   pipeline median `1141.0 ms`, RTF median `0.291`.
+- Follow-up no-debug timing after the CUDA BF16 trace runs used the idle-GPU
+  guard with threshold `20`, wait `60s`, and 3 repeats. Warm generate median was
+  `919.5 ms`, code predictor `523.35 ms`, pipeline `950.0 ms`, RTF `0.2425`;
+  pre-run GPU utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
