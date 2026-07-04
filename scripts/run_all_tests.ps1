@@ -659,6 +659,7 @@ $parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary
 $debugTraceSmokeScript = Join-Path $repoRoot "scripts/test_debug_trace_report_smoke.py"
 $parityDtypeSmokeScript = Join-Path $repoRoot "scripts/test_inspect_safetensors_dtypes_smoke.py"
 $parityExpectationsSmokeScript = Join-Path $repoRoot "scripts/test_python_parity_expectations_smoke.py"
+$parityFixtureMetadataSmokeScript = Join-Path $repoRoot "scripts/test_parity_fixture_metadata_smoke.py"
 $benchmarkParitySmokeScript = Join-Path $repoRoot "scripts/benchmark_parity_smoke.ps1"
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCmd) {
@@ -732,6 +733,25 @@ if ($null -eq $pythonCmd) {
     } else {
         Add-Fail "Python parity expectations smoke (exit code: $($parityExpectationsSmokeRes.ExitCode))"
         Write-OutputTail -output $parityExpectationsSmokeRes.Output
+    }
+}
+
+if ($null -eq $pythonCmd) {
+    Add-Skip "Python parity fixture metadata smoke (python missing)"
+} elseif (-not (Test-Path $parityFixtureMetadataSmokeScript)) {
+    Add-Fail "Python parity fixture metadata smoke (script missing)"
+} else {
+    $parityFixtureMetadataSmokeOut = Join-Path $resolvedOutputDir "python_parity_fixture_metadata_smoke"
+    $parityFixtureMetadataSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $parityFixtureMetadataSmokeScript,
+        "--expectations", (Join-Path $repoRoot "tests/fixtures/python_parity_expectations.json"),
+        "--output-dir", $parityFixtureMetadataSmokeOut
+    )
+    if ($parityFixtureMetadataSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Python parity fixture metadata smoke"
+    } else {
+        Add-Fail "Python parity fixture metadata smoke (exit code: $($parityFixtureMetadataSmokeRes.ExitCode))"
+        Write-OutputTail -output $parityFixtureMetadataSmokeRes.Output
     }
 }
 

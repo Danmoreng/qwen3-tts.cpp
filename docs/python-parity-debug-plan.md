@@ -332,6 +332,10 @@ Candidate gates:
   expectation metadata schema, required fields, category values, and basic
   numeric ranges without running full model fixtures; it also checks that a
   deliberately invalid metadata payload is rejected.
+- `scripts/test_parity_fixture_metadata_smoke.py` validates synthetic
+  `fixture_metadata.json` sidecars against the checked-in parity expectations,
+  including a deliberately invalid metadata payload, without running full model
+  fixtures.
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata and first-diff classification for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/parity_trace_summary.py` also emits `first_diff_classification`
@@ -632,15 +636,15 @@ Targeted BF16 variant experiment:
   summary.
 - `run_speaker_parity_fixture.ps1` now writes `fixture_metadata.json` beside
   each generated parity fixture. `run_all_tests.ps1 -ParityFixturesOnly` passed
-  with helper smokes, both full fixtures, and both metadata sidecar checks
-  (`PASS: 9`, `FAIL: 0`, `SKIP: 4`). The generated sidecars recorded the
-  expected modes and gates: speaker fixture `near_tie_token_swap` with
-  `MaxTokens=12`, `MaxFrames=10`; ICL fixture `near_tie` with `MaxTokens=4`,
-  `MaxFrames=1`. Follow-up no-debug timing used the idle-GPU guard, 4 repeats,
-  loose `30%` regression thresholds, and `10%` warm-spread thresholds: warm
-  generate median `892.8 ms`, code predictor `501.2 ms`, pipeline `917.0 ms`,
-  RTF `0.234`; no stability failures and the old pre-metadata baseline warning
-  remained visible as expected.
+  with helper smokes, the model-free fixture metadata smoke, both full fixtures,
+  and both metadata sidecar checks (`PASS: 10`, `FAIL: 0`, `SKIP: 4`). The
+  generated sidecars recorded the expected modes and gates: speaker fixture
+  `near_tie_token_swap` with `MaxTokens=12`, `MaxFrames=10`; ICL fixture
+  `near_tie` with `MaxTokens=4`, `MaxFrames=1`. Follow-up no-debug timing used
+  the idle-GPU guard, 4 repeats, loose `30%` regression thresholds, and `10%`
+  warm-spread thresholds: warm generate median `859.3 ms`, code predictor
+  `480.5 ms`, pipeline `884.0 ms`, RTF `0.226`; no stability failures and the
+  old pre-metadata baseline warning remained visible as expected.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
