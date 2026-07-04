@@ -737,6 +737,7 @@ Write-Section "Section 1b: Python Parity Helper Smokes"
 $parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary_smoke.py"
 $debugTraceSmokeScript = Join-Path $repoRoot "scripts/test_debug_trace_report_smoke.py"
 $parityDtypeSmokeScript = Join-Path $repoRoot "scripts/test_inspect_safetensors_dtypes_smoke.py"
+$speechTokenizerPaddingSmokeScript = Join-Path $repoRoot "scripts/test_speech_tokenizer_padding_smoke.py"
 $parityExpectationsSmokeScript = Join-Path $repoRoot "scripts/test_python_parity_expectations_smoke.py"
 $parityFixtureMetadataSmokeScript = Join-Path $repoRoot "scripts/test_parity_fixture_metadata_smoke.py"
 $benchmarkParitySmokeScript = Join-Path $repoRoot "scripts/benchmark_parity_smoke.ps1"
@@ -795,6 +796,22 @@ if ($null -eq $pythonCmd) {
     } else {
         Add-Fail "Safetensors dtype smoke (exit code: $($parityDtypeSmokeRes.ExitCode))"
         Write-OutputTail -output $parityDtypeSmokeRes.Output
+    }
+}
+
+if ($null -eq $pythonCmd) {
+    Add-Skip "Speech tokenizer padding smoke (python missing)"
+} elseif (-not (Test-Path $speechTokenizerPaddingSmokeScript)) {
+    Add-Fail "Speech tokenizer padding smoke (script missing)"
+} else {
+    $speechTokenizerPaddingSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $speechTokenizerPaddingSmokeScript
+    )
+    if ($speechTokenizerPaddingSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Speech tokenizer padding smoke"
+    } else {
+        Add-Fail "Speech tokenizer padding smoke (exit code: $($speechTokenizerPaddingSmokeRes.ExitCode))"
+        Write-OutputTail -output $speechTokenizerPaddingSmokeRes.Output
     }
 }
 

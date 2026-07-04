@@ -419,6 +419,10 @@ Candidate gates:
   safetensors smoke for `scripts/inspect_safetensors_dtypes.py`; it verifies
   positive BF16 expectations and negative expectation handling without the real
   checkpoint.
+- `scripts/test_speech_tokenizer_padding_smoke.py` is a model-free shape guard
+  for the Mimi downsample padding formula. It checks the local regression case
+  where a 149-frame hidden sequence needs `extra_padding=1` to produce 75
+  projected frames instead of the old 74-frame output.
 - `scripts/test_python_parity_expectations_smoke.py` validates the checked-in
   expectation metadata schema, required fields, category values, and basic
   numeric ranges without running full model fixtures; it also checks that a
@@ -877,6 +881,24 @@ Targeted BF16 variant experiment:
   keep the BF16 tokenizer GGUF default and keep using Python reference codes for
   transformer ICL parity; fixing extracted-code parity likely needs a conv or
   feature-extraction change, not merely F32 GGUF storage.
+- Speech-tokenizer padding guard follow-up: added
+  `scripts/test_speech_tokenizer_padding_smoke.py` and wired it into
+  `run_all_tests.ps1` Section 1b so the 149-frame Mimi downsample shape fix has
+  a small reproducible regression test without model artifacts. A brief
+  zero-padding experiment, motivated by the local Python source's `F.pad(...,
+  mode="constant", value=0)` line, was tested and reverted because it made the
+  Python-Golden projection much worse (`semantic rmse 1.00408`, `acoustic rmse
+  0.219686`) versus the current replicate-padding path (`0.0786482` and
+  `0.0215511`). The targeted Golden test is back to the known current result:
+  shape/VQ-on-Python-projections pass, full encode differs by `176/1200` codes.
+  `run_all_tests.ps1 -ParityFixturesOnly -BuildDir build-timing-current
+  -OutputDir test_output\python_parity_gate_after_padding_smoke` passed with
+  `PASS: 11`, `FAIL: 0`, `SKIP: 4`. A performance smoke was attempted, but a
+  comparable run was not available because the GPU was already at `100%`
+  utilization; the idle-guarded benchmark correctly skipped with
+  `BENCHMARK SKIPPED: GPU utilization before benchmark was 100%, above
+  threshold 20%`. This change only adds a test/script gate and does not alter
+  the checked-in inference path.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1
