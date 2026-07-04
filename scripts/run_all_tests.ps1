@@ -167,6 +167,65 @@ function Invoke-CheckedTest(
     return $false
 }
 
+function Test-ParityFixtureMetadata(
+    [string]$name,
+    [string]$outputDir,
+    [string]$expectedMode,
+    [object]$fixture,
+    [object]$expect
+) {
+    $metadataPath = Join-Path $outputDir "fixture_metadata.json"
+    $failures = [System.Collections.Generic.List[string]]::new()
+
+    if (-not (Test-Path -LiteralPath $metadataPath)) {
+        $failures.Add("missing metadata file: $metadataPath")
+    } else {
+        try {
+            $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+            if ($metadata.SchemaVersion -ne 1) {
+                $failures.Add("SchemaVersion expected 1, got $($metadata.SchemaVersion)")
+            }
+            if ($metadata.FixtureMode -ne $expectedMode) {
+                $failures.Add("FixtureMode expected $expectedMode, got $($metadata.FixtureMode)")
+            }
+            if ($metadata.Inputs.Text -ne $fixture.text) {
+                $failures.Add("Inputs.Text did not match fixture text")
+            }
+            if ([int]$metadata.Inputs.MaxTokens -ne [int]$fixture.max_tokens) {
+                $failures.Add("Inputs.MaxTokens expected $($fixture.max_tokens), got $($metadata.Inputs.MaxTokens)")
+            }
+            if ([int]$metadata.Inputs.MaxFrames -ne [int]$fixture.max_frames) {
+                $failures.Add("Inputs.MaxFrames expected $($fixture.max_frames), got $($metadata.Inputs.MaxFrames)")
+            }
+            if ($metadata.Expectations.FirstDiffCategory -ne $expect.first_diff_category) {
+                $failures.Add("Expectations.FirstDiffCategory expected $($expect.first_diff_category), got $($metadata.Expectations.FirstDiffCategory)")
+            }
+            if ([int]$metadata.Expectations.FirstDiffFrame -ne [int]$expect.first_diff_frame) {
+                $failures.Add("Expectations.FirstDiffFrame expected $($expect.first_diff_frame), got $($metadata.Expectations.FirstDiffFrame)")
+            }
+            if ([int]$metadata.Expectations.FirstDiffCodebook -ne [int]$expect.first_diff_codebook) {
+                $failures.Add("Expectations.FirstDiffCodebook expected $($expect.first_diff_codebook), got $($metadata.Expectations.FirstDiffCodebook)")
+            }
+            if ([string]::IsNullOrWhiteSpace($metadata.Outputs.Summary) -or -not (Test-Path -LiteralPath $metadata.Outputs.Summary)) {
+                $failures.Add("Outputs.Summary missing or does not exist: $($metadata.Outputs.Summary)")
+            }
+        } catch {
+            $failures.Add("could not parse metadata: $($_.Exception.Message)")
+        }
+    }
+
+    if ($failures.Count -eq 0) {
+        Add-Pass "Python parity fixture metadata ($name)"
+        return $true
+    }
+
+    Add-Fail "Python parity fixture metadata ($name)"
+    foreach ($failure in $failures) {
+        Write-Host "  -> $failure" -ForegroundColor DarkYellow
+    }
+    return $false
+}
+
 function Save-DebugDumpEnv() {
     return [PSCustomObject]@{
         Dir = $env:QWEN3_TTS_DEBUG_DUMP_DIR
@@ -771,6 +830,7 @@ if (-not $cliExe) {
     )
     if ($speakerParityRes.ExitCode -eq 0) {
         Add-Pass "Python parity fixture (speaker-only)"
+        Test-ParityFixtureMetadata -name "speaker-only" -outputDir $speakerParityOut -expectedMode "speaker" -fixture $speakerFixture -expect $speakerExpect | Out-Null
     } else {
         Add-Fail "Python parity fixture (speaker-only, exit code: $($speakerParityRes.ExitCode))"
         Write-OutputTail -output $speakerParityRes.Output
@@ -805,6 +865,7 @@ if (-not $cliExe) {
     )
     if ($iclParityRes.ExitCode -eq 0) {
         Add-Pass "Python parity fixture (ICL)"
+        Test-ParityFixtureMetadata -name "ICL" -outputDir $iclParityOut -expectedMode "icl" -fixture $iclFixture -expect $iclExpect | Out-Null
     } else {
         Add-Fail "Python parity fixture (ICL, exit code: $($iclParityRes.ExitCode))"
         Write-OutputTail -output $iclParityRes.Output
