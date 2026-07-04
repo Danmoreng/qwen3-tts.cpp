@@ -168,12 +168,40 @@ struct ggml_tensor * replicate_pad_left_1d(struct ggml_context * ctx,
     return ggml_cont(ctx, ggml_concat(ctx, prefix, x, 0));
 }
 
-struct ggml_tensor * conv1d_replicate_left_w(struct ggml_context * ctx,
-                                             struct ggml_tensor * w,
-                                             struct ggml_tensor * x,
-                                             int stride,
-                                             int left_pad) {
-    x = replicate_pad_left_1d(ctx, x, left_pad);
+struct ggml_tensor * replicate_pad_right_1d(struct ggml_context * ctx,
+                                            struct ggml_tensor * x,
+                                            int right_pad) {
+    if (right_pad <= 0) {
+        return x;
+    }
+    const int64_t last_offset = (x->ne[0] - 1) * x->nb[0];
+    struct ggml_tensor * last = ggml_view_3d(ctx, x, 1, x->ne[1], x->ne[2],
+                                            x->nb[1], x->nb[2], last_offset);
+    struct ggml_tensor * suffix_shape = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
+                                                           right_pad, x->ne[1], x->ne[2]);
+    struct ggml_tensor * suffix = ggml_repeat(ctx, last, suffix_shape);
+    return ggml_cont(ctx, ggml_concat(ctx, x, suffix, 0));
+}
+
+int mimi_extra_padding_for_conv1d(int64_t length, int kernel_size, int stride, int padding_total) {
+    const int64_t numerator = length - kernel_size + padding_total;
+    const int64_t n_frames = (numerator + stride - 1) / stride;
+    const int64_t ideal_length = n_frames * stride + kernel_size - padding_total;
+    const int64_t extra = ideal_length - length;
+    return extra > 0 ? (int) extra : 0;
+}
+
+struct ggml_tensor * conv1d_replicate_causal_w(struct ggml_context * ctx,
+                                               struct ggml_tensor * w,
+                                               struct ggml_tensor * x,
+                                               int stride,
+                                               int padding_total) {
+    const int64_t input_len = x->ne[0];
+    const int64_t kernel_size = w ? w->ne[0] : 1;
+    const int right_pad = mimi_extra_padding_for_conv1d(input_len, (int) kernel_size,
+                                                        stride, padding_total);
+    x = replicate_pad_left_1d(ctx, x, padding_total);
+    x = replicate_pad_right_1d(ctx, x, right_pad);
     x = ggml_conv_1d(ctx, as_f16_conv_weight(ctx, w), x, stride, 0, 1);
     return ggml_cont(ctx, x);
 }
@@ -396,7 +424,7 @@ struct ggml_cgraph * build_project_graph(speech_tokenizer_encoder_private & impl
 
     struct ggml_tensor * cur_t = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
     cur = ggml_reshape_3d(ctx0, cur_t, n_frames, cfg.hidden_size, 1);
-    cur = conv1d_replicate_left_w(ctx0, model.downsample_w, cur, 2, 2);
+    cur = conv1d_replicate_causal_w(ctx0, model.downsample_w, cur, 2, 2);
     ggml_set_name(cur, "downsample_output");
     maybe_set_debug_output(cur, dump_intermediates);
     n_projected_frames = (int32_t) cur->ne[0];

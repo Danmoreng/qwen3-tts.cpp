@@ -31,6 +31,7 @@ that hurt performance:
 |---|---|---|
 | Python prompt extraction | Faster Qwen3 TTS matches Python prompt codes exactly when extra silence appending is disabled. | Verified |
 | audio.cpp prompt extraction | Reference-code values diverge from Python despite matching frame count. | Verified divergent |
+| qwen.cpp ICL prompt extraction | The speech-tokenizer encoder downsample now mirrors Mimi's causal right `extra_padding`, so `--extract-icl-prompt` emits `75` reference-code frames for the local prompt instead of `74`. VQ quantization is exact when fed Python projected features, but full WAV-to-code extraction still has projection/feature drift versus Python. | Frame count fixed, values still divergent |
 | BF16 GGUF conversion | A mostly-BF16 GGUF can be built directly from the BF16 HuggingFace checkpoint. `scripts/convert_tts_to_gguf.py` also supports repeatable `--keep-f32-regex` overrides for targeted parity model variants without runtime casts. | Implemented locally |
 | Source checkpoint precision | The local `Qwen3-TTS-12Hz-1.7B-Base/model.safetensors` checkpoint stores all `480/480` tensors as BF16, including code-predictor layer-4 MLP weights. `scripts/inspect_safetensors_dtypes.py` makes this check repeatable. Targeted F32 GGUF storage cannot recover precision that is not present in the source checkpoint. | Verified |
 | Speaker-only BF16 generation parity | With Python speaker embedding, corrected non-streaming/base prompt layout, `do_sample=True`, `top_k=1`, and the default F32 talker KV cache, the 10-frame fixture matches Python F32 exactly (`160/160`). | Verified |
@@ -499,8 +500,9 @@ beat the stable default fixture results.
 
 Next practical step: make the `MaxTokens=12`, `MaxFrames=10` speaker-only and
 ICL fixtures the primary parity gates, keep performance smoke runs paired with
-any inference-path change, and tackle remaining separate items: audio.cpp
-prompt-code divergence and smaller reproducible test fixtures.
+any inference-path change, and tackle remaining separate items: speech-tokenizer
+projection/feature drift in automatic ICL prompt extraction, audio.cpp
+prompt-code divergence, and smaller reproducible test fixtures.
 
 Latest speaker performance smoke after adding the fixture runner was
 current-only, no-debug, 8 process runs with the same 64-token speaker prompt.
@@ -819,6 +821,29 @@ Targeted BF16 variant experiment:
   `903.0 ms`, and RTF `0.230`
   (`benchmark_output\perf_parity_smoke_after_greedy_penalty_fix`), with no
   benchmark warnings or stability failures.
+- Speech-tokenizer encoder prompt-code follow-up: fresh
+  `--extract-icl-prompt` on `benchmark_output\parity_serveurperso_seed`
+  previously emitted `74` reference-code frames while Python emits `75`. The
+  final Mimi downsample layer now applies causal replicate left padding plus
+  dynamic right `extra_padding` (`padding_total=2`, `extra_padding=1` for the
+  local 149-frame hidden sequence), matching Python's `MimiConv1d` output
+  length. The current prompt extraction emits `75 x 16` codes. The targeted
+  `test_speech_tokenizer_encoder` now forces the same CPU backend used by CLI
+  prompt extraction and passes the Python-Golden shape/VQ checks:
+  `quantize_projected` on Python projected features is exact (`75 x 16`), and
+  full `project()` on Python `model_input_values` now has the correct `75`
+  frames. Remaining drift is numerical/feature-side, not VQ-side: full encode
+  from Python `model_input_values` differs by `176/1200` codes, while full
+  prompt extraction from WAV still differs more because the local audio
+  resampling/feature path is not yet Python-identical. Keep using Python
+  reference codes for transformer ICL parity until this path is tightened.
+  `run_all_tests.ps1 -ParityFixturesOnly -BuildDir build-timing-current
+  -OutputDir test_output\python_parity_gate_after_speech_downsample_fix` passed
+  with `PASS: 10`, `FAIL: 0`, `SKIP: 4`. A comparable timing guard against
+  `benchmark_output\perf_parity_smoke_after_greedy_penalty_fix\summary.json`
+  passed with no failures under `10%` thresholds: warm generate median
+  `864.4 ms` (`-0.73%`), pipeline `888.0 ms` (`-1.66%`), RTF `0.227`
+  (`-1.30%`).
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1
