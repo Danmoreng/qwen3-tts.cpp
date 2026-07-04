@@ -4,8 +4,8 @@ CI-safe smoke test for parity_trace_summary.py.
 
 The full Python/C++ parity fixtures need large local model artifacts. This test
 creates tiny synthetic trace directories at runtime and verifies that the
-summary CLI reports the expected first-diff token metadata and near-tie
-classification.
+summary CLI reports the expected first-diff token metadata, near-tie
+classification, boundary tensors, and code-predictor layer tensors.
 """
 
 from __future__ import annotations
@@ -52,6 +52,21 @@ def make_synthetic_traces(root: Path) -> tuple[Path, Path]:
     logits_b[11] = 2.01
     write_trace_entry(trace_a, rows_a, "frame000_codepred_logits_step05.f32.bin", "f32", logits_a)
     write_trace_entry(trace_b, rows_b, "frame000_codepred_logits_step05.f32.bin", "f32", logits_b)
+
+    hidden_a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+    hidden_b = np.array([1.0, 2.5, 3.0, 4.0], dtype=np.float32)
+    write_trace_entry(trace_a, rows_a, "frame000_talker_hidden.f32.bin", "f32", hidden_a)
+    write_trace_entry(trace_b, rows_b, "frame000_talker_hidden.f32.bin", "f32", hidden_b)
+
+    projected_a = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    projected_b = np.array([[1.0, 0.0, 0.0, 0.25]], dtype=np.float32)
+    write_trace_entry(trace_a, rows_a, "frame000_codepred_step05_projected.f32.bin", "f32", projected_a)
+    write_trace_entry(trace_b, rows_b, "frame000_codepred_step05_projected.f32.bin", "f32", projected_b)
+
+    layer_hidden_a = np.array([[0.0, 1.0, 2.0, 3.0]], dtype=np.float32)
+    layer_hidden_b = np.array([[0.0, 1.0, 2.5, 3.0]], dtype=np.float32)
+    write_trace_entry(trace_a, rows_a, "frame000_codepred_step05_layer00_hidden.f32.bin", "f32", layer_hidden_a)
+    write_trace_entry(trace_b, rows_b, "frame000_codepred_step05_layer00_hidden.f32.bin", "f32", layer_hidden_b)
 
     write_manifest(trace_a, rows_a)
     write_manifest(trace_b, rows_b)
@@ -118,11 +133,21 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     category = summary["first_diff_classification"]["category"]
     first_diff = summary["tokens"]["first_diff"]
+    boundary_hidden = summary["boundary_tensors_at_first_diff"]["frame000_talker_hidden.f32.bin"]
+    layer_projected = summary["codepred_layer_tensors_at_first_diff"]["tensors"][
+        "frame000_codepred_step05_projected.f32.bin"
+    ]
+    layer_hidden = summary["codepred_layer_tensors_at_first_diff"]["tensors"][
+        "frame000_codepred_step05_layer00_hidden.f32.bin"
+    ]
+    assert_close(boundary_hidden["max_abs"], 0.5, "boundary max_abs")
+    assert_close(layer_projected["max_abs"], 0.25, "projected max_abs")
+    assert_close(layer_hidden["max_abs"], 0.5, "layer hidden max_abs")
     print(
         "Synthetic parity summary: "
         f"frame={first_diff['frame']} codebook={first_diff['codebook']} "
         f"token_a={first_diff['token_a']} token_b={first_diff['token_b']} "
-        f"category={category}"
+        f"category={category} boundary_max_abs={boundary_hidden['max_abs']}"
     )
 
     bad = run_summary(summary_script, trace_a, trace_b, output_dir / "bad_summary.json", "logit_drift")
@@ -130,6 +155,11 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
         print(bad.stdout)
         raise SystemExit("negative category expectation unexpectedly passed")
     print("Negative category expectation failed as expected.")
+
+
+def assert_close(actual: float, expected: float, label: str, tol: float = 1e-6) -> None:
+    if abs(actual - expected) > tol:
+        raise AssertionError(f"{label}: expected {expected}, got {actual}")
 
 
 if __name__ == "__main__":

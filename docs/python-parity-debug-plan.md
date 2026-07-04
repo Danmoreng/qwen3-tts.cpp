@@ -319,8 +319,8 @@ Candidate gates:
 - A script-level parity check that is skipped unless required model artifacts are present.
 - `scripts/test_parity_trace_summary_smoke.py` is a CI-safe synthetic trace
   smoke that validates summary parsing, tensor shapes, first-diff token IDs,
-  near-tie classification, and negative category expectation handling without
-  large model artifacts.
+  near-tie classification, boundary/code-predictor tensor comparisons, and
+  negative category expectation handling without large model artifacts.
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata and first-diff classification for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/parity_trace_summary.py` also emits `first_diff_classification`
@@ -515,6 +515,13 @@ Targeted BF16 variant experiment:
   Follow-up no-debug timing used the idle-GPU guard and 3 repeats: warm
   generate median `974.15 ms`, code predictor `556.8 ms`, pipeline `1012.0 ms`,
   RTF `0.2585`; pre-run GPU utilization was `0%`.
+- The synthetic smoke now also asserts boundary tensor and code-predictor layer
+  tensor comparison metrics, covering the report sections used to localize the
+  late-frame drift. `run_all_tests.ps1 -ParityFixturesOnly` passed with
+  `PASS: 3`, `FAIL: 0`, `SKIP: 4`. Follow-up no-debug timing used the
+  idle-GPU guard and 3 repeats: warm generate median `956.4 ms`, code predictor
+  `540.55 ms`, pipeline `999.5 ms`, RTF `0.255`; pre-run GPU utilization was
+  `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
