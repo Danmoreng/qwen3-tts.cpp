@@ -835,8 +835,18 @@ Targeted BF16 variant experiment:
   frames. Remaining drift is numerical/feature-side, not VQ-side: full encode
   from Python `model_input_values` differs by `176/1200` codes, while full
   prompt extraction from WAV still differs more because the local audio
-  resampling/feature path is not yet Python-identical. Keep using Python
-  reference codes for transformer ICL parity until this path is tightened.
+  resampling/feature path is not yet Python-identical. Layerwise dump comparison
+  shows the shape-correct graph tracks Python closely but accumulates projection
+  drift through the encoder stack; the final semantic/acoustic projection
+  cosines remain high (`0.999986` and `0.999965`) but near-boundary VQ decisions
+  flip in later codebooks. A precision follow-up found the current GGML
+  `ggml_conv_1d` CPU path requires F16 weights (`src0->type == GGML_TYPE_F16`):
+  passing BF16 weights fails scheduler assignment, and casting conv weights to
+  F32 trips the CPU conv assert. Therefore the remaining projection drift cannot
+  be fixed merely by preserving BF16/F32 GGUF conv weights in the current conv
+  op. Keep using Python reference codes for transformer ICL parity until this
+  path is tightened with a backend/conv implementation change or a different
+  feature-extraction strategy.
   `run_all_tests.ps1 -ParityFixturesOnly -BuildDir build-timing-current
   -OutputDir test_output\python_parity_gate_after_speech_downsample_fix` passed
   with `PASS: 10`, `FAIL: 0`, `SKIP: 4`. A comparable timing guard against
