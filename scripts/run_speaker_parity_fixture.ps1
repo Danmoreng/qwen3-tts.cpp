@@ -210,8 +210,58 @@ $fixtureMode = if ($isIclFixture) { "icl" } else { "speaker" }
 $pyTrace = Join-Path $outputDirResolved "python_$PythonDType"
 $cppTrace = Join-Path $outputDirResolved "cpp"
 $summaryPath = Join-Path $outputDirResolved "summary_python_${PythonDType}_vs_cpp.json"
+$metadataPath = Join-Path $outputDirResolved "fixture_metadata.json"
 Remove-Item -Recurse -Force $pyTrace, $cppTrace -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $pyTrace, $cppTrace | Out-Null
+
+$fixtureMetadata = [PSCustomObject]@{
+    SchemaVersion = 1
+    FixtureMode = $fixtureMode
+    Python = [PSCustomObject]@{
+        Exe = $pythonExeResolved
+        Model = $pythonModelResolved
+        Path = $PythonPath
+        Device = $PythonDevice
+        DType = $PythonDType
+        Language = $PythonLanguage
+        DoSample = [bool]$DoSample
+    }
+    Cpp = [PSCustomObject]@{
+        CliExe = $cliExeResolved
+        ModelDir = $cppModelDirResolved
+        Language = $CppLanguage
+        Temperature = 1.0
+        TopK = 1
+        TopP = 1.0
+        Seed = 0
+    }
+    Inputs = [PSCustomObject]@{
+        Text = $Text
+        SpeakerEmbedding = $speakerEmbeddingResolved
+        ReferenceText = if ([string]::IsNullOrWhiteSpace($ReferenceText)) { $null } else { $ReferenceText }
+        ReferenceTextFile = if ([string]::IsNullOrWhiteSpace($ReferenceTextFile)) { $null } else { $referenceTextFileResolved }
+        ReferenceCodes = if ([string]::IsNullOrWhiteSpace($ReferenceCodes)) { $null } else { $referenceCodesResolved }
+        MaxTokens = $MaxTokens
+        MaxFrames = $MaxFrames
+    }
+    Expectations = [PSCustomObject]@{
+        MatchPercentAtLeast = if ($ExpectMatchPercentAtLeast -ge 0.0) { $ExpectMatchPercentAtLeast } else { $null }
+        FirstDiffFrame = if ($ExpectFirstDiffFrame -ge 0) { $ExpectFirstDiffFrame } else { $null }
+        FirstDiffCodebook = if ($ExpectFirstDiffCodebook -ge 0) { $ExpectFirstDiffCodebook } else { $null }
+        FirstDiffTokenA = if ($ExpectFirstDiffTokenA -ge 0) { $ExpectFirstDiffTokenA } else { $null }
+        FirstDiffTokenB = if ($ExpectFirstDiffTokenB -ge 0) { $ExpectFirstDiffTokenB } else { $null }
+        FirstDiffCosineAtLeast = if ($ExpectFirstDiffCosineAtLeast -ge 0.0) { $ExpectFirstDiffCosineAtLeast } else { $null }
+        FirstDiffMaxAbsAtMost = if ($ExpectFirstDiffMaxAbsAtMost -ge 0.0) { $ExpectFirstDiffMaxAbsAtMost } else { $null }
+        FirstDiffCategory = if ([string]::IsNullOrWhiteSpace($ExpectFirstDiffCategory)) { $null } else { $ExpectFirstDiffCategory }
+        FirstDiffMaxAbsOverMarginAtLeast = if ($ExpectFirstDiffMaxAbsOverMarginAtLeast -ge 0.0) { $ExpectFirstDiffMaxAbsOverMarginAtLeast } else { $null }
+    }
+    Outputs = [PSCustomObject]@{
+        PythonTraceDir = $pyTrace
+        CppTraceDir = $cppTrace
+        Summary = $summaryPath
+    }
+}
+$fixtureMetadata | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $metadataPath -Encoding UTF8
 
 Write-Host "$fixtureMode parity fixture" -ForegroundColor Cyan
 Write-Host "  Python model:     $pythonModelResolved"
@@ -227,6 +277,7 @@ if ($isIclFixture) {
 }
 Write-Host "  CLI:              $cliExeResolved"
 Write-Host "  Output dir:       $outputDirResolved"
+Write-Host "  Metadata:         $metadataPath"
 
 $previousPythonPath = $env:PYTHONPATH
 if (-not [string]::IsNullOrWhiteSpace($PythonPath)) {

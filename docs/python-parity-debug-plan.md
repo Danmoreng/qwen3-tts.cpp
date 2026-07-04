@@ -356,7 +356,7 @@ Candidate gates:
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
   meaningful.
-- `scripts/run_speaker_parity_fixture.ps1` is the current speaker-only and ICL fixture regeneration command.
+- `scripts/run_speaker_parity_fixture.ps1` is the current speaker-only and ICL fixture regeneration command. It writes `fixture_metadata.json` beside each generated trace summary so fixture outputs record the resolved model paths, prompt inputs, sampling settings, and expectation gates used for that run.
 - `scripts/run_all_tests.ps1 -ParityFixturesOnly` runs both parity fixtures as a required local gate when the large Python/C++ model assets are present.
 - `scripts/convert_tts_to_gguf.py --keep-f32-regex` can produce targeted model variants for parity experiments without broad runtime casting. Example candidate:
 
@@ -630,6 +630,16 @@ Targeted BF16 variant experiment:
   `TopP`, and `Seed`, and now adds a visible `BenchmarkWarnings` entry pointing
   to `BaselineComparison.Compatibility.Issues`, as expected for a pre-metadata
   summary.
+- `run_speaker_parity_fixture.ps1` now writes `fixture_metadata.json` beside
+  each generated parity fixture. `run_all_tests.ps1 -ParityFixturesOnly` passed
+  with helper smokes plus both full fixtures (`PASS: 7`, `FAIL: 0`, `SKIP: 4`),
+  and the generated sidecars recorded the expected modes and gates: speaker
+  fixture `near_tie_token_swap` with `MaxTokens=12`, `MaxFrames=10`; ICL
+  fixture `near_tie` with `MaxTokens=4`, `MaxFrames=1`. Follow-up no-debug
+  timing used the idle-GPU guard, 4 repeats, loose `30%` regression thresholds,
+  and `10%` warm-spread thresholds: warm generate median `895.3 ms`, code
+  predictor `501.9 ms`, pipeline `920.0 ms`, RTF `0.235`; no stability failures
+  and the old pre-metadata baseline warning remained visible as expected.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
