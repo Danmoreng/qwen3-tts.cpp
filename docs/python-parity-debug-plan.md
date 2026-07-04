@@ -345,7 +345,10 @@ Candidate gates:
   threshold handling without requiring model artifacts. The summary also
   reports warm-run min/max/range percentages and warns when fewer than
   `-MinWarmRuns` warm samples are available; prefer at least 4 total repeats so
-  the default 3 warm samples are present after dropping the cold first run.
+  the default 3 warm samples are present after dropping the cold first run. Use
+  `-MaxWarmGenerateRangePercent`, `-MaxWarmCodePredRangePercent`,
+  `-MaxWarmPipelineRangePercent`, and `-MaxWarmRtfRangePercent` to fail noisy
+  benchmark samples separately from baseline regressions.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
   meaningful.
@@ -589,6 +592,21 @@ Targeted BF16 variant experiment:
   baseline comparison still showed about `+25%` slower current medians with no
   failures under the `30%` smoke threshold; this change is benchmark-script/doc
   only and does not touch inference code.
+- `benchmark_parity_smoke.ps1` now has opt-in warm-spread failure thresholds:
+  `-MaxWarmGenerateRangePercent`, `-MaxWarmCodePredRangePercent`,
+  `-MaxWarmPipelineRangePercent`, and `-MaxWarmRtfRangePercent`. These report
+  `BENCHMARK UNSTABLE` separately from baseline regression failures. The
+  self-test covers both passing and failing warm-range thresholds.
+  `run_all_tests.ps1 -ParityFixturesOnly` passed with helper smokes plus both
+  full fixtures (`PASS: 7`, `FAIL: 0`, `SKIP: 4`). Follow-up no-debug timing
+  used the idle-GPU guard, 4 repeats, the saved expectation-schema baseline,
+  loose `30%` regression thresholds, and `10%` warm-spread thresholds. It
+  produced no benchmark warnings and no stability failures: warm generate
+  median `1077.5 ms`, code predictor `622.6 ms`, pipeline `1110.0 ms`, RTF
+  `0.283`; warm generate range was `1.93%`, code predictor range `2.84%`, and
+  pipeline range `2.16%` of median. Baseline comparison remained slower by
+  about `+23%` to `+26%`, under the loose smoke thresholds, with no C++
+  inference-path changes in this step.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

@@ -16,6 +16,10 @@ param(
     [double]$MaxPipelineRegressionPercent = -1.0,
     [double]$MaxRtfRegressionPercent = -1.0,
     [double]$MaxGpuUtilizationBeforePercent = -1.0,
+    [double]$MaxWarmGenerateRangePercent = -1.0,
+    [double]$MaxWarmCodePredRangePercent = -1.0,
+    [double]$MaxWarmPipelineRangePercent = -1.0,
+    [double]$MaxWarmRtfRangePercent = -1.0,
     [int]$WaitForGpuIdleSeconds = 0,
     [int]$GpuPollIntervalSeconds = 5,
     [int]$MinWarmRuns = 3,
@@ -189,6 +193,22 @@ function Add-RegressionFailure(
     }
 }
 
+function Add-WarmRangeFailure(
+    [System.Collections.Generic.List[string]]$failures,
+    [object]$metric,
+    [double]$thresholdPercent
+) {
+    if ($thresholdPercent -lt 0.0 -or $null -eq $metric -or $null -eq $metric.RangePercentOfMedian) {
+        return
+    }
+    if ($metric.RangePercentOfMedian -gt $thresholdPercent) {
+        $failures.Add(("{0} warm range was {1}% of median (threshold {2}%)" -f `
+            $metric.Name,
+            (([double]$metric.RangePercentOfMedian).ToString("0.###", [Globalization.CultureInfo]::InvariantCulture)),
+            ($thresholdPercent.ToString("0.###", [Globalization.CultureInfo]::InvariantCulture))))
+    }
+}
+
 function Save-DebugDumpEnv() {
     return [PSCustomObject]@{
         Dir = $env:QWEN3_TTS_DEBUG_DUMP_DIR
@@ -346,6 +366,12 @@ Repeat 3/3
         Assert-SelfTest ([Math]::Abs(([double]$warmGenerateStats.RangePercentOfMedian) - 8.0) -lt 0.001) "warm generate range percent"
         Assert-SelfTest (@(New-BenchmarkWarnings 2 3).Count -eq 1) "low warm-run warning"
         Assert-SelfTest (@(New-BenchmarkWarnings 3 3).Count -eq 0) "sufficient warm-run warning"
+        $stabilityFailures = [System.Collections.Generic.List[string]]::new()
+        Add-WarmRangeFailure $stabilityFailures $warmGenerateStats 5.0
+        Assert-SelfTest ($stabilityFailures.Count -eq 1) "warm range threshold failure"
+        $stabilityFailures.Clear()
+        Add-WarmRangeFailure $stabilityFailures $warmGenerateStats 10.0
+        Assert-SelfTest ($stabilityFailures.Count -eq 0) "warm range threshold pass"
 
         $metric = New-DeltaMetric "WarmGenerateMedianMs" 110.0 100.0
         Assert-SelfTest ([Math]::Abs(([double]$metric.DeltaPercent) - 10.0) -lt 0.001) "delta percent"
@@ -518,6 +544,12 @@ $warmMetricStats = [PSCustomObject]@{
 $benchmarkWarnings = @(New-BenchmarkWarnings $warmRecords.Count $MinWarmRuns)
 $baselineComparison = $null
 $regressionFailures = [System.Collections.Generic.List[string]]::new()
+$stabilityFailures = [System.Collections.Generic.List[string]]::new()
+
+Add-WarmRangeFailure $stabilityFailures $warmMetricStats.GenerateMs $MaxWarmGenerateRangePercent
+Add-WarmRangeFailure $stabilityFailures $warmMetricStats.CodePredMs $MaxWarmCodePredRangePercent
+Add-WarmRangeFailure $stabilityFailures $warmMetricStats.PipelineTotalMs $MaxWarmPipelineRangePercent
+Add-WarmRangeFailure $stabilityFailures $warmMetricStats.RTF $MaxWarmRtfRangePercent
 
 if ($null -ne $baselineSummaryObj) {
     $metricsList = [System.Collections.Generic.List[object]]::new()
@@ -562,6 +594,13 @@ $summary = [PSCustomObject]@{
     MinWarmRuns = $MinWarmRuns
     WarmMetricStats = $warmMetricStats
     BenchmarkWarnings = @($benchmarkWarnings)
+    StabilityThresholds = [PSCustomObject]@{
+        MaxWarmGenerateRangePercent = $MaxWarmGenerateRangePercent
+        MaxWarmCodePredRangePercent = $MaxWarmCodePredRangePercent
+        MaxWarmPipelineRangePercent = $MaxWarmPipelineRangePercent
+        MaxWarmRtfRangePercent = $MaxWarmRtfRangePercent
+    }
+    StabilityFailures = @($stabilityFailures)
     BaselineComparison = $baselineComparison
     GpuBefore = $gpuBefore
     GpuAfter = $gpuAfter
@@ -577,5 +616,12 @@ if ($regressionFailures.Count -gt 0) {
     foreach ($failure in $regressionFailures) {
         Write-Host "REGRESSION FAILED: $failure" -ForegroundColor Red
     }
+}
+if ($stabilityFailures.Count -gt 0) {
+    foreach ($failure in $stabilityFailures) {
+        Write-Host "BENCHMARK UNSTABLE: $failure" -ForegroundColor Red
+    }
+}
+if ($regressionFailures.Count -gt 0 -or $stabilityFailures.Count -gt 0) {
     exit 1
 }
