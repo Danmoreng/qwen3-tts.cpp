@@ -206,6 +206,9 @@ function Test-ParityFixtureMetadata(
             if ([int]$metadata.Cpp.Seed -ne 0) {
                 $failures.Add("Cpp.Seed expected 0, got $($metadata.Cpp.Seed)")
             }
+            if ($metadata.Cpp.TalkerKvCacheF32 -ne $true) {
+                $failures.Add("Cpp.TalkerKvCacheF32 expected true, got $($metadata.Cpp.TalkerKvCacheF32)")
+            }
             if ($metadata.Inputs.Text -ne $fixture.text) {
                 $failures.Add("Inputs.Text did not match fixture text")
             }
@@ -215,14 +218,27 @@ function Test-ParityFixtureMetadata(
             if ([int]$metadata.Inputs.MaxFrames -ne [int]$fixture.max_frames) {
                 $failures.Add("Inputs.MaxFrames expected $($fixture.max_frames), got $($metadata.Inputs.MaxFrames)")
             }
-            if ($metadata.Expectations.FirstDiffCategory -ne $expect.first_diff_category) {
-                $failures.Add("Expectations.FirstDiffCategory expected $($expect.first_diff_category), got $($metadata.Expectations.FirstDiffCategory)")
-            }
-            if ([int]$metadata.Expectations.FirstDiffFrame -ne [int]$expect.first_diff_frame) {
-                $failures.Add("Expectations.FirstDiffFrame expected $($expect.first_diff_frame), got $($metadata.Expectations.FirstDiffFrame)")
-            }
-            if ([int]$metadata.Expectations.FirstDiffCodebook -ne [int]$expect.first_diff_codebook) {
-                $failures.Add("Expectations.FirstDiffCodebook expected $($expect.first_diff_codebook), got $($metadata.Expectations.FirstDiffCodebook)")
+            $expectHasFirstDiff = ([int]$expect.first_diff_frame -ge 0)
+            if ($expectHasFirstDiff) {
+                if ($metadata.Expectations.FirstDiffCategory -ne $expect.first_diff_category) {
+                    $failures.Add("Expectations.FirstDiffCategory expected $($expect.first_diff_category), got $($metadata.Expectations.FirstDiffCategory)")
+                }
+                if ([int]$metadata.Expectations.FirstDiffFrame -ne [int]$expect.first_diff_frame) {
+                    $failures.Add("Expectations.FirstDiffFrame expected $($expect.first_diff_frame), got $($metadata.Expectations.FirstDiffFrame)")
+                }
+                if ([int]$metadata.Expectations.FirstDiffCodebook -ne [int]$expect.first_diff_codebook) {
+                    $failures.Add("Expectations.FirstDiffCodebook expected $($expect.first_diff_codebook), got $($metadata.Expectations.FirstDiffCodebook)")
+                }
+            } else {
+                if ($null -ne $metadata.Expectations.FirstDiffCategory) {
+                    $failures.Add("Expectations.FirstDiffCategory expected null, got $($metadata.Expectations.FirstDiffCategory)")
+                }
+                if ($null -ne $metadata.Expectations.FirstDiffFrame) {
+                    $failures.Add("Expectations.FirstDiffFrame expected null, got $($metadata.Expectations.FirstDiffFrame)")
+                }
+                if ($null -ne $metadata.Expectations.FirstDiffCodebook) {
+                    $failures.Add("Expectations.FirstDiffCodebook expected null, got $($metadata.Expectations.FirstDiffCodebook)")
+                }
             }
             if ([string]::IsNullOrWhiteSpace($metadata.Outputs.Summary) -or -not (Test-Path -LiteralPath $metadata.Outputs.Summary)) {
                 $failures.Add("Outputs.Summary missing or does not exist: $($metadata.Outputs.Summary)")
@@ -232,29 +248,41 @@ function Test-ParityFixtureMetadata(
                     if ([double]$summary.tokens.match_percent -lt [double]$expect.match_percent_at_least) {
                         $failures.Add("Summary tokens.match_percent expected >= $($expect.match_percent_at_least), got $($summary.tokens.match_percent)")
                     }
-                    if ([int]$summary.tokens.first_diff.frame -ne [int]$expect.first_diff_frame) {
-                        $failures.Add("Summary tokens.first_diff.frame expected $($expect.first_diff_frame), got $($summary.tokens.first_diff.frame)")
-                    }
-                    if ([int]$summary.tokens.first_diff.codebook -ne [int]$expect.first_diff_codebook) {
-                        $failures.Add("Summary tokens.first_diff.codebook expected $($expect.first_diff_codebook), got $($summary.tokens.first_diff.codebook)")
-                    }
-                    if ([int]$summary.tokens.first_diff.token_a -ne [int]$expect.first_diff_token_a) {
-                        $failures.Add("Summary tokens.first_diff.token_a expected $($expect.first_diff_token_a), got $($summary.tokens.first_diff.token_a)")
-                    }
-                    if ([int]$summary.tokens.first_diff.token_b -ne [int]$expect.first_diff_token_b) {
-                        $failures.Add("Summary tokens.first_diff.token_b expected $($expect.first_diff_token_b), got $($summary.tokens.first_diff.token_b)")
-                    }
-                    if ([double]$summary.logits_at_first_diff.cosine -lt [double]$expect.first_diff_cosine_at_least) {
-                        $failures.Add("Summary logits_at_first_diff.cosine expected >= $($expect.first_diff_cosine_at_least), got $($summary.logits_at_first_diff.cosine)")
-                    }
-                    if ([double]$summary.logits_at_first_diff.max_abs -gt [double]$expect.first_diff_max_abs_at_most) {
-                        $failures.Add("Summary logits_at_first_diff.max_abs expected <= $($expect.first_diff_max_abs_at_most), got $($summary.logits_at_first_diff.max_abs)")
-                    }
-                    if ($summary.first_diff_classification.category -ne $expect.first_diff_category) {
-                        $failures.Add("Summary first_diff_classification.category expected $($expect.first_diff_category), got $($summary.first_diff_classification.category)")
-                    }
-                    if ([double]$summary.first_diff_classification.max_abs_over_min_top1_margin -lt [double]$expect.first_diff_max_abs_over_margin_at_least) {
-                        $failures.Add("Summary first_diff_classification.max_abs_over_min_top1_margin expected >= $($expect.first_diff_max_abs_over_margin_at_least), got $($summary.first_diff_classification.max_abs_over_min_top1_margin)")
+                    if ($expectHasFirstDiff) {
+                        if ([int]$summary.tokens.first_diff.frame -ne [int]$expect.first_diff_frame) {
+                            $failures.Add("Summary tokens.first_diff.frame expected $($expect.first_diff_frame), got $($summary.tokens.first_diff.frame)")
+                        }
+                        if ([int]$summary.tokens.first_diff.codebook -ne [int]$expect.first_diff_codebook) {
+                            $failures.Add("Summary tokens.first_diff.codebook expected $($expect.first_diff_codebook), got $($summary.tokens.first_diff.codebook)")
+                        }
+                        if ([int]$summary.tokens.first_diff.token_a -ne [int]$expect.first_diff_token_a) {
+                            $failures.Add("Summary tokens.first_diff.token_a expected $($expect.first_diff_token_a), got $($summary.tokens.first_diff.token_a)")
+                        }
+                        if ([int]$summary.tokens.first_diff.token_b -ne [int]$expect.first_diff_token_b) {
+                            $failures.Add("Summary tokens.first_diff.token_b expected $($expect.first_diff_token_b), got $($summary.tokens.first_diff.token_b)")
+                        }
+                        if ([double]$summary.logits_at_first_diff.cosine -lt [double]$expect.first_diff_cosine_at_least) {
+                            $failures.Add("Summary logits_at_first_diff.cosine expected >= $($expect.first_diff_cosine_at_least), got $($summary.logits_at_first_diff.cosine)")
+                        }
+                        if ([double]$summary.logits_at_first_diff.max_abs -gt [double]$expect.first_diff_max_abs_at_most) {
+                            $failures.Add("Summary logits_at_first_diff.max_abs expected <= $($expect.first_diff_max_abs_at_most), got $($summary.logits_at_first_diff.max_abs)")
+                        }
+                        if ($summary.first_diff_classification.category -ne $expect.first_diff_category) {
+                            $failures.Add("Summary first_diff_classification.category expected $($expect.first_diff_category), got $($summary.first_diff_classification.category)")
+                        }
+                        if ([double]$summary.first_diff_classification.max_abs_over_min_top1_margin -lt [double]$expect.first_diff_max_abs_over_margin_at_least) {
+                            $failures.Add("Summary first_diff_classification.max_abs_over_min_top1_margin expected >= $($expect.first_diff_max_abs_over_margin_at_least), got $($summary.first_diff_classification.max_abs_over_min_top1_margin)")
+                        }
+                    } else {
+                        if ($null -ne $summary.tokens.first_diff) {
+                            $failures.Add("Summary tokens.first_diff expected null, got $($summary.tokens.first_diff)")
+                        }
+                        if ($null -ne $summary.logits_at_first_diff) {
+                            $failures.Add("Summary logits_at_first_diff expected null")
+                        }
+                        if ($null -ne $summary.first_diff_classification) {
+                            $failures.Add("Summary first_diff_classification expected null")
+                        }
                     }
                 } catch {
                     $failures.Add("could not parse or validate summary: $($_.Exception.Message)")

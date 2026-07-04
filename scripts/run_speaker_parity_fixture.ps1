@@ -30,6 +30,7 @@ param(
     [string]$ExpectFirstDiffCategory = "",
     [double]$ExpectFirstDiffMaxAbsOverMarginAtLeast = -1.0,
     [switch]$TalkerKvCacheF32,
+    [switch]$TalkerKvCacheF16,
     [switch]$RequireAssets
 )
 
@@ -134,6 +135,7 @@ function Restore-DebugDumpEnv([object]$snapshot) {
 function Save-TalkerKvCacheEnv() {
     return [PSCustomObject]@{
         TalkerKvCacheF32 = $env:QWEN3_TTS_TALKER_KV_F32
+        TalkerKvCacheF16 = $env:QWEN3_TTS_TALKER_KV_F16
     }
 }
 
@@ -146,6 +148,12 @@ function Restore-TalkerKvCacheEnv([object]$snapshot) {
         $env:QWEN3_TTS_TALKER_KV_F32 = $snapshot.TalkerKvCacheF32
     } else {
         Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+    }
+
+    if ($null -ne $snapshot.TalkerKvCacheF16) {
+        $env:QWEN3_TTS_TALKER_KV_F16 = $snapshot.TalkerKvCacheF16
+    } else {
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F16 -ErrorAction SilentlyContinue
     }
 }
 
@@ -189,6 +197,10 @@ $outputDirResolved = Resolve-RepoPath $OutputDir
 $isIclFixture = -not [string]::IsNullOrWhiteSpace($ReferenceText) -or
     -not [string]::IsNullOrWhiteSpace($ReferenceTextFile) -or
     -not [string]::IsNullOrWhiteSpace($ReferenceCodes)
+$talkerKvCacheF32Enabled = -not [bool]$TalkerKvCacheF16
+if ($TalkerKvCacheF32 -and $TalkerKvCacheF16) {
+    throw "-TalkerKvCacheF32 and -TalkerKvCacheF16 cannot be combined."
+}
 
 $missing = @()
 if ([string]::IsNullOrWhiteSpace($pythonModelResolved) -or -not (Test-Path -LiteralPath $pythonModelResolved)) { $missing += "PythonModel" }
@@ -253,7 +265,7 @@ $fixtureMetadata = [PSCustomObject]@{
         TopK = 1
         TopP = 1.0
         Seed = 0
-        TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
+        TalkerKvCacheF32 = [bool]$talkerKvCacheF32Enabled
     }
     Inputs = [PSCustomObject]@{
         Text = $Text
@@ -296,8 +308,10 @@ if ($isIclFixture) {
     Write-Host "  Reference codes:  $referenceCodesResolved"
 }
 Write-Host "  CLI:              $cliExeResolved"
-if ($TalkerKvCacheF32) {
-    Write-Host "  Talker KV cache:  F32 (QWEN3_TTS_TALKER_KV_F32=1)"
+if ($talkerKvCacheF32Enabled) {
+    Write-Host "  Talker KV cache:  F32 (default)"
+} else {
+    Write-Host "  Talker KV cache:  F16 (QWEN3_TTS_TALKER_KV_F16=1)"
 }
 Write-Host "  Output dir:       $outputDirResolved"
 Write-Host "  Metadata:         $metadataPath"
@@ -338,10 +352,11 @@ try {
     $env:QWEN3_TTS_DEBUG_DUMP_DIR = $cppTrace
     $env:QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES = "$MaxFrames"
     $env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS = "15"
-    if ($TalkerKvCacheF32) {
-        $env:QWEN3_TTS_TALKER_KV_F32 = "1"
+    Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+    if ($talkerKvCacheF32Enabled) {
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F16 -ErrorAction SilentlyContinue
     } else {
-        Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+        $env:QWEN3_TTS_TALKER_KV_F16 = "1"
     }
     $cppArgs = @(
         "--model", $cppModelDirResolved,

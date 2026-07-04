@@ -24,6 +24,7 @@ param(
     [int]$GpuPollIntervalSeconds = 5,
     [int]$MinWarmRuns = 3,
     [switch]$TalkerKvCacheF32,
+    [switch]$TalkerKvCacheF16,
     [switch]$RequireComparableBaseline,
     [switch]$SelfTest,
     [switch]$RequireAssets
@@ -322,6 +323,7 @@ function Disable-DebugDumpEnv() {
 function Save-TalkerKvCacheEnv() {
     return [PSCustomObject]@{
         TalkerKvCacheF32 = $env:QWEN3_TTS_TALKER_KV_F32
+        TalkerKvCacheF16 = $env:QWEN3_TTS_TALKER_KV_F16
     }
 }
 
@@ -334,6 +336,12 @@ function Restore-TalkerKvCacheEnv([object]$snapshot) {
         $env:QWEN3_TTS_TALKER_KV_F32 = $snapshot.TalkerKvCacheF32
     } else {
         Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+    }
+
+    if ($null -ne $snapshot.TalkerKvCacheF16) {
+        $env:QWEN3_TTS_TALKER_KV_F16 = $snapshot.TalkerKvCacheF16
+    } else {
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F16 -ErrorAction SilentlyContinue
     }
 }
 
@@ -473,7 +481,7 @@ Repeat 3/3
             TopK = 1
             TopP = 1.0
             Seed = 0
-            TalkerKvCacheF32 = $false
+            TalkerKvCacheF32 = $true
         }
         $matchingBaseline = [PSCustomObject]@{
             ModelDir = "model-a"
@@ -485,7 +493,7 @@ Repeat 3/3
             TopK = 1
             TopP = 1.0
             Seed = 0
-            TalkerKvCacheF32 = $false
+            TalkerKvCacheF32 = $true
         }
         $mismatchedBaseline = [PSCustomObject]@{
             ModelDir = "model-a"
@@ -529,6 +537,10 @@ $modelDirResolved = Resolve-RepoPath $ModelDir
 $speakerEmbeddingResolved = Resolve-RepoPath $SpeakerEmbedding
 $outputDirResolved = Resolve-RepoPath $OutputDir
 $baselineSummaryResolved = Resolve-RepoPath $BaselineSummary
+$talkerKvCacheF32Enabled = -not [bool]$TalkerKvCacheF16
+if ($TalkerKvCacheF32 -and $TalkerKvCacheF16) {
+    throw "-TalkerKvCacheF32 and -TalkerKvCacheF16 cannot be combined."
+}
 
 $missing = @()
 if ([string]::IsNullOrWhiteSpace($cliExeResolved) -or -not (Test-Path -LiteralPath $cliExeResolved)) { $missing += "CliExe" }
@@ -568,8 +580,10 @@ Write-Host "  Model dir:      $modelDirResolved"
 Write-Host "  Speaker embed:  $speakerEmbeddingResolved"
 Write-Host "  Output dir:     $outputDirResolved"
 Write-Host "  Repeat:         $Repeat"
-if ($TalkerKvCacheF32) {
-    Write-Host "  Talker KV cache: F32 (QWEN3_TTS_TALKER_KV_F32=1)"
+if ($talkerKvCacheF32Enabled) {
+    Write-Host "  Talker KV cache: F32 (default)"
+} else {
+    Write-Host "  Talker KV cache: F16 (QWEN3_TTS_TALKER_KV_F16=1)"
 }
 if ($null -ne $baselineSummaryObj) {
     Write-Host "  Baseline:       $baselineSummaryResolved"
@@ -619,7 +633,7 @@ if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
         TopK = $TopK
         TopP = $TopP
         Seed = $Seed
-        TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
+        TalkerKvCacheF32 = [bool]$talkerKvCacheF32Enabled
         Repeat = $Repeat
         Skipped = $true
         SkipReason = "GPU utilization before benchmark was $gpuUtilBefore%, above threshold $MaxGpuUtilizationBeforePercent%."
@@ -651,10 +665,11 @@ try {
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        if ($TalkerKvCacheF32) {
-            $env:QWEN3_TTS_TALKER_KV_F32 = "1"
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+        if ($talkerKvCacheF32Enabled) {
+            Remove-Item Env:QWEN3_TTS_TALKER_KV_F16 -ErrorAction SilentlyContinue
         } else {
-            Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+            $env:QWEN3_TTS_TALKER_KV_F16 = "1"
         }
         $output = & $cliExeResolved @cliArgs 2>&1
         $exitCode = $LASTEXITCODE
@@ -710,7 +725,7 @@ $currentWorkload = [PSCustomObject]@{
     TopK = $TopK
     TopP = $TopP
     Seed = $Seed
-    TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
+    TalkerKvCacheF32 = [bool]$talkerKvCacheF32Enabled
 }
 
 Add-WarmRangeFailure $stabilityFailures $warmMetricStats.GenerateMs $MaxWarmGenerateRangePercent
@@ -759,7 +774,7 @@ $summary = [PSCustomObject]@{
     TopK = $TopK
     TopP = $TopP
     Seed = $Seed
-    TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
+    TalkerKvCacheF32 = [bool]$talkerKvCacheF32Enabled
     Repeat = $Repeat
     WarmRepeatStart = if ($records.Count -ge 2) { 2 } else { 1 }
     Runs = $records.Count

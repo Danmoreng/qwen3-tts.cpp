@@ -7,15 +7,15 @@
       "max_tokens": 12,
       "max_frames": 10,
       "expect": {
-        "match_percent_at_least": 93.0,
-        "first_diff_frame": 9,
-        "first_diff_codebook": 6,
-        "first_diff_token_a": 517,
-        "first_diff_token_b": 9,
-        "first_diff_cosine_at_least": 0.99999,
-        "first_diff_max_abs_at_most": 0.05,
-        "first_diff_category": "near_tie_token_swap",
-        "first_diff_max_abs_over_margin_at_least": 1.0
+        "match_percent_at_least": 100.0,
+        "first_diff_frame": -1,
+        "first_diff_codebook": -1,
+        "first_diff_token_a": -1,
+        "first_diff_token_b": -1,
+        "first_diff_cosine_at_least": -1.0,
+        "first_diff_max_abs_at_most": -1.0,
+        "first_diff_category": "",
+        "first_diff_max_abs_over_margin_at_least": -1.0
       }
     },
     "icl": {
@@ -23,14 +23,14 @@
       "max_tokens": 4,
       "max_frames": 1,
       "expect": {
-        "match_percent_at_least": 56.0,
+        "match_percent_at_least": 50.0,
         "first_diff_frame": 0,
         "first_diff_codebook": 8,
         "first_diff_token_a": 499,
-        "first_diff_token_b": 1481,
+        "first_diff_token_b": 593,
         "first_diff_cosine_at_least": 0.99999,
         "first_diff_max_abs_at_most": 0.05,
-        "first_diff_category": "near_tie",
+        "first_diff_category": "near_tie_token_swap",
         "first_diff_max_abs_over_margin_at_least": 1.0
       }
     }

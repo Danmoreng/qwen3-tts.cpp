@@ -328,14 +328,15 @@ Current result:
   to frame `0`, codebook `8`, Python token `499` vs C++ token `593`
   (`near_tie_token_swap`, logit max absolute drift `0.024973`). This is useful
   evidence that F16 talker-cache storage contributes to speaker-only
-  generated-frame drift, but the F32 cache should not become the default while
-  it worsens ICL.
-- The F32 talker KV-cache path is now available as an explicit developer
-  parity mode via `QWEN3_TTS_TALKER_KV_F32=1`,
-  `run_speaker_parity_fixture.ps1 -TalkerKvCacheF32`, and
-  `benchmark_parity_smoke.ps1 -TalkerKvCacheF32`. The default remains F16.
-  Fixture and benchmark summaries record `TalkerKvCacheF32` so baseline
-  comparisons can reject mixed cache modes.
+  generated-frame drift. Follow-up decision: make F32 the default because it
+  brings the normal speaker path to exact parity, and track ICL as a separate
+  remaining parity issue.
+- The talker KV-cache path now defaults to F32. The old F16 cache can still be
+  forced for comparison with `QWEN3_TTS_TALKER_KV_F16=1`,
+  `run_speaker_parity_fixture.ps1 -TalkerKvCacheF16`, and
+  `benchmark_parity_smoke.ps1 -TalkerKvCacheF16`. Fixture and benchmark
+  summaries continue to record `TalkerKvCacheF32` so baseline comparisons can
+  reject mixed cache modes.
 - First-diff step trajectory for codebook `6`:
   - Frames `0..8` have matching top tokens at the same codebook/step.
   - The smallest earlier Python top-1 margin is frame `6` at `0.108820`; the frame `9` Python margin collapses to `0.005629`.
@@ -389,8 +390,8 @@ Current result:
     `1481` to token `593` at the same frame/codebook. Python token `499` still
     ranked second in C++ with only `0.000538` logit margin, but total token
     matches dropped to `8/16`; do not use this as a global parity fix.
-  - The opt-in F32-cache mode remains useful for speaker-only debugging, but it
-    is explicitly not an ICL parity fix.
+  - The default F32-cache mode fixes speaker-only parity, but it is explicitly
+    not an ICL parity fix.
 
 ## Phase 6: Regression Gates
 
@@ -708,21 +709,28 @@ Targeted BF16 variant experiment:
   `331.9 ms`, code predictor `498.7 ms`, pipeline `909.0 ms`, and RTF `0.232`
   (`-4.92%` generate, `-6.10%` pipeline, `-6.07%` RTF versus baseline), with no
   benchmark warnings, stability failures, or configured regression failures.
-- The F32 talker KV-cache experiment is now reproducible without source edits:
-  `run_speaker_parity_fixture.ps1 -TalkerKvCacheF32 -ExpectMatchPercentAtLeast 100.0`
-  passed for the speaker-only fixture with `match_percent=100.0` and no first
-  diff. The default full parity gate still passed after adding the opt-in mode
-  (`PASS: 10`, `FAIL: 0`, `SKIP: 4`).
-  Default no-debug timing with `TalkerKvCacheF32=false` measured warm generate
-  median `850.0 ms`, talker `324.1 ms`, code predictor `475.2 ms`, pipeline
-  `874.0 ms`, and RTF `0.223`; the comparable baseline accepted missing
-  `TalkerKvCacheF32` as legacy `false` and reported no warnings or failures.
-  Opt-in F32-cache timing measured warm generate median `855.1 ms`, talker
+- The F32 talker KV-cache experiment is now the default behavior:
+  `run_speaker_parity_fixture.ps1 -ExpectMatchPercentAtLeast 100.0` passes for
+  the speaker-only fixture with `match_percent=100.0` and no first diff.
+  Earlier default no-debug timing with `TalkerKvCacheF32=false` measured warm
+  generate median `850.0 ms`, talker `324.1 ms`, code predictor `475.2 ms`,
+  pipeline `874.0 ms`, and RTF `0.223`; the comparable baseline accepted
+  missing `TalkerKvCacheF32` as legacy `false` and reported no warnings or
+  failures. F32-cache timing measured warm generate median `855.1 ms`, talker
   `326.4 ms`, code predictor `477.5 ms`, pipeline `883.0 ms`, and RTF `0.225`;
-  the old F16 baseline is intentionally marked not fully comparable for this
-  mode. The scripted opt-in ICL fixture reproduced the expected caveat:
+  the old F16 baseline is intentionally marked not fully comparable. The ICL
+  fixture reproduces the expected caveat under the new default:
   `50.0%` match, first diff frame `0`, codebook `8`, Python token `499` vs C++
   token `593`, `near_tie_token_swap`, max absolute logit drift `0.024973`.
+- After flipping the default to F32, the parity fixture gate passed
+  (`PASS: 10`, `FAIL: 0`, `SKIP: 4`): speaker-only now reaches `100.0%` with
+  no first diff, while ICL remains the separate tracked case at `50.0%`.
+  The default F32 performance guard against the earlier F32 opt-in baseline
+  passed a `10%` regression threshold: warm generate median `897.3 ms`
+  (`+4.94%`), pipeline `935.0 ms` (`+5.89%`), and RTF `0.2385` (`+6.00%`).
+  A same-session F16 override comparison measured warm generate `891.8 ms`,
+  pipeline `926.0 ms`, and RTF `0.2365`, so the local F32 precision cost is
+  small relative to run-to-run spread.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1

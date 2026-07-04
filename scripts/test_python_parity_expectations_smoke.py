@@ -97,14 +97,30 @@ def validate_payload(payload: dict[str, Any]) -> list[str]:
 
         if isinstance(expect.get("first_diff_codebook"), int):
             value = int(expect["first_diff_codebook"])
-            if value < 0 or value > 15:
+            has_first_diff = isinstance(expect.get("first_diff_frame"), int) and int(expect["first_diff_frame"]) >= 0
+            if has_first_diff and (value < 0 or value > 15):
                 failures.append(f"fixtures.{fixture_name}.expect.first_diff_codebook: expected 0..15")
+            if not has_first_diff and value != -1:
+                failures.append(f"fixtures.{fixture_name}.expect.first_diff_codebook: expected -1 when first_diff_frame is -1")
 
-        if expect.get("first_diff_category") not in ALLOWED_CATEGORIES:
+        has_first_diff = isinstance(expect.get("first_diff_frame"), int) and int(expect["first_diff_frame"]) >= 0
+        if has_first_diff and expect.get("first_diff_category") not in ALLOWED_CATEGORIES:
             failures.append(
                 f"fixtures.{fixture_name}.expect.first_diff_category: "
                 f"expected one of {sorted(ALLOWED_CATEGORIES)}, got {expect.get('first_diff_category')!r}"
             )
+        if not has_first_diff and expect.get("first_diff_category") != "":
+            failures.append(
+                f"fixtures.{fixture_name}.expect.first_diff_category: expected empty string when first_diff_frame is -1"
+            )
+
+        if not has_first_diff:
+            for field in ("first_diff_token_a", "first_diff_token_b"):
+                if expect.get(field) != -1:
+                    failures.append(f"fixtures.{fixture_name}.expect.{field}: expected -1 when first_diff_frame is -1")
+            for field in ("first_diff_cosine_at_least", "first_diff_max_abs_at_most", "first_diff_max_abs_over_margin_at_least"):
+                if expect.get(field) != -1.0:
+                    failures.append(f"fixtures.{fixture_name}.expect.{field}: expected -1.0 when first_diff_frame is -1")
 
     return failures
 

@@ -58,11 +58,11 @@ def main() -> None:
         raise SystemExit("negative fixture metadata check unexpectedly passed")
 
     bad_summary = args.output_dir / "bad_summary.json"
-    bad_payload = make_payload("speaker", expectations["fixtures"]["speaker_only"], bad_summary)
-    bad_summary_payload = make_summary(expectations["fixtures"]["speaker_only"])
+    bad_payload = make_payload("icl", expectations["fixtures"]["icl"], bad_summary)
+    bad_summary_payload = make_summary(expectations["fixtures"]["icl"])
     bad_summary_payload["tokens"]["first_diff"]["token_a"] = -1
     bad_summary.write_text(json.dumps(bad_summary_payload, indent=2) + "\n", encoding="utf-8")
-    bad_summary_failures = validate_payload(bad_payload, "speaker", expectations["fixtures"]["speaker_only"])
+    bad_summary_failures = validate_payload(bad_payload, "icl", expectations["fixtures"]["icl"])
     if not any("summary.tokens.first_diff.token_a" in failure for failure in bad_summary_failures):
         raise SystemExit("negative fixture summary check unexpectedly passed")
 
@@ -75,6 +75,7 @@ def main() -> None:
 
 def make_payload(mode: str, fixture: dict[str, Any], summary_path: Path) -> dict[str, Any]:
     expect = fixture["expect"]
+    has_first_diff = expect["first_diff_frame"] >= 0
     return {
         "SchemaVersion": 1,
         "FixtureMode": mode,
@@ -95,7 +96,7 @@ def make_payload(mode: str, fixture: dict[str, Any], summary_path: Path) -> dict
             "TopK": 1,
             "TopP": 1.0,
             "Seed": 0,
-            "TalkerKvCacheF32": False,
+            "TalkerKvCacheF32": True,
         },
         "Inputs": {
             "Text": fixture["text"],
@@ -108,14 +109,14 @@ def make_payload(mode: str, fixture: dict[str, Any], summary_path: Path) -> dict
         },
         "Expectations": {
             "MatchPercentAtLeast": expect["match_percent_at_least"],
-            "FirstDiffFrame": expect["first_diff_frame"],
-            "FirstDiffCodebook": expect["first_diff_codebook"],
-            "FirstDiffTokenA": expect["first_diff_token_a"],
-            "FirstDiffTokenB": expect["first_diff_token_b"],
-            "FirstDiffCosineAtLeast": expect["first_diff_cosine_at_least"],
-            "FirstDiffMaxAbsAtMost": expect["first_diff_max_abs_at_most"],
-            "FirstDiffCategory": expect["first_diff_category"],
-            "FirstDiffMaxAbsOverMarginAtLeast": expect["first_diff_max_abs_over_margin_at_least"],
+            "FirstDiffFrame": expect["first_diff_frame"] if has_first_diff else None,
+            "FirstDiffCodebook": expect["first_diff_codebook"] if has_first_diff else None,
+            "FirstDiffTokenA": expect["first_diff_token_a"] if has_first_diff else None,
+            "FirstDiffTokenB": expect["first_diff_token_b"] if has_first_diff else None,
+            "FirstDiffCosineAtLeast": expect["first_diff_cosine_at_least"] if has_first_diff else None,
+            "FirstDiffMaxAbsAtMost": expect["first_diff_max_abs_at_most"] if has_first_diff else None,
+            "FirstDiffCategory": expect["first_diff_category"] if has_first_diff else None,
+            "FirstDiffMaxAbsOverMarginAtLeast": expect["first_diff_max_abs_over_margin_at_least"] if has_first_diff else None,
         },
         "Outputs": {
             "PythonTraceDir": "synthetic-python-trace",
@@ -147,27 +148,34 @@ def make_invalid_payload() -> dict[str, Any]:
 
 def make_summary(fixture: dict[str, Any]) -> dict[str, Any]:
     expect = fixture["expect"]
+    first_diff = None
+    logits_at_first_diff = None
+    first_diff_classification = None
+    if expect["first_diff_frame"] >= 0:
+        first_diff = {
+            "frame": expect["first_diff_frame"],
+            "codebook": expect["first_diff_codebook"],
+            "token_a": expect["first_diff_token_a"],
+            "token_b": expect["first_diff_token_b"],
+        }
+        logits_at_first_diff = {
+            "cosine": expect["first_diff_cosine_at_least"],
+            "max_abs": expect["first_diff_max_abs_at_most"],
+        }
+        first_diff_classification = {
+            "category": expect["first_diff_category"],
+            "max_abs_over_min_top1_margin": expect["first_diff_max_abs_over_margin_at_least"],
+        }
     return {
         "tokens": {
             "frames_compared": fixture["max_frames"],
             "tokens_compared": fixture["max_frames"] * 16,
             "tokens_matching": int(fixture["max_frames"] * 16 * expect["match_percent_at_least"] / 100),
             "match_percent": expect["match_percent_at_least"],
-            "first_diff": {
-                "frame": expect["first_diff_frame"],
-                "codebook": expect["first_diff_codebook"],
-                "token_a": expect["first_diff_token_a"],
-                "token_b": expect["first_diff_token_b"],
-            },
+            "first_diff": first_diff,
         },
-        "logits_at_first_diff": {
-            "cosine": expect["first_diff_cosine_at_least"],
-            "max_abs": expect["first_diff_max_abs_at_most"],
-        },
-        "first_diff_classification": {
-            "category": expect["first_diff_category"],
-            "max_abs_over_min_top1_margin": expect["first_diff_max_abs_over_margin_at_least"],
-        },
+        "logits_at_first_diff": logits_at_first_diff,
+        "first_diff_classification": first_diff_classification,
     }
 
 
@@ -215,7 +223,7 @@ def validate_payload(payload: dict[str, Any], expected_mode: str, fixture: dict[
             "TopK": 1,
             "TopP": 1.0,
             "Seed": 0,
-            "TalkerKvCacheF32": False,
+            "TalkerKvCacheF32": True,
         }
         for field, expected_value in expected_cpp.items():
             if cpp.get(field) != expected_value:
@@ -227,11 +235,11 @@ def validate_payload(payload: dict[str, Any], expected_mode: str, fixture: dict[
         failures.append("Expectations: expected object")
     else:
         expected_fields = {
-            "FirstDiffCategory": expect["first_diff_category"],
-            "FirstDiffFrame": expect["first_diff_frame"],
-            "FirstDiffCodebook": expect["first_diff_codebook"],
-            "FirstDiffTokenA": expect["first_diff_token_a"],
-            "FirstDiffTokenB": expect["first_diff_token_b"],
+            "FirstDiffCategory": expect["first_diff_category"] if expect["first_diff_frame"] >= 0 else None,
+            "FirstDiffFrame": expect["first_diff_frame"] if expect["first_diff_frame"] >= 0 else None,
+            "FirstDiffCodebook": expect["first_diff_codebook"] if expect["first_diff_frame"] >= 0 else None,
+            "FirstDiffTokenA": expect["first_diff_token_a"] if expect["first_diff_frame"] >= 0 else None,
+            "FirstDiffTokenB": expect["first_diff_token_b"] if expect["first_diff_frame"] >= 0 else None,
         }
         for field, expected_value in expected_fields.items():
             if metadata_expect.get(field) != expected_value:
@@ -267,7 +275,10 @@ def validate_summary(summary: dict[str, Any], fixture: dict[str, Any]) -> list[s
                 f"expected >= {expect['match_percent_at_least']}, got {tokens.get('match_percent')!r}"
             )
         first_diff = tokens.get("first_diff")
-        if not isinstance(first_diff, dict):
+        if expect["first_diff_frame"] < 0:
+            if first_diff is not None:
+                failures.append(f"summary.tokens.first_diff: expected None, got {first_diff!r}")
+        elif not isinstance(first_diff, dict):
             failures.append("summary.tokens.first_diff: expected object")
         else:
             expected_fields = {
@@ -283,7 +294,10 @@ def validate_summary(summary: dict[str, Any], fixture: dict[str, Any]) -> list[s
                     )
 
     logits = summary.get("logits_at_first_diff")
-    if not isinstance(logits, dict):
+    if expect["first_diff_frame"] < 0:
+        if logits is not None:
+            failures.append(f"summary.logits_at_first_diff: expected None, got {logits!r}")
+    elif not isinstance(logits, dict):
         failures.append("summary.logits_at_first_diff: expected object")
     else:
         if logits.get("cosine") is None or logits["cosine"] < expect["first_diff_cosine_at_least"]:
@@ -298,7 +312,10 @@ def validate_summary(summary: dict[str, Any], fixture: dict[str, Any]) -> list[s
             )
 
     classification = summary.get("first_diff_classification")
-    if not isinstance(classification, dict):
+    if expect["first_diff_frame"] < 0:
+        if classification is not None:
+            failures.append(f"summary.first_diff_classification: expected None, got {classification!r}")
+    elif not isinstance(classification, dict):
         failures.append("summary.first_diff_classification: expected object")
     else:
         if classification.get("category") != expect["first_diff_category"]:
