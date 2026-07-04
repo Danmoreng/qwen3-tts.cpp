@@ -18,6 +18,7 @@ param(
     [double]$MaxGpuUtilizationBeforePercent = -1.0,
     [int]$WaitForGpuIdleSeconds = 0,
     [int]$GpuPollIntervalSeconds = 5,
+    [int]$MinWarmRuns = 3,
     [switch]$SelfTest,
     [switch]$RequireAssets
 )
@@ -32,6 +33,9 @@ if ($WaitForGpuIdleSeconds -lt 0) {
 }
 if ($GpuPollIntervalSeconds -lt 1) {
     throw "-GpuPollIntervalSeconds must be at least 1."
+}
+if ($MinWarmRuns -lt 1) {
+    throw "-MinWarmRuns must be at least 1."
 }
 
 function Resolve-RepoPath([string]$path) {
@@ -86,6 +90,48 @@ function Get-Median([double[]]$values) {
         return [double]$sorted[[int]($sorted.Count / 2)]
     }
     return [double](($sorted[$sorted.Count / 2 - 1] + $sorted[$sorted.Count / 2]) / 2.0)
+}
+
+function New-WarmMetricStats([string]$name, [double[]]$values) {
+    if ($values.Count -eq 0) {
+        return [PSCustomObject]@{
+            Name = $name
+            Count = 0
+            Min = $null
+            Max = $null
+            Median = $null
+            Range = $null
+            RangePercentOfMedian = $null
+        }
+    }
+
+    $sorted = @($values | Sort-Object)
+    $minValue = [double]$sorted[0]
+    $maxValue = [double]$sorted[$sorted.Count - 1]
+    $medianValue = Get-Median $values
+    $rangeValue = [double]($maxValue - $minValue)
+    $rangePercent = $null
+    if ($null -ne $medianValue -and [Math]::Abs([double]$medianValue) -gt 0.0) {
+        $rangePercent = [double](($rangeValue / [double]$medianValue) * 100.0)
+    }
+
+    return [PSCustomObject]@{
+        Name = $name
+        Count = $values.Count
+        Min = $minValue
+        Max = $maxValue
+        Median = $medianValue
+        Range = $rangeValue
+        RangePercentOfMedian = $rangePercent
+    }
+}
+
+function New-BenchmarkWarnings([int]$warmRunCount, [int]$minWarmRuns) {
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    if ($warmRunCount -lt $minWarmRuns) {
+        $warnings.Add("Only $warmRunCount warm run(s) were available; use at least $minWarmRuns for a stronger regression signal.")
+    }
+    return @($warnings)
 }
 
 function Get-ObjectNumber([object]$obj, [string]$name) {
@@ -293,6 +339,13 @@ Repeat 3/3
         Assert-SelfTest ([Math]::Abs(([double]$records[1].GenerateMs) - 360.0) -lt 0.001) "repeat 2 generate parse"
         Assert-SelfTest ([Math]::Abs(([double]$records[2].CodePredMs) - 260.0) -lt 0.001) "repeat 3 code predictor parse"
         Assert-SelfTest ([Math]::Abs((Get-Median @([double]$records[1].GenerateMs, [double]$records[2].GenerateMs)) - 375.0) -lt 0.001) "warm generate median"
+        $warmGenerateStats = New-WarmMetricStats "GenerateMs" ([double[]]@($records[1].GenerateMs, $records[2].GenerateMs))
+        Assert-SelfTest ([Math]::Abs(([double]$warmGenerateStats.Min) - 360.0) -lt 0.001) "warm generate min"
+        Assert-SelfTest ([Math]::Abs(([double]$warmGenerateStats.Max) - 390.0) -lt 0.001) "warm generate max"
+        Assert-SelfTest ([Math]::Abs(([double]$warmGenerateStats.Range) - 30.0) -lt 0.001) "warm generate range"
+        Assert-SelfTest ([Math]::Abs(([double]$warmGenerateStats.RangePercentOfMedian) - 8.0) -lt 0.001) "warm generate range percent"
+        Assert-SelfTest (@(New-BenchmarkWarnings 2 3).Count -eq 1) "low warm-run warning"
+        Assert-SelfTest (@(New-BenchmarkWarnings 3 3).Count -eq 0) "sufficient warm-run warning"
 
         $metric = New-DeltaMetric "WarmGenerateMedianMs" 110.0 100.0
         Assert-SelfTest ([Math]::Abs(([double]$metric.DeltaPercent) - 10.0) -lt 0.001) "delta percent"
@@ -455,6 +508,14 @@ $warmTalkerMedianMs = Get-Median ([double[]]@($warmRecords | ForEach-Object { $_
 $warmCodePredMedianMs = Get-Median ([double[]]@($warmRecords | ForEach-Object { $_.CodePredMs }))
 $warmPipelineTotalMedianMs = Get-Median ([double[]]@($warmRecords | ForEach-Object { $_.PipelineTotalMs }))
 $warmRtfMedian = Get-Median ([double[]]@($warmRecords | ForEach-Object { $_.RTF }))
+$warmMetricStats = [PSCustomObject]@{
+    GenerateMs = New-WarmMetricStats "GenerateMs" ([double[]]@($warmRecords | ForEach-Object { $_.GenerateMs }))
+    TalkerMs = New-WarmMetricStats "TalkerMs" ([double[]]@($warmRecords | ForEach-Object { $_.TalkerMs }))
+    CodePredMs = New-WarmMetricStats "CodePredMs" ([double[]]@($warmRecords | ForEach-Object { $_.CodePredMs }))
+    PipelineTotalMs = New-WarmMetricStats "PipelineTotalMs" ([double[]]@($warmRecords | ForEach-Object { $_.PipelineTotalMs }))
+    RTF = New-WarmMetricStats "RTF" ([double[]]@($warmRecords | ForEach-Object { $_.RTF }))
+}
+$benchmarkWarnings = @(New-BenchmarkWarnings $warmRecords.Count $MinWarmRuns)
 $baselineComparison = $null
 $regressionFailures = [System.Collections.Generic.List[string]]::new()
 
@@ -498,6 +559,9 @@ $summary = [PSCustomObject]@{
     WarmCodePredMedianMs = $warmCodePredMedianMs
     WarmPipelineTotalMedianMs = $warmPipelineTotalMedianMs
     WarmRtfMedian = $warmRtfMedian
+    MinWarmRuns = $MinWarmRuns
+    WarmMetricStats = $warmMetricStats
+    BenchmarkWarnings = @($benchmarkWarnings)
     BaselineComparison = $baselineComparison
     GpuBefore = $gpuBefore
     GpuAfter = $gpuAfter

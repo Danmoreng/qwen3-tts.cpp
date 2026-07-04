@@ -342,7 +342,10 @@ Candidate gates:
   `--expect-first-diff-max-abs-over-margin-at-least`.
 - `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
   `-SelfTest` validates timing-log parsing, median calculation, and regression
-  threshold handling without requiring model artifacts.
+  threshold handling without requiring model artifacts. The summary also
+  reports warm-run min/max/range percentages and warns when fewer than
+  `-MinWarmRuns` warm samples are available; prefer at least 4 total repeats so
+  the default 3 warm samples are present after dropping the cold first run.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
   meaningful.
@@ -574,6 +577,18 @@ Targeted BF16 variant experiment:
   threshold; pre-run GPU utilization was `0%`. This change touches only test
   and doc files, so treat the slower run as a timing-noise observation rather
   than a production-code regression.
+- `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
+  and warns when fewer than `-MinWarmRuns` warm samples are present. The
+  self-test covers the spread math and warning path. `run_all_tests.ps1
+  -ParityFixturesOnly` passed with helper smokes plus both full fixtures
+  (`PASS: 7`, `FAIL: 0`, `SKIP: 4`). Follow-up no-debug timing used the
+  idle-GPU guard and 4 repeats, giving 3 warm samples and no benchmark warnings:
+  warm generate median `1090.7 ms`, code predictor `629.2 ms`, pipeline
+  `1127.0 ms`, RTF `0.288`; warm generate range was `3.18%` of median and
+  pipeline range was `3.73%`. The saved same-session expectation-schema
+  baseline comparison still showed about `+25%` slower current medians with no
+  failures under the `30%` smoke threshold; this change is benchmark-script/doc
+  only and does not touch inference code.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
