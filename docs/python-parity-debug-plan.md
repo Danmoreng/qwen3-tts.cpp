@@ -337,6 +337,8 @@ Candidate gates:
   `--expect-first-diff-category` and
   `--expect-first-diff-max-abs-over-margin-at-least`.
 - `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
+  `-SelfTest` validates timing-log parsing, median calculation, and regression
+  threshold handling without requiring model artifacts.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
   meaningful.
@@ -548,6 +550,13 @@ Targeted BF16 variant experiment:
   timing used the idle-GPU guard and 3 repeats: warm generate median
   `864.75 ms`, code predictor `488.85 ms`, pipeline `893.5 ms`, RTF `0.228`;
   pre-run GPU utilization was `0%`.
+- `benchmark_parity_smoke.ps1 -SelfTest` now covers the benchmark wrapper's
+  timing parser and regression-threshold path without launching inference.
+  `run_all_tests.ps1 -ParityFixturesOnly` passed with helper smokes plus both
+  full fixtures (`PASS: 6`, `FAIL: 0`, `SKIP: 4`). Follow-up no-debug timing
+  used the idle-GPU guard and 3 repeats: warm generate median `885.45 ms`, code
+  predictor `496.3 ms`, pipeline `919.5 ms`, RTF `0.2345`; pre-run GPU
+  utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

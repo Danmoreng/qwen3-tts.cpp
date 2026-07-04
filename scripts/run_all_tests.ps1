@@ -599,6 +599,7 @@ Write-Section "Section 1b: Python Parity Helper Smokes"
 $parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary_smoke.py"
 $debugTraceSmokeScript = Join-Path $repoRoot "scripts/test_debug_trace_report_smoke.py"
 $parityDtypeSmokeScript = Join-Path $repoRoot "scripts/test_inspect_safetensors_dtypes_smoke.py"
+$benchmarkParitySmokeScript = Join-Path $repoRoot "scripts/benchmark_parity_smoke.ps1"
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCmd) {
     Add-Skip "Python parity trace smoke (python missing)"
@@ -654,6 +655,23 @@ if ($null -eq $pythonCmd) {
     } else {
         Add-Fail "Safetensors dtype smoke (exit code: $($parityDtypeSmokeRes.ExitCode))"
         Write-OutputTail -output $parityDtypeSmokeRes.Output
+    }
+}
+
+if (-not (Test-Path $benchmarkParitySmokeScript)) {
+    Add-Fail "Benchmark parity smoke self-test (script missing)"
+} else {
+    $benchmarkParitySmokeRes = Invoke-CommandCapture -exe "powershell" -commandArgs @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $benchmarkParitySmokeScript,
+        "-SelfTest"
+    )
+    if ($benchmarkParitySmokeRes.ExitCode -eq 0) {
+        Add-Pass "Benchmark parity smoke self-test"
+    } else {
+        Add-Fail "Benchmark parity smoke self-test (exit code: $($benchmarkParitySmokeRes.ExitCode))"
+        Write-OutputTail -output $benchmarkParitySmokeRes.Output
     }
 }
 

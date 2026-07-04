@@ -18,6 +18,7 @@ param(
     [double]$MaxGpuUtilizationBeforePercent = -1.0,
     [int]$WaitForGpuIdleSeconds = 0,
     [int]$GpuPollIntervalSeconds = 5,
+    [switch]$SelfTest,
     [switch]$RequireAssets
 )
 
@@ -244,6 +245,70 @@ function Parse-TimingLog([string]$logPath) {
         $records += [PSCustomObject]$current
     }
     return @($records)
+}
+
+function Assert-SelfTest([bool]$condition, [string]$message) {
+    if (-not $condition) {
+        throw "Self-test failed: $message"
+    }
+}
+
+function Invoke-SelfTest() {
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("qwen3_tts_benchmark_smoke_" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+    try {
+        $logPath = Join-Path $tempDir "timing.log"
+        @'
+Repeat 1/3
+  Talker forward_step (total / per-frame):
+    Total:               100.0 ms
+  Code predictor (total / per-frame):
+    Total:               200.0 ms
+  Embed lookups:          10.0 ms
+  Total generate:        350.0 ms
+  Total:                 400.0 ms
+  Throughput:            0.50x realtime (RTF=2.000)
+Repeat 2/3
+  Talker forward_step (total / per-frame):
+    Total:               110.0 ms
+  Code predictor (total / per-frame):
+    Total:               220.0 ms
+  Embed lookups:          10.0 ms
+  Total generate:        360.0 ms
+  Total:                 410.0 ms
+  Throughput:            0.49x realtime (RTF=2.050)
+Repeat 3/3
+  Talker forward_step (total / per-frame):
+    Total:               130.0 ms
+  Code predictor (total / per-frame):
+    Total:               260.0 ms
+  Embed lookups:          10.0 ms
+  Total generate:        390.0 ms
+  Total:                 430.0 ms
+  Throughput:            0.47x realtime (RTF=2.150)
+'@ | Set-Content -LiteralPath $logPath -Encoding UTF8
+
+        $records = @(Parse-TimingLog $logPath)
+        Assert-SelfTest ($records.Count -eq 3) "expected 3 timing records"
+        Assert-SelfTest ([Math]::Abs(([double]$records[1].GenerateMs) - 360.0) -lt 0.001) "repeat 2 generate parse"
+        Assert-SelfTest ([Math]::Abs(([double]$records[2].CodePredMs) - 260.0) -lt 0.001) "repeat 3 code predictor parse"
+        Assert-SelfTest ([Math]::Abs((Get-Median @([double]$records[1].GenerateMs, [double]$records[2].GenerateMs)) - 375.0) -lt 0.001) "warm generate median"
+
+        $metric = New-DeltaMetric "WarmGenerateMedianMs" 110.0 100.0
+        Assert-SelfTest ([Math]::Abs(([double]$metric.DeltaPercent) - 10.0) -lt 0.001) "delta percent"
+        $failures = [System.Collections.Generic.List[string]]::new()
+        Add-RegressionFailure $failures $metric 5.0
+        Assert-SelfTest ($failures.Count -eq 1) "regression threshold failure"
+
+        Write-Host "Benchmark parity smoke self-test passed."
+    } finally {
+        Remove-Item -Recurse -Force -LiteralPath $tempDir -ErrorAction SilentlyContinue
+    }
+}
+
+if ($SelfTest) {
+    Invoke-SelfTest
+    exit 0
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
