@@ -60,10 +60,16 @@ def main() -> None:
     bad_summary = args.output_dir / "bad_summary.json"
     bad_payload = make_payload("icl", expectations["fixtures"]["icl"], bad_summary)
     bad_summary_payload = make_summary(expectations["fixtures"]["icl"])
-    bad_summary_payload["tokens"]["first_diff"]["token_a"] = -1
+    expect = expectations["fixtures"]["icl"]["expect"]
+    if expect["first_diff_frame"] >= 0:
+        bad_summary_payload["tokens"]["first_diff"]["token_a"] = -1
+        expected_failure_fragment = "summary.tokens.first_diff.token_a"
+    else:
+        bad_summary_payload["tokens"]["match_percent"] = expect["match_percent_at_least"] - 1.0
+        expected_failure_fragment = "summary.tokens.match_percent"
     bad_summary.write_text(json.dumps(bad_summary_payload, indent=2) + "\n", encoding="utf-8")
     bad_summary_failures = validate_payload(bad_payload, "icl", expectations["fixtures"]["icl"])
-    if not any("summary.tokens.first_diff.token_a" in failure for failure in bad_summary_failures):
+    if not any(expected_failure_fragment in failure for failure in bad_summary_failures):
         raise SystemExit("negative fixture summary check unexpectedly passed")
 
     (args.output_dir / "speaker_fixture_metadata.json").write_text(json.dumps(speaker_payload, indent=2) + "\n", encoding="utf-8")
