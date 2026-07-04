@@ -54,6 +54,11 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
 
         cur = ggml_rms_norm(ctx0, inpL, eps);
         cur = ggml_mul(ctx0, cur, layer.attn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_prefill_layer%02d_attn_norm", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.attn_q, cur);
         struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.attn_k, cur);
@@ -137,11 +142,21 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
         }
 
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_prefill_layer%02d_attn_out", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
         cur = ggml_add(ctx0, cur, inpL);
         struct ggml_tensor * inpFF = cur;
 
         cur = ggml_rms_norm(ctx0, inpFF, eps);
         cur = ggml_mul(ctx0, cur, layer.ffn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_prefill_layer%02d_ffn_norm", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, cur);
         struct ggml_tensor * up = ggml_mul_mat(ctx0, layer.ffn_up, cur);
@@ -150,6 +165,11 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
         cur = ggml_mul(ctx0, gate, up);
 
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_prefill_layer%02d_ffn_out", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         inpL = ggml_add(ctx0, cur, inpFF);
         if (debug_trace_enabled) {
@@ -227,6 +247,11 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
 
         cur = ggml_rms_norm(ctx0, inpL, eps);
         cur = ggml_mul(ctx0, cur, layer.attn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_step_layer%02d_attn_norm", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.attn_q, cur);
         struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.attn_k, cur);
@@ -310,11 +335,21 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
         }
 
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_step_layer%02d_attn_out", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
         cur = ggml_add(ctx0, cur, inpL);
         struct ggml_tensor * inpFF = cur;
 
         cur = ggml_rms_norm(ctx0, inpFF, eps);
         cur = ggml_mul(ctx0, cur, layer.ffn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_step_layer%02d_ffn_norm", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, cur);
         struct ggml_tensor * up = ggml_mul_mat(ctx0, layer.ffn_up, cur);
@@ -323,6 +358,11 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
         cur = ggml_mul(ctx0, gate, up);
 
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "talker_step_layer%02d_ffn_out", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         inpL = ggml_add(ctx0, cur, inpFF);
         if (debug_trace_enabled) {

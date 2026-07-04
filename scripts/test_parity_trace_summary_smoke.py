@@ -5,7 +5,8 @@ CI-safe smoke test for parity_trace_summary.py.
 The full Python/C++ parity fixtures need large local model artifacts. This test
 creates tiny synthetic trace directories at runtime and verifies that the
 summary CLI reports the expected first-diff token metadata, near-tie
-classification, boundary tensors, and code-predictor layer tensors.
+classification, boundary tensors, talker sub-layer tensors, and code-predictor
+layer tensors.
 """
 
 from __future__ import annotations
@@ -62,6 +63,11 @@ def make_synthetic_traces(root: Path) -> tuple[Path, Path]:
     talker_layer_b = np.array([0.0, 1.0, 2.6, 3.0], dtype=np.float32)
     write_trace_entry(trace_a, rows_a, "frame000_talker_layer00_hidden.f32.bin", "f32", talker_layer_a)
     write_trace_entry(trace_b, rows_b, "frame000_talker_layer00_hidden.f32.bin", "f32", talker_layer_b)
+
+    talker_ffn_a = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+    talker_ffn_b = np.array([0.0, 1.0, 2.0, 3.9], dtype=np.float32)
+    write_trace_entry(trace_a, rows_a, "frame000_talker_layer00_ffn_out.f32.bin", "f32", talker_ffn_a)
+    write_trace_entry(trace_b, rows_b, "frame000_talker_layer00_ffn_out.f32.bin", "f32", talker_ffn_b)
 
     projected_a = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
     projected_b = np.array([[1.0, 0.0, 0.0, 0.25]], dtype=np.float32)
@@ -152,6 +158,9 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
     talker_layer = summary["talker_layer_tensors_at_first_diff"]["tensors"][
         "frame000_talker_layer00_hidden.f32.bin"
     ]
+    talker_ffn = summary["talker_layer_tensors_at_first_diff"]["tensors"][
+        "frame000_talker_layer00_ffn_out.f32.bin"
+    ]
     layer_projected = summary["codepred_layer_tensors_at_first_diff"]["tensors"][
         "frame000_codepred_step05_projected.f32.bin"
     ]
@@ -162,13 +171,14 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
     hotspots = summary["first_diff_drift_hotspots"]
     assert_close(boundary_hidden["max_abs"], 0.5, "boundary max_abs")
     assert_close(talker_layer["max_abs"], 0.6, "talker layer max_abs")
+    assert_close(talker_ffn["max_abs"], 0.9, "talker ffn max_abs")
     assert_close(layer_projected["max_abs"], 0.25, "projected max_abs")
     assert_close(layer_hidden["max_abs"], 0.75, "layer hidden max_abs")
     if not hotspots:
         raise AssertionError("expected at least one drift hotspot")
-    if hotspots[0]["tensor"] != "frame000_codepred_step05_layer00_hidden.f32.bin":
-        raise AssertionError(f"expected layer hidden as top hotspot, got {hotspots[0]}")
-    assert_close(hotspots[0]["max_abs"], 0.75, "top hotspot max_abs")
+    if hotspots[0]["tensor"] != "frame000_talker_layer00_ffn_out.f32.bin":
+        raise AssertionError(f"expected talker FFN output as top hotspot, got {hotspots[0]}")
+    assert_close(hotspots[0]["max_abs"], 0.9, "top hotspot max_abs")
     if ratio < 1.0:
         raise AssertionError(f"expected max_abs_over_min_top1_margin >= 1.0, got {ratio}")
     print(

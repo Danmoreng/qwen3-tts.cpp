@@ -159,14 +159,17 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
         };
 
         const int32_t n_layer = impl_->model.config.n_layers;
+        const char * sublayer_suffixes[] = {"attn_norm", "attn_out", "ffn_norm", "ffn_out", "hidden"};
         for (int32_t il = 0; il < n_layer; ++il) {
-            char tensor_name[96];
-            char out_name[128];
-            snprintf(tensor_name, sizeof(tensor_name), "talker_prefill_layer%02d_hidden", il);
-            snprintf(out_name, sizeof(out_name), "talker_prefill_layer%02d_hidden.f32.bin", il);
-            dump_last_token_f32(tensor_name, out_name);
-            snprintf(out_name, sizeof(out_name), "frame000_talker_layer%02d_hidden.f32.bin", il);
-            dump_last_token_f32(tensor_name, out_name);
+            for (const char * sublayer_suffix : sublayer_suffixes) {
+                char tensor_name[96];
+                char out_name[128];
+                snprintf(tensor_name, sizeof(tensor_name), "talker_prefill_layer%02d_%s", il, sublayer_suffix);
+                snprintf(out_name, sizeof(out_name), "talker_prefill_layer%02d_%s.f32.bin", il, sublayer_suffix);
+                dump_last_token_f32(tensor_name, out_name);
+                snprintf(out_name, sizeof(out_name), "frame000_talker_layer%02d_%s.f32.bin", il, sublayer_suffix);
+                dump_last_token_f32(tensor_name, out_name);
+            }
         }
         dump_last_token_f32("hidden_states", "talker_prefill_final_hidden.f32.bin");
         dump_last_token_f32("hidden_states", "frame000_talker_final_hidden.f32.bin");
@@ -372,12 +375,16 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
         };
 
         const int32_t n_layer = impl_->model.config.n_layers;
+        const char * sublayer_suffixes[] = {"attn_norm", "attn_out", "ffn_norm", "ffn_out", "hidden"};
         for (int32_t il = 0; il < n_layer; ++il) {
-            char tensor_name[96];
-            char out_name[128];
-            snprintf(tensor_name, sizeof(tensor_name), "talker_step_layer%02d_hidden", il);
-            snprintf(out_name, sizeof(out_name), "frame%03d_talker_layer%02d_hidden.f32.bin", trace_frame, il);
-            dump_tensor_f32(tensor_name, out_name);
+            for (const char * sublayer_suffix : sublayer_suffixes) {
+                char tensor_name[96];
+                char out_name[128];
+                snprintf(tensor_name, sizeof(tensor_name), "talker_step_layer%02d_%s", il, sublayer_suffix);
+                snprintf(out_name, sizeof(out_name), "frame%03d_talker_layer%02d_%s.f32.bin",
+                         trace_frame, il, sublayer_suffix);
+                dump_tensor_f32(tensor_name, out_name);
+            }
         }
         char final_name[128];
         snprintf(final_name, sizeof(final_name), "frame%03d_talker_final_hidden.f32.bin", trace_frame);

@@ -36,7 +36,7 @@ speaker-only trace setup:
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
 | Greedy path | Greedy currently produces invalid/repetitive output and should not be used as the main parity gate until fixed. | Known failing |
 | No-debug performance guard | Alternating clean-baseline/current CUDA timing run showed no regression after debug-only trace hooks: current median `Total generate` was `872.1 ms` vs baseline `882.2 ms` for the 64-token speaker-only benchmark. | Verified |
-| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, generated-frame talker layer tensors, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins and classifications, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, talker/code-predictor layer comparisons, ranked first-diff drift hotspots, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
+| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, generated-frame talker layer/sub-layer tensors, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins and classifications, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, talker/code-predictor layer comparisons, ranked first-diff drift hotspots, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
 | Benchmark tooling | `scripts/benchmark_parity_smoke.ps1` runs the standard speaker-embedding parity timing smoke, captures logs, parses warm medians, records before/after `nvidia-smi` snapshots when available, and can compare against a saved baseline summary with regression thresholds. | Added |
 
 ## Guiding Rules
@@ -306,6 +306,14 @@ Current result:
   layer `26` at max absolute drift `0.104679`, layer `25` at `0.090927`,
   layer `24` at `0.090488`, and layer `23` at `0.085041`, before final talker
   hidden/code-predictor input drift at `0.057430`.
+- Generated-frame talker sub-layer traces refine that boundary further. At the
+  speaker-only first diff, the largest talker hotspots are late-layer
+  post-RMSNorm attention inputs rather than the code predictor:
+  layer `27` `attn_norm` max absolute drift `0.282791`, layer `26`
+  `attn_norm` `0.256874`, layer `25` `attn_norm` `0.253548`, then layer `27`
+  `ffn_out` `0.138855` and layer `26` residual hidden `0.104679`. This points
+  at normalization of accumulated late talker residual drift as the strongest
+  local amplifier, not a fresh code-predictor structural mismatch.
 - First-diff step trajectory for codebook `6`:
   - Frames `0..8` have matching top tokens at the same codebook/step.
   - The smallest earlier Python top-1 margin is frame `6` at `0.108820`; the frame `9` Python margin collapses to `0.005629`.
@@ -348,6 +356,10 @@ Current result:
     talker layers before the code predictor: layer `26` max absolute drift
     `0.445413`, layer `25` `0.430355`, layer `24` `0.358314`, and layer `23`
     `0.291651`, followed by final talker/code-predictor input drift `0.269569`.
+  - Generated-frame talker sub-layer traces show the same late-layer
+    `attn_norm` amplification in ICL: layer `26` max absolute drift
+    `1.493149`, layer `27` `1.374287`, layer `25` `1.133768`, and layer `24`
+    `0.881341`, before layer `26` residual hidden at `0.445413`.
 
 ## Phase 6: Regression Gates
 
@@ -628,6 +640,15 @@ Targeted BF16 variant experiment:
   threshold; pre-run GPU utilization was `0%`. This change touches only test
   and doc files, so treat the slower run as a timing-noise observation rather
   than a production-code regression.
+- Talker sub-layer trace dumps are now debug-only and covered by the synthetic
+  parity summary smoke. `run_all_tests.ps1 -ParityFixturesOnly` passed with the
+  helper smokes plus both full fixtures (`PASS: 10`, `FAIL: 0`, `SKIP: 4`).
+  Follow-up no-debug timing used the comparable baseline guard with 4 repeats:
+  warm generate median `1006.9 ms`, talker `377.5 ms`, code predictor
+  `572.8 ms`, pipeline `1045.0 ms`, and RTF `0.267`. Compared with
+  `benchmark_output\perf_parity_smoke_comparable_baseline\summary.json`,
+  generate was `+8.42%`, pipeline `+7.95%`, and RTF `+8.10%`; no benchmark
+  warnings, stability failures, or configured regression thresholds failed.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1

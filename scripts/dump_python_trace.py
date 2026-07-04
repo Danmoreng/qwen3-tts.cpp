@@ -81,11 +81,31 @@ def save_codepred_hidden_states(
     )
 
 
-def capture_codepred_layer_outputs(cp) -> tuple[list[tuple[int, str, torch.Tensor]], list[torch.utils.hooks.RemovableHandle]]:
+def save_talker_layer_outputs(
+    trace_dir: Path,
+    manifest: Path,
+    prefix: str,
+    layer_records: list[tuple[int, str, torch.Tensor]] | None,
+) -> None:
+    if not layer_records:
+        return
+    for layer_idx, suffix, layer_hidden in layer_records:
+        if suffix == "hidden":
+            continue
+        save_tensor(
+            trace_dir,
+            manifest,
+            f"{prefix}_layer{layer_idx:02d}_{suffix}.f32.bin",
+            layer_hidden[:, -1, :].reshape(-1),
+            "f32",
+        )
+
+
+def capture_decoder_layer_outputs(layers) -> tuple[list[tuple[int, str, torch.Tensor]], list[torch.utils.hooks.RemovableHandle]]:
     captures: list[tuple[int, str, torch.Tensor]] = []
     handles: list[torch.utils.hooks.RemovableHandle] = []
 
-    for layer_idx, layer in enumerate(cp.model.layers):
+    for layer_idx, layer in enumerate(layers):
         def make_hook(suffix: str, layer_idx: int):
             def hook(_module, _inputs, output):
                 hidden = output[0] if isinstance(output, (tuple, list)) else output
@@ -105,6 +125,10 @@ def capture_codepred_layer_outputs(cp) -> tuple[list[tuple[int, str, torch.Tenso
         handles.append(layer.register_forward_hook(layer_hook))
 
     return captures, handles
+
+
+def capture_codepred_layer_outputs(cp) -> tuple[list[tuple[int, str, torch.Tensor]], list[torch.utils.hooks.RemovableHandle]]:
+    return capture_decoder_layer_outputs(cp.model.layers)
 
 
 def remove_hooks(handles: list[torch.utils.hooks.RemovableHandle]) -> None:
@@ -329,28 +353,32 @@ def main() -> None:
         if i not in (m.config.talker_config.codec_eos_token_id,)
     ]
 
-    talker_result = talker.generate(
-        inputs_embeds=talker_input_embeds,
-        attention_mask=talker_attention_mask,
-        trailing_text_hidden=trailing_text_hiddens,
-        tts_pad_embed=tts_pad_embed,
-        max_new_tokens=args.max_new_tokens,
-        min_new_tokens=2,
-        do_sample=args.do_sample,
-        top_k=1,
-        top_p=1.0,
-        temperature=1.0,
-        subtalker_dosample=args.do_sample,
-        subtalker_top_k=1,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-        eos_token_id=m.config.talker_config.codec_eos_token_id,
-        repetition_penalty=1.05,
-        suppress_tokens=suppress_tokens,
-        output_hidden_states=True,
-        output_scores=True,
-        return_dict_in_generate=True,
-    )
+    talker_layer_outputs, talker_layer_hooks = capture_decoder_layer_outputs(talker.model.layers)
+    try:
+        talker_result = talker.generate(
+            inputs_embeds=talker_input_embeds,
+            attention_mask=talker_attention_mask,
+            trailing_text_hidden=trailing_text_hiddens,
+            tts_pad_embed=tts_pad_embed,
+            max_new_tokens=args.max_new_tokens,
+            min_new_tokens=2,
+            do_sample=args.do_sample,
+            top_k=1,
+            top_p=1.0,
+            temperature=1.0,
+            subtalker_dosample=args.do_sample,
+            subtalker_top_k=1,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+            eos_token_id=m.config.talker_config.codec_eos_token_id,
+            repetition_penalty=1.05,
+            suppress_tokens=suppress_tokens,
+            output_hidden_states=True,
+            output_scores=True,
+            return_dict_in_generate=True,
+        )
+    finally:
+        remove_hooks(talker_layer_hooks)
 
     talker_codes = torch.stack(
         [hid[-1] for hid in talker_result.hidden_states if hid[-1] is not None], dim=1
@@ -373,6 +401,13 @@ def main() -> None:
         "talker_prefill_final_hidden.f32.bin",
         prefill_hidden_layers[-1][:, -1, :].reshape(-1),
         "f32",
+    )
+    talker_records_per_forward = len(talker.model.layers) * 5
+    save_talker_layer_outputs(
+        trace_dir,
+        manifest,
+        "talker_prefill",
+        talker_layer_outputs[:talker_records_per_forward],
     )
 
     steps = min(args.max_frames, int(talker_codes.shape[1]))
@@ -428,6 +463,14 @@ def main() -> None:
             f"frame{frame:03d}_talker_final_hidden.f32.bin",
             frame_hidden_layers[-1][:, -1, :].reshape(-1),
             "f32",
+        )
+        layer_start = frame * talker_records_per_forward
+        layer_end = layer_start + talker_records_per_forward
+        save_talker_layer_outputs(
+            trace_dir,
+            manifest,
+            f"frame{frame:03d}_talker",
+            talker_layer_outputs[layer_start:layer_end],
         )
 
         cb0_embd = talker.get_input_embeddings()(cb0_token.view(1, 1))

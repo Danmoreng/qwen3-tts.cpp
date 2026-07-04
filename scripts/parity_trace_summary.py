@@ -494,10 +494,10 @@ def talker_layer_evidence(
         return None
 
     frame = first_diff["frame"]
-    candidates = [
-        f"frame{frame:03d}_talker_layer{layer_idx:02d}_hidden.f32.bin"
-        for layer_idx in range(128)
-    ]
+    candidates = []
+    for layer_idx in range(128):
+        for suffix in ("attn_norm", "attn_out", "ffn_norm", "ffn_out", "hidden"):
+            candidates.append(f"frame{frame:03d}_talker_layer{layer_idx:02d}_{suffix}.f32.bin")
     candidates.append(f"frame{frame:03d}_talker_final_hidden.f32.bin")
 
     tensors: dict[str, Any] = {}
