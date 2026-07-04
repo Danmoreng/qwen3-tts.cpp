@@ -79,6 +79,22 @@ static void normalize_text_newlines(std::string & text) {
     text.swap(out);
 }
 
+static void trim_text_outer_whitespace(std::string & text) {
+    size_t begin = 0;
+    while (begin < text.size() && std::isspace((unsigned char) text[begin])) {
+        ++begin;
+    }
+
+    size_t end = text.size();
+    while (end > begin && std::isspace((unsigned char) text[end - 1])) {
+        --end;
+    }
+
+    if (begin > 0 || end < text.size()) {
+        text = text.substr(begin, end - begin);
+    }
+}
+
 static std::string output_file_for_repeat(const std::string & path, int iteration, int repeat_count) {
     if (repeat_count <= 1) {
         return path;
@@ -563,6 +579,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
         normalize_text_newlines(params.reference_text);
+        trim_text_outer_whitespace(params.reference_text);
     }
     if (!reference_token_ids_file.empty()) {
         std::string error;
