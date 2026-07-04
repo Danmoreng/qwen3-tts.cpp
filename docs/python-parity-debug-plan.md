@@ -318,12 +318,13 @@ Candidate gates:
 - A code-predictor first-step top-token test using checked-in small metadata and external/generated binary fixtures.
 - A script-level parity check that is skipped unless required model artifacts are present.
 - A CI-safe smoke test that validates tensor shapes and known first-step token IDs.
-- `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata for local full-model parity fixtures.
+- `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata and first-diff classification for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/parity_trace_summary.py` also emits `first_diff_classification`
   with `exact_tie`, `near_tie_token_swap`, `near_tie`, `token_swap`, or
   `logit_drift` categories. Defaults are `--near-tie-margin 0.02` and
-  `--near-tie-rank-threshold 2`.
+  `--near-tie-rank-threshold 2`; local gates can enforce it with
+  `--expect-first-diff-category`.
 - `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
@@ -499,6 +500,12 @@ Targeted BF16 variant experiment:
   the idle-GPU guard with threshold `20`, wait `60s`, and 3 repeats. Warm
   generate median was `982.25 ms`, code predictor `566.0 ms`, pipeline
   `1015.5 ms`, RTF `0.259`; pre-run GPU utilization was `0%`.
+- After wiring first-diff classifications into the local parity gate,
+  `run_all_tests.ps1 -ParityFixturesOnly` passed speaker-only and ICL fixtures
+  with category expectations enforced. Follow-up no-debug timing used the same
+  idle-GPU guard and 3 repeats: warm generate median `972.25 ms`, code
+  predictor `547.8 ms`, pipeline `1010.5 ms`, RTF `0.258`; pre-run GPU
+  utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

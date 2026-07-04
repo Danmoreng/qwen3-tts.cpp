@@ -13,7 +13,8 @@
         "first_diff_token_a": 517,
         "first_diff_token_b": 9,
         "first_diff_cosine_at_least": 0.99999,
-        "first_diff_max_abs_at_most": 0.05
+        "first_diff_max_abs_at_most": 0.05,
+        "first_diff_category": "near_tie_token_swap"
       }
     },
     "icl": {
@@ -27,7 +28,8 @@
         "first_diff_token_a": 499,
         "first_diff_token_b": 1481,
         "first_diff_cosine_at_least": 0.99999,
-        "first_diff_max_abs_at_most": 0.05
+        "first_diff_max_abs_at_most": 0.05,
+        "first_diff_category": "near_tie"
       }
     }
   }

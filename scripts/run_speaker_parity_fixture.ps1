@@ -26,6 +26,8 @@ param(
     [int]$ExpectFirstDiffTokenB = -1,
     [double]$ExpectFirstDiffCosineAtLeast = -1.0,
     [double]$ExpectFirstDiffMaxAbsAtMost = -1.0,
+    [ValidateSet("", "exact_tie", "near_tie_token_swap", "near_tie", "token_swap", "logit_drift")]
+    [string]$ExpectFirstDiffCategory = "",
     [switch]$RequireAssets
 )
 
@@ -314,6 +316,9 @@ try {
     }
     if ($ExpectFirstDiffMaxAbsAtMost -ge 0.0) {
         $summaryArgs += @("--expect-first-diff-max-abs-at-most", ([string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0}", $ExpectFirstDiffMaxAbsAtMost)))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectFirstDiffCategory)) {
+        $summaryArgs += @("--expect-first-diff-category", $ExpectFirstDiffCategory)
     }
     Invoke-Checked "Trace summary" $pythonExeResolved $summaryArgs (Join-Path $outputDirResolved "summary.log")
 

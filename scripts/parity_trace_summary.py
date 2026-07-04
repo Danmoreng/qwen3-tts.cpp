@@ -573,6 +573,17 @@ def check_expectations(result: dict[str, Any], args: argparse.Namespace) -> list
                 f"first_diff max_abs: expected <= {args.expect_first_diff_max_abs_at_most}, got {logits['max_abs']}"
             )
 
+    if args.expect_first_diff_category is not None:
+        classification = result.get("first_diff_classification")
+        if classification is None:
+            failures.append("first_diff_classification: missing; cannot check category")
+        else:
+            add_equal(
+                "first_diff_classification.category",
+                classification.get("category"),
+                args.expect_first_diff_category,
+            )
+
     return failures
 
 
@@ -593,6 +604,11 @@ def main() -> None:
     parser.add_argument("--expect-first-diff-token-b", type=int, default=None)
     parser.add_argument("--expect-first-diff-cosine-at-least", type=float, default=None)
     parser.add_argument("--expect-first-diff-max-abs-at-most", type=float, default=None)
+    parser.add_argument(
+        "--expect-first-diff-category",
+        choices=["exact_tie", "near_tie_token_swap", "near_tie", "token_swap", "logit_drift"],
+        default=None,
+    )
     args = parser.parse_args()
 
     entries_a = load_manifest(args.trace_a)
