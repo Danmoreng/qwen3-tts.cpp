@@ -617,13 +617,14 @@ Targeted BF16 variant experiment:
   `-RequireComparableBaseline` turns incompatibilities into
   `BASELINE INCOMPARABLE` failures, while the default remains warning-only for
   older summaries and now adds a visible `BenchmarkWarnings` entry. The self-test
-  covers matching, mismatched, and missing-field baseline metadata.
+  covers matching, mismatched, and missing-field baseline metadata, plus the
+  non-required warning and required failure routing.
   `run_all_tests.ps1 -ParityFixturesOnly` passed with helper smokes plus both
   full fixtures (`PASS: 7`, `FAIL: 0`, `SKIP: 4`). Follow-up no-debug timing
   used the idle-GPU guard, 4 repeats, loose `30%` regression thresholds, and
   `10%` warm-spread thresholds: warm generate median
-  `1083.8 ms`, code predictor `621.3 ms`, pipeline `1120.0 ms`, RTF `0.286`;
-  warm generate range was `4.24%` and pipeline range `4.82%` of median. The old
+  `1052.8 ms`, code predictor `604.3 ms`, pipeline `1087.0 ms`, RTF `0.277`;
+  warm generate range was `4.82%` and pipeline range `4.23%` of median. The old
   saved expectation-schema baseline remained under loose regression thresholds,
   reported missing compatibility metadata for `Language`, `Temperature`, `TopK`,
   `TopP`, and `Seed`, and now adds a visible `BenchmarkWarnings` entry pointing

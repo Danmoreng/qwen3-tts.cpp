@@ -198,6 +198,25 @@ function New-BaselineCompatibility(
     }
 }
 
+function Add-BaselineCompatibilityMessages(
+    [System.Collections.Generic.List[string]]$warnings,
+    [System.Collections.Generic.List[string]]$failures,
+    [object]$compatibility,
+    [bool]$required
+) {
+    if ($null -eq $compatibility -or $compatibility.IsComparable) {
+        return
+    }
+
+    if ($required) {
+        foreach ($issue in $compatibility.Issues) {
+            $failures.Add($issue)
+        }
+    } else {
+        $warnings.Add("Baseline comparison is not fully comparable; inspect BaselineComparison.Compatibility.Issues.")
+    }
+}
+
 function New-DeltaMetric([string]$name, [object]$current, [object]$baseline) {
     $currentNumber = $null
     $baselineNumber = $null
@@ -455,6 +474,13 @@ Repeat 3/3
         $incompatible = New-BaselineCompatibility $currentWorkload $mismatchedBaseline $compatFields $true
         Assert-SelfTest (-not $incompatible.IsComparable) "mismatched baseline compatibility"
         Assert-SelfTest ($incompatible.Issues.Count -ge 2) "baseline compatibility issue count"
+        $compatWarnings = [System.Collections.Generic.List[string]]::new()
+        $compatFailures = [System.Collections.Generic.List[string]]::new()
+        Add-BaselineCompatibilityMessages $compatWarnings $compatFailures $incompatible $false
+        Assert-SelfTest ($compatWarnings.Count -eq 1 -and $compatFailures.Count -eq 0) "baseline compatibility warning path"
+        $compatWarnings.Clear()
+        Add-BaselineCompatibilityMessages $compatWarnings $compatFailures $incompatible $true
+        Assert-SelfTest ($compatWarnings.Count -eq 0 -and $compatFailures.Count -ge 2) "baseline compatibility failure path"
 
         $metric = New-DeltaMetric "WarmGenerateMedianMs" 110.0 100.0
         Assert-SelfTest ([Math]::Abs(([double]$metric.DeltaPercent) - 10.0) -lt 0.001) "delta percent"
@@ -658,13 +684,7 @@ Add-WarmRangeFailure $stabilityFailures $warmMetricStats.RTF $MaxWarmRtfRangePer
 if ($null -ne $baselineSummaryObj) {
     $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed")
     $baselineCompatibility = New-BaselineCompatibility $currentWorkload $baselineSummaryObj $compatFields $RequireComparableBaseline.IsPresent
-    if ($RequireComparableBaseline.IsPresent -and -not $baselineCompatibility.IsComparable) {
-        foreach ($issue in $baselineCompatibility.Issues) {
-            $compatibilityFailures.Add($issue)
-        }
-    } elseif (-not $RequireComparableBaseline.IsPresent -and -not $baselineCompatibility.IsComparable) {
-        $benchmarkWarnings.Add("Baseline comparison is not fully comparable; inspect BaselineComparison.Compatibility.Issues.")
-    }
+    Add-BaselineCompatibilityMessages $benchmarkWarnings $compatibilityFailures $baselineCompatibility $RequireComparableBaseline.IsPresent
 
     $metricsList = [System.Collections.Generic.List[object]]::new()
     [void]$metricsList.Add((New-DeltaMetric "WarmGenerateMedianMs" $warmGenerateMedianMs (Get-ObjectNumber $baselineSummaryObj "WarmGenerateMedianMs")))
