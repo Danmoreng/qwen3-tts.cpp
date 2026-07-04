@@ -173,7 +173,7 @@ int main(int argc, char ** argv) {
     }
 
     qwen3_tts::SpeechTokenizerEncoder encoder;
-    if (!encoder.load_model(tokenizer_path)) {
+    if (!encoder.load_model(tokenizer_path, true)) {
         fprintf(stderr, "failed to load speech tokenizer encoder: %s\n", encoder.get_error().c_str());
         return 1;
     }
