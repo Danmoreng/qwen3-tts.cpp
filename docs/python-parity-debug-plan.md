@@ -123,7 +123,22 @@ Local performance smoke command:
   -RequireAssets
 ```
 
-Baseline comparison command:
+Fresh comparable baseline command:
+
+```powershell
+.\scripts\benchmark_parity_smoke.ps1 `
+  -OutputDir benchmark_output\perf_parity_smoke_baseline `
+  -Repeat 4 `
+  -RequireAssets `
+  -MaxGpuUtilizationBeforePercent 20 `
+  -WaitForGpuIdleSeconds 120 `
+  -MaxWarmGenerateRangePercent 10 `
+  -MaxWarmCodePredRangePercent 10 `
+  -MaxWarmPipelineRangePercent 10 `
+  -MaxWarmRtfRangePercent 10
+```
+
+Comparable baseline comparison command:
 
 ```powershell
 .\scripts\benchmark_parity_smoke.ps1 `
@@ -131,21 +146,28 @@ Baseline comparison command:
   -Repeat 4 `
   -RequireAssets `
   -BaselineSummary benchmark_output\perf_parity_smoke_baseline\summary.json `
+  -RequireComparableBaseline `
   -MaxGpuUtilizationBeforePercent 20 `
   -WaitForGpuIdleSeconds 120 `
   -MaxGenerateRegressionPercent 5 `
   -MaxPipelineRegressionPercent 5 `
-  -MaxRtfRegressionPercent 5
+  -MaxRtfRegressionPercent 5 `
+  -MaxWarmGenerateRangePercent 10 `
+  -MaxWarmCodePredRangePercent 10 `
+  -MaxWarmPipelineRangePercent 10 `
+  -MaxWarmRtfRangePercent 10
 ```
 
 Use `-CliExe`, `-ModelDir`, and `-SpeakerEmbedding` to override local assets.
 The script writes `summary.json` with warm medians, per-repeat details, and GPU
 snapshots. When `-BaselineSummary` is provided, `summary.json` also includes
 per-metric deltas for generate, talker, code predictor, pipeline total, and RTF;
-the script exits non-zero if any enabled threshold is exceeded. Use
-`-MaxGpuUtilizationBeforePercent` to guard against another process saturating
-the GPU before inference; add `-WaitForGpuIdleSeconds` when the benchmark should
-poll briefly for the GPU to become idle before writing a skipped summary.
+the script exits non-zero if any enabled regression or warm-spread threshold is
+exceeded. Use `-RequireComparableBaseline` when the baseline is expected to have
+the same model, prompt, sampling settings, and token limit. Use
+`-MaxGpuUtilizationBeforePercent` to guard against another process saturating the
+GPU before inference; add `-WaitForGpuIdleSeconds` when the benchmark should poll
+briefly for the GPU to become idle before writing a skipped summary.
 
 ## Phase 2: BF16 Model Path
 
@@ -645,6 +667,14 @@ Targeted BF16 variant experiment:
   warm-spread thresholds: warm generate median `859.3 ms`, code predictor
   `480.5 ms`, pipeline `884.0 ms`, RTF `0.226`; no stability failures and the
   old pre-metadata baseline warning remained visible as expected.
+- Same-session comparable benchmark workflow was validated with a fresh
+  metadata-bearing baseline summary and `-RequireComparableBaseline` on the
+  current run. The baseline smoke had warm generate median `928.7 ms`, code
+  predictor `525.5 ms`, pipeline `968.0 ms`, RTF `0.247`; the comparable
+  current smoke had warm generate median `928.0 ms`, code predictor `522.6 ms`,
+  pipeline `965.0 ms`, RTF `0.246`. Compatibility was `IsComparable=true`, no
+  benchmark warnings or stability failures were emitted, and the current run was
+  within `-0.08%` generate and `-0.31%` pipeline of the fresh baseline.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
