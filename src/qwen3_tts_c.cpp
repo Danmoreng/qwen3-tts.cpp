@@ -47,6 +47,9 @@ static qwen3_tts::tts_params convert_params(qwen3_tts_params_t params) {
     p.print_timing = params.print_timing != 0;
     p.repetition_penalty = params.repetition_penalty;
     p.language_id = params.language_id;
+    if (params.vocoder_left_context_sec > 0.0f) {
+        p.vocoder_left_context_sec = params.vocoder_left_context_sec;
+    }
     if (params.instruction) {
         p.instruction = params.instruction;
     }

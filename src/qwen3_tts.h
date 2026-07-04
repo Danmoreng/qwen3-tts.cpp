@@ -77,6 +77,12 @@ struct tts_params {
     // Optional debug dumps for generated and decoder-input speech codes.
     std::string dump_generated_codes_path;
     std::string dump_decoder_codes_path;
+
+    // ICL vocoder left context in seconds. When reference speech codes are
+    // present, the decoder is seeded with the last N reference frames and those
+    // samples are trimmed from the output. Set high enough to cover the full
+    // reference to reproduce full reference+generated decode.
+    float vocoder_left_context_sec = 2.0f;
 };
 
 // TTS generation result

@@ -33,6 +33,8 @@ typedef struct {
     int32_t language_id;
     const char* instruction;
     const char* speaker;
+    // Values <= 0 keep the native default.
+    float vocoder_left_context_sec;
 } qwen3_tts_params_t;
 
 typedef struct {

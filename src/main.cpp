@@ -264,6 +264,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --stream               Use streaming synthesis API and collect chunks for WAV output\n");
     fprintf(stderr, "  --stream-chunk-sec <s> Streaming codec chunk duration (default: 1.0)\n");
     fprintf(stderr, "  --stream-left-context-sec <s> Streaming decoder left context (default: 2.0)\n");
+    fprintf(stderr, "  --vocoder-left-context-sec <s> ICL vocoder reference context (default: 2.0)\n");
     fprintf(stderr, "  --repetition-penalty <val> Repetition penalty (default: 1.05)\n");
     fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
@@ -474,6 +475,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             stream_params.left_context_sec = std::stof(args[i]);
+        } else if (arg == "--vocoder-left-context-sec") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing vocoder left context duration\n");
+                return 1;
+            }
+            params.vocoder_left_context_sec = std::stof(args[i]);
         } else if (arg == "--repetition-penalty") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing repetition-penalty value\n");

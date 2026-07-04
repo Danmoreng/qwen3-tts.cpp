@@ -19,6 +19,8 @@ using pipeline_internal::resample_linear;
 
 namespace {
 
+constexpr int32_t qwen3_tts_codec_hop_length = 1920;
+
 bool write_codes_file(const std::string & path,
                       const std::vector<int32_t> & codes,
                       int32_t n_frames,
@@ -70,7 +72,6 @@ uint64_t hash_reference_samples(const float * samples, int32_t n_samples) {
 int32_t duration_sec_to_codec_frames(const audio_decoder_config & cfg,
                                      float duration_sec,
                                      int32_t min_frames) {
-    constexpr int32_t qwen3_tts_codec_hop_length = 1920;
     if (duration_sec <= 0.0f) {
         return std::max<int32_t>(0, min_frames);
     }
@@ -327,10 +328,16 @@ public:
         if (!codes || n_frames <= 0) {
             return;
         }
-        codes_.insert(codes_.end(), codes, codes + (size_t) n_frames * n_codebooks_);
-        total_frames_ = n_frames;
-        emit_start_frame_ = n_frames;
-        preloaded_frames_ = n_frames;
+        const int32_t seed_frames = std::min<int32_t>(n_frames, left_context_frames_);
+        if (seed_frames <= 0) {
+            return;
+        }
+        const int32_t start_frame = n_frames - seed_frames;
+        const int32_t * tail = codes + (size_t) start_frame * n_codebooks_;
+        codes_.insert(codes_.end(), tail, tail + (size_t) seed_frames * n_codebooks_);
+        total_frames_ = seed_frames;
+        emit_start_frame_ = seed_frames;
+        preloaded_frames_ = seed_frames;
     }
 
     bool push_frame(const int32_t * frame_codes) {
@@ -1352,18 +1359,27 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
     }
 
     std::vector<int32_t> decoder_codes;
-    const int32_t decoder_frames = reference_codes_ptr ? n_frames + reference_codes_ptr->n_frames : n_frames;
-    const int32_t * decoder_code_data = generated_codes.data();
+    const audio_decoder_config & decoder_cfg = self.audio_decoder_.get_config();
+    int32_t reference_context_frames = 0;
     if (reference_codes_ptr) {
-        decoder_codes.reserve(reference_codes_ptr->codes.size() + generated_codes.size());
-        decoder_codes.insert(decoder_codes.end(),
-                             reference_codes_ptr->codes.begin(),
-                             reference_codes_ptr->codes.end());
+        const int32_t max_context_frames =
+            duration_sec_to_codec_frames(decoder_cfg, params.vocoder_left_context_sec, 0);
+        reference_context_frames = std::min<int32_t>(reference_codes_ptr->n_frames, max_context_frames);
+    }
+    const int32_t decoder_frames = n_frames + reference_context_frames;
+    const int32_t * decoder_code_data = generated_codes.data();
+    if (reference_context_frames > 0) {
+        const size_t context_codes = (size_t) reference_context_frames * (size_t) n_codebooks;
+        decoder_codes.reserve(context_codes + generated_codes.size());
+        const int32_t context_start_frame = reference_codes_ptr->n_frames - reference_context_frames;
+        const auto ref_begin = reference_codes_ptr->codes.begin() +
+            (size_t) context_start_frame * (size_t) n_codebooks;
+        decoder_codes.insert(decoder_codes.end(), ref_begin, ref_begin + context_codes);
         decoder_codes.insert(decoder_codes.end(), generated_codes.begin(), generated_codes.end());
         decoder_code_data = decoder_codes.data();
     }
     if (!params.dump_decoder_codes_path.empty()) {
-        const auto & dump_codes = reference_codes_ptr ? decoder_codes : generated_codes;
+        const auto & dump_codes = reference_context_frames > 0 ? decoder_codes : generated_codes;
         if (!write_codes_file(params.dump_decoder_codes_path, dump_codes,
                               decoder_frames, n_codebooks, result.error_msg)) {
             return result;
@@ -1383,12 +1399,9 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
     result.decode_graph_rebuilt = decoder_timing.graph_rebuilt;
     result.decode_frames = decoder_timing.n_frames;
     result.decode_samples = decoder_timing.n_samples;
-    if (reference_codes_ptr) {
-        const int64_t cut = decoder_frames > 0
-            ? (int64_t) ((double) reference_codes_ptr->n_frames /
-                         (double) decoder_frames *
-                         (double) result.audio.size())
-            : 0;
+    if (reference_context_frames > 0) {
+        const int64_t cut = (int64_t) reference_context_frames *
+            (int64_t) qwen3_tts_codec_hop_length;
         if (cut < 0 || cut > (int64_t) result.audio.size()) {
             result.error_msg = "ICL reference trim is out of range";
             return result;
