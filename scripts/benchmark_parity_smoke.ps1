@@ -629,7 +629,10 @@ $warmMetricStats = [PSCustomObject]@{
     PipelineTotalMs = New-WarmMetricStats "PipelineTotalMs" ([double[]]@($warmRecords | ForEach-Object { $_.PipelineTotalMs }))
     RTF = New-WarmMetricStats "RTF" ([double[]]@($warmRecords | ForEach-Object { $_.RTF }))
 }
-$benchmarkWarnings = @(New-BenchmarkWarnings $warmRecords.Count $MinWarmRuns)
+$benchmarkWarnings = [System.Collections.Generic.List[string]]::new()
+foreach ($warning in @(New-BenchmarkWarnings $warmRecords.Count $MinWarmRuns)) {
+    $benchmarkWarnings.Add($warning)
+}
 $baselineComparison = $null
 $regressionFailures = [System.Collections.Generic.List[string]]::new()
 $stabilityFailures = [System.Collections.Generic.List[string]]::new()
@@ -659,6 +662,8 @@ if ($null -ne $baselineSummaryObj) {
         foreach ($issue in $baselineCompatibility.Issues) {
             $compatibilityFailures.Add($issue)
         }
+    } elseif (-not $RequireComparableBaseline.IsPresent -and -not $baselineCompatibility.IsComparable) {
+        $benchmarkWarnings.Add("Baseline comparison is not fully comparable; inspect BaselineComparison.Compatibility.Issues.")
     }
 
     $metricsList = [System.Collections.Generic.List[object]]::new()
