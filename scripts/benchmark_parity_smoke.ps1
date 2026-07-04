@@ -15,6 +15,7 @@ param(
     [double]$MaxGenerateRegressionPercent = -1.0,
     [double]$MaxPipelineRegressionPercent = -1.0,
     [double]$MaxRtfRegressionPercent = -1.0,
+    [double]$MaxGpuUtilizationBeforePercent = -1.0,
     [switch]$RequireAssets
 )
 
@@ -289,6 +290,27 @@ if ($null -ne $baselineSummaryObj) {
 $debugSnapshot = Save-DebugDumpEnv
 Disable-DebugDumpEnv
 $gpuBefore = Get-GpuSnapshot
+$gpuUtilBefore = Get-ObjectNumber $gpuBefore "UtilizationPercent"
+if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
+    $null -ne $gpuUtilBefore -and
+    $gpuUtilBefore -gt $MaxGpuUtilizationBeforePercent) {
+    $summary = [PSCustomObject]@{
+        CliExe = $cliExeResolved
+        ModelDir = $modelDirResolved
+        SpeakerEmbedding = $speakerEmbeddingResolved
+        Text = $Text
+        MaxTokens = $MaxTokens
+        Repeat = $Repeat
+        Skipped = $true
+        SkipReason = "GPU utilization before benchmark was $gpuUtilBefore%, above threshold $MaxGpuUtilizationBeforePercent%."
+        GpuBefore = $gpuBefore
+    }
+    $summary | ConvertTo-Json -Depth 6 | Tee-Object -FilePath $summaryPath
+    Restore-DebugDumpEnv $debugSnapshot
+    Write-Host ""
+    Write-Host "BENCHMARK SKIPPED: $($summary.SkipReason)" -ForegroundColor Yellow
+    exit 2
+}
 
 try {
     $cliArgs = @(

@@ -129,6 +129,7 @@ Baseline comparison command:
   -Repeat 4 `
   -RequireAssets `
   -BaselineSummary benchmark_output\perf_parity_smoke_baseline\summary.json `
+  -MaxGpuUtilizationBeforePercent 20 `
   -MaxGenerateRegressionPercent 5 `
   -MaxPipelineRegressionPercent 5 `
   -MaxRtfRegressionPercent 5
@@ -138,7 +139,9 @@ Use `-CliExe`, `-ModelDir`, and `-SpeakerEmbedding` to override local assets.
 The script writes `summary.json` with warm medians, per-repeat details, and GPU
 snapshots. When `-BaselineSummary` is provided, `summary.json` also includes
 per-metric deltas for generate, talker, code predictor, pipeline total, and RTF;
-the script exits non-zero if any enabled threshold is exceeded.
+the script exits non-zero if any enabled threshold is exceeded. Use
+`-MaxGpuUtilizationBeforePercent` to fail fast before inference when another
+process is already saturating the GPU.
 
 ## Phase 2: BF16 Model Path
 
@@ -334,14 +337,12 @@ tradeoff is acceptable. The current evidence points to a late near-tie caused by
 small BF16/GGUF vs PyTorch F32 numerical differences, not a frame-0 structural
 implementation bug.
 
-Next practical step: build a targeted BF16 GGUF variant that keeps only
-`code_pred.blk.4.ffn_down.weight` in F32 using `--keep-f32-regex`, then rerun
-the speaker-only and ICL parity fixtures plus `benchmark_parity_smoke.ps1`.
-This tests the most suspicious layer-4 MLP projection without broad runtime F32
-casting. If it improves the near-tie parity without a meaningful code-predictor
-slowdown, consider documenting it as a developer/debug model variant; otherwise
-keep the current BF16 model and classify the remaining diffs as precision
-near-ties.
+Next practical step: do not pursue the single `code_pred.blk.4.ffn_down.weight`
+F32 GGUF variant further. It produced identical parity summaries because the
+source checkpoint tensor is already BF16, so storing that one tensor as F32 does
+not recover lost precision. The remaining useful options are a broader
+source-precision experiment if an F32 checkpoint is available, or accepting the
+current late-frame near-ties as BF16/PyTorch-vs-GGML numerical drift.
 
 Latest speaker performance smoke after adding the fixture runner was
 current-only, no-debug, 8 process runs with the same 64-token speaker prompt.
@@ -418,6 +419,26 @@ saved wrapper baseline, generate was `+0.90%`, code predictor was `+2.26%`,
 pipeline total was `-0.74%`, and RTF was `-0.58%`; no regression threshold
 failed. Treat this as normal desktop benchmark noise; no-debug performance
 remains effectively unchanged by the debug-only dumps.
+
+Targeted BF16 variant experiment:
+
+- Built `benchmark_output\bf16_codepred_l4_ffn_down_f32` with
+  `--keep-f32-regex '^code_pred\.blk\.4\.ffn_down\.weight$'`.
+- Converter confirmed `code_pred.blk.4.ffn_down.weight` was stored as F32.
+- Speaker-only parity was unchanged: `93.75%` token match, first diff remained
+  frame `9`, codebook `6`, Python token `517` vs C++ token `9`, with the same
+  logit cosine `0.999999775` and max absolute difference `0.044123`.
+- ICL parity was unchanged: `56.25%` token match, first diff remained frame
+  `0`, codebook `8`, Python token `499` vs C++ token `1481`, with the same
+  logit cosine `0.999999849` and max absolute difference `0.036032`.
+- Timing was attempted, but the GPU was already saturated by another process
+  (`Trackmania.exe`, `98%` utilization in `nvidia-smi`). Both the targeted
+  variant and the original BF16 baseline slowed to about `7.3 s` warm median
+  total generate, so the timing sample is contaminated and not evidence of a
+  model-specific regression.
+- `scripts/benchmark_parity_smoke.ps1 -MaxGpuUtilizationBeforePercent` now
+  catches this case before inference; a test run with threshold `50` skipped
+  immediately because pre-run GPU utilization was `98%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
