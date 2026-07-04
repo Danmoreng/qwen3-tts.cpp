@@ -321,6 +321,15 @@ Current result:
   `56.25%` with first diff frame `0`, codebook `8`, logit max absolute drift
   `0.036032`. Do not keep that hot-path precision change without a separate
   reason.
+- A targeted F32 talker KV-cache experiment fixed the current speaker-only
+  fixture completely: `160/160` tokens matched Python F32 (`100.0%`) and the
+  old frame `9`, codebook `6` near-tie disappeared. The same experiment
+  regressed the ICL fixture from `56.25%` to `50.0%` and changed the first diff
+  to frame `0`, codebook `8`, Python token `499` vs C++ token `593`
+  (`near_tie_token_swap`, logit max absolute drift `0.024973`). This is useful
+  evidence that F16 talker-cache storage contributes to speaker-only
+  generated-frame drift, but the F32 cache should not become the default while
+  it worsens ICL.
 - First-diff step trajectory for codebook `6`:
   - Frames `0..8` have matching top tokens at the same codebook/step.
   - The smallest earlier Python top-1 margin is frame `6` at `0.108820`; the frame `9` Python margin collapses to `0.005629`.
@@ -370,6 +379,10 @@ Current result:
   - The talker flash-attention `GGML_PREC_F32` experiment also left the ICL
     first diff and logit drift unchanged, so this is not the current ICL
     parity lever.
+  - The F32 talker KV-cache experiment changed the ICL winner from C++ token
+    `1481` to token `593` at the same frame/codebook. Python token `499` still
+    ranked second in C++ with only `0.000538` logit margin, but total token
+    matches dropped to `8/16`; do not use this as a global parity fix.
 
 ## Phase 6: Regression Gates
 
@@ -672,6 +685,21 @@ Targeted BF16 variant experiment:
   `897.0 ms`, and RTF `0.229`. Compared with the baseline summary, generate
   was `-7.17%`, pipeline `-7.33%`, and RTF `-7.29%`; no benchmark warnings,
   stability failures, or configured regression thresholds failed.
+- A targeted F32 talker KV-cache experiment made the speaker-only fixture match
+  exactly (`100.0%`) but failed the combined parity gate because ICL dropped to
+  `50.0%` with a different near-tie winner. The hot-path code change was
+  reverted. Timing the F32-cache experiment itself with the comparable baseline
+  guard and 4 repeats produced warm generate median `855.1 ms`, talker
+  `325.6 ms`, code predictor `482.2 ms`, pipeline `886.0 ms`, and RTF `0.226`.
+  Compared with `benchmark_output\perf_parity_smoke_comparable_baseline`,
+  generate was `-7.93%`, pipeline `-8.47%`, and RTF `-8.50%`; no benchmark
+  warnings, stability failures, or configured regression thresholds failed.
+  After reverting to the default F16 cache and rebuilding, the parity gate
+  passed again (`PASS: 10`, `FAIL: 0`, `SKIP: 4`). Final-state no-debug timing
+  with the same guard measured warm generate median `883.0 ms`, talker
+  `331.9 ms`, code predictor `498.7 ms`, pipeline `909.0 ms`, and RTF `0.232`
+  (`-4.92%` generate, `-6.10%` pipeline, `-6.07%` RTF versus baseline), with no
+  benchmark warnings, stability failures, or configured regression failures.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1
