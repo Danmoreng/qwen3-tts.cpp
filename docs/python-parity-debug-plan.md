@@ -1,6 +1,6 @@
 # Python Parity Debug Plan
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 ## Purpose
 
@@ -15,11 +15,12 @@ The goal is narrower and more useful:
 - Find and fix the first deterministic divergence in the code predictor.
 - Use top-token parity for local steps as the main correctness signal.
 
-The current highest-value target is the first divergent step:
+The current highest-value target is the first divergent step after the corrected
+speaker-only trace setup:
 
-- Frame: `0`
-- Codebook: `1`
-- Area: code predictor / subtalker path
+- Frame: `9`
+- Codebook: `6` (code-predictor step `5`)
+- Area: late-frame code-predictor numerical drift / near-tie
 
 ## Current Findings
 
@@ -27,10 +28,14 @@ The current highest-value target is the first divergent step:
 |---|---|---|
 | Python prompt extraction | Faster Qwen3 TTS matches Python prompt codes exactly when extra silence appending is disabled. | Verified |
 | audio.cpp prompt extraction | Reference-code values diverge from Python despite matching frame count. | Verified divergent |
-| BF16 GGUF conversion | A mostly-BF16 GGUF can be built directly from the BF16 HuggingFace checkpoint. | Implemented locally |
-| Speaker-only BF16 generation parity | C++ diverges from Python at frame `0`, codebook `1`. | Failing |
-| ICL BF16 generation parity | C++ diverges from Python at frame `0`, codebook `1`. | Failing |
+| BF16 GGUF conversion | A mostly-BF16 GGUF can be built directly from the BF16 HuggingFace checkpoint. `scripts/convert_tts_to_gguf.py` also supports repeatable `--keep-f32-regex` overrides for targeted parity model variants without runtime casts. | Implemented locally |
+| Speaker-only BF16 generation parity | With Python speaker embedding, corrected non-streaming/base prompt layout, `do_sample=True`, and `top_k=1`, frames `0..8` match exactly. First divergence is frame `9`, codebook `6`: Python token `517`, C++ token `9`. | Late drift |
+| Python CPU BF16 trace | CPU BF16 PyTorch is not a reliable parity proxy for the current CUDA/GGUF path: it matches only `94/160` tokens against C++ over the 10-frame fixture and first diverges at frame `0`, codebook `14`. | Diagnostic only |
+| ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
 | Greedy path | Greedy currently produces invalid/repetitive output and should not be used as the main parity gate until fixed. | Known failing |
+| No-debug performance guard | Alternating clean-baseline/current CUDA timing run showed no regression after debug-only trace hooks: current median `Total generate` was `872.1 ms` vs baseline `882.2 ms` for the 64-token speaker-only benchmark. | Verified |
+| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, code-predictor layer/sub-layer comparisons, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
+| Benchmark tooling | `scripts/benchmark_parity_smoke.ps1` runs the standard speaker-embedding parity timing smoke, captures logs, parses warm medians, records before/after `nvidia-smi` snapshots when available, and can compare against a saved baseline summary with regression thresholds. | Added |
 
 ## Guiding Rules
 
@@ -59,6 +64,82 @@ Success criteria:
 - Speaker-only and ICL reports can be regenerated without manual steps.
 - The fixture uses the same text tokens, language, speaker embedding, and reference codes for Python and C++.
 
+Speaker-only regeneration command:
+
+```powershell
+.\scripts\run_speaker_parity_fixture.ps1 `
+  -PythonPath C:\Development\Qwen3TTSDev\Qwen3-TTS `
+  -OutputDir benchmark_output\python_parity\speaker_fixture_current `
+  -RequireAssets
+```
+
+Use `-PythonModel`, `-CppModelDir`, `-SpeakerEmbedding`, and `-CliExe` to
+override local paths when the default assets are not present. Without
+`-RequireAssets`, the script skips cleanly when large local model files are
+missing.
+
+ICL regeneration command:
+
+```powershell
+.\scripts\run_speaker_parity_fixture.ps1 `
+  -PythonPath C:\Development\Qwen3TTSDev\Qwen3-TTS `
+  -OutputDir benchmark_output\python_parity\icl_fixture_current `
+  -Text "This is a short parity check for ICL voice cloning." `
+  -MaxTokens 4 `
+  -MaxFrames 1 `
+  -ReferenceTextFile benchmark_output\parity_serveurperso_seed\ref.txt `
+  -ReferenceCodes benchmark_output\python_parity\python_reference_codes.json `
+  -RequireAssets
+```
+
+Local expectation gate for both fixtures:
+
+```powershell
+.\scripts\run_all_tests.ps1 `
+  -ParityFixturesOnly `
+  -BuildDir build-timing-current `
+  -OutputDir test_output\python_parity_gate
+```
+
+`-ParityFixturesOnly` implies `-RequireParityFixtures` and avoids failing on
+unrelated default model filenames from the broader regression suite. Expected
+match percentages and first-diff locations are checked from
+`tests/fixtures/python_parity_expectations.json`; the large trace/model assets
+remain external.
+
+Latest gate result:
+
+- `.\scripts\run_all_tests.ps1 -ParityFixturesOnly -BuildDir build-timing-current -OutputDir test_output\python_parity_gate`
+- Passed speaker-only and ICL fixtures (`PASS: 2`, `FAIL: 0`, `SKIP: 4`)
+
+Local performance smoke command:
+
+```powershell
+.\scripts\benchmark_parity_smoke.ps1 `
+  -OutputDir benchmark_output\perf_parity_smoke_current `
+  -Repeat 4 `
+  -RequireAssets
+```
+
+Baseline comparison command:
+
+```powershell
+.\scripts\benchmark_parity_smoke.ps1 `
+  -OutputDir benchmark_output\perf_parity_smoke_current `
+  -Repeat 4 `
+  -RequireAssets `
+  -BaselineSummary benchmark_output\perf_parity_smoke_baseline\summary.json `
+  -MaxGenerateRegressionPercent 5 `
+  -MaxPipelineRegressionPercent 5 `
+  -MaxRtfRegressionPercent 5
+```
+
+Use `-CliExe`, `-ModelDir`, and `-SpeakerEmbedding` to override local assets.
+The script writes `summary.json` with warm medians, per-repeat details, and GPU
+snapshots. When `-BaselineSummary` is provided, `summary.json` also includes
+per-metric deltas for generate, talker, code predictor, pipeline total, and RTF;
+the script exits non-zero if any enabled threshold is exceeded.
+
 ## Phase 2: BF16 Model Path
 
 Keep BF16 conversion available because Python CUDA commonly runs the model in BF16.
@@ -80,7 +161,7 @@ Success criteria:
 
 Instrument or reuse debug trace dumps for the first divergent code-predictor step.
 
-For frame `0`, codebook `1`, dump and compare:
+For the original frame `0`, codebook `1` failure, dump and compare:
 
 - Talker hidden state passed into the code predictor.
 - Codebook-0 token.
@@ -97,6 +178,16 @@ Success criteria:
 - If hidden state and CB0 embedding match but logits diverge, the bug is inside the code predictor graph/runtime.
 - If CB0 embedding differs, investigate embedding lookup/layout.
 - If hidden state differs, move the trace boundary backward into talker prefill/step.
+
+Current result:
+
+- Frame `0`, all codebooks now match in the corrected speaker-only fixture.
+- The corrected trace shows matching input tokens, speaker embedding, prefill embedding, CB0 tokens, code-predictor prefill inputs, positions, masks, and frame `0` code-predictor tokens.
+- This phase is considered complete for the speaker-only path; keep it available for ICL verification.
+- For the ICL path, C++ and Python now agree on the non-streaming prefill boundary:
+  - `prefill_len=141`, `trailing_len=1`
+  - `prefill_embd` cosine `1.000000`, max absolute difference `0.001052`
+  - frame `0` CB0 token matches
 
 ## Phase 4: Code Predictor Audit
 
@@ -135,6 +226,54 @@ Success criteria:
 - Later divergences are documented with exact first divergence locations.
 - If divergence appears only after many autoregressive steps, classify it separately from first-step implementation bugs.
 
+Current result:
+
+- Speaker-only frames `0..8` match all 16 codebooks.
+- Across the 10-frame speaker-only fixture, Python F32 CPU vs C++ GGUF BF16 matches `150/160` tokens (`93.75%`).
+- Frame `9` matches through code-predictor step `4`; step `5` flips between close logits:
+  - Python: token `517` at `22.143404`
+  - C++: token `9` at `22.144558`, token `517` at `22.126083`
+  - Step cosine: `0.99999982`, max absolute logit difference: `0.044123`
+  - Python top-1 margin: `0.005629`; C++ top-1 margin: `0.018475`
+  - Python winner token `517` ranks second in C++; C++ winner token `9` ranks second in Python
+  - At this boundary, CB0 embedding, position IDs, and mask match exactly; talker hidden/input-hidden cosine is `0.99999581`, and code-predictor projected-input cosine is `0.99999800`
+- Layer-level debug traces for the same frame `9`, step `5` show the AR step input is identical and the remaining drift is inside the code-predictor decoder:
+  - step projected input: cosine `1.000000000`, max absolute difference `0.000000`
+  - layer `0`: cosine `0.999999202`, max absolute difference `0.000579`
+  - layer `1`: cosine `0.999999028`, max absolute difference `0.001333`
+  - layer `2`: cosine `0.999998624`, max absolute difference `0.001819`
+  - layer `3`: cosine `0.999998167`, max absolute difference `0.001705`
+  - layer `4`: cosine `0.999997618`, max absolute difference `0.017359`
+  - final normalized hidden: cosine `0.999997543`, max absolute difference `0.037262`
+- Sub-layer traces refine this further for layer `4`:
+  - attention norm input to self-attention: max absolute difference `0.010942`
+  - self-attention output projection: max absolute difference `0.002479`
+  - post-attention FFN norm: max absolute difference `0.016222`
+  - MLP/FFN output: max absolute difference `0.019901`
+  - layer residual output: max absolute difference `0.017359`
+  - This points at accumulated residual/MLP numerical drift rather than a large attention-output mismatch.
+- First-diff step trajectory for codebook `6`:
+  - Frames `0..8` have matching top tokens at the same codebook/step.
+  - The smallest earlier Python top-1 margin is frame `6` at `0.108820`; the frame `9` Python margin collapses to `0.005629`.
+  - The largest earlier logit max-absolute difference at this step is frame `8` at `0.046885`, comparable to frame `9` at `0.044123`; the flip happens because the local top margin becomes tiny, not because frame `9` has uniquely large logit error.
+  - The aggregate trajectory summary reports the frame `9` Python top-1 margin is `0.0517x` the smallest prior Python margin, while the frame `9` max-absolute logit difference is `0.9411x` the prior maximum.
+- After the step `5` flip, subsequent codebooks in frame `9` diverge autoregressively.
+- Python CPU BF16 is much less aligned than Python CPU F32 for this local setup, so use CPU F32 traces for structural debugging unless a CUDA BF16 Python trace is available.
+- ICL frame `0` now matches through codebook `7`; codebook `8` flips between a tight top-3:
+  - Python: token `499` at `21.591181`
+  - C++: token `1481` at `21.595354`, token `499` at `21.593187`
+  - Step cosine: `0.99999985`, max absolute logit difference: `0.036032`
+  - Layer-level debug traces for the same step `7` show identical projected input, then the largest hidden drift appears after the final decoder layer and final norm:
+    - step projected input: cosine `1.000000000`, max absolute difference `0.000000`
+    - layer `4`: cosine `0.999996703`, max absolute difference `0.025833`
+    - final normalized hidden: cosine `0.999997219`, max absolute difference `0.036705`
+  - Sub-layer traces for ICL layer `4` mirror the speaker-only pattern:
+    - attention norm input to self-attention: max absolute difference `0.018688`
+    - self-attention output projection: max absolute difference `0.002907`
+    - post-attention FFN norm: max absolute difference `0.022301`
+    - MLP/FFN output: max absolute difference `0.025537`
+    - layer residual output: max absolute difference `0.025833`
+
 ## Phase 6: Regression Gates
 
 Add lightweight regression checks once a parity bug is fixed.
@@ -144,6 +283,20 @@ Candidate gates:
 - A code-predictor first-step top-token test using checked-in small metadata and external/generated binary fixtures.
 - A script-level parity check that is skipped unless required model artifacts are present.
 - A CI-safe smoke test that validates tensor shapes and known first-step token IDs.
+- `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata for local full-model parity fixtures.
+- `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
+- `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
+- `scripts/run_speaker_parity_fixture.ps1` is the current speaker-only and ICL fixture regeneration command.
+- `scripts/run_all_tests.ps1 -ParityFixturesOnly` runs both parity fixtures as a required local gate when the large Python/C++ model assets are present.
+- `scripts/convert_tts_to_gguf.py --keep-f32-regex` can produce targeted model variants for parity experiments without broad runtime casting. Example candidate:
+
+```powershell
+python .\scripts\convert_tts_to_gguf.py `
+  --input C:\Development\Qwen3TTSDev\audio.cpp\models\Qwen3-TTS-12Hz-1.7B-Base `
+  --output benchmark_output\bf16_codepred_l4_ffn_down_f32\qwen-talker.gguf `
+  --type bf16 `
+  --keep-f32-regex '^code_pred\.blk\.4\.ffn_down\.weight$'
+```
 
 Success criteria:
 
@@ -167,14 +320,114 @@ Success criteria:
 
 ## Recommended Next Step
 
-Start with Phase 3.
+Continue Phase 5 and classify the frame `9`, codebook `6` near-tie.
 
-Dump Python and C++ tensors for frame `0`, codebook `1`, using:
+Use the raw-logit trace for frame `9`, codebook `6`, using:
 
 - Python speaker embedding
-- Python reference codes for ICL
 - `top_k=1`
 - `temperature=1.0`
 - BF16 model path where available
 
-Then identify whether the first material difference is before or inside the code predictor graph.
+Do not add broad F32 casts as a parity fix unless a targeted benchmark shows the
+tradeoff is acceptable. The current evidence points to a late near-tie caused by
+small BF16/GGUF vs PyTorch F32 numerical differences, not a frame-0 structural
+implementation bug.
+
+Next practical step: build a targeted BF16 GGUF variant that keeps only
+`code_pred.blk.4.ffn_down.weight` in F32 using `--keep-f32-regex`, then rerun
+the speaker-only and ICL parity fixtures plus `benchmark_parity_smoke.ps1`.
+This tests the most suspicious layer-4 MLP projection without broad runtime F32
+casting. If it improves the near-tie parity without a meaningful code-predictor
+slowdown, consider documenting it as a developer/debug model variant; otherwise
+keep the current BF16 model and classify the remaining diffs as precision
+near-ties.
+
+Latest speaker performance smoke after adding the fixture runner was
+current-only, no-debug, 8 process runs with the same 64-token speaker prompt.
+Warm median (`runs 2..7`) was `930.7 ms` total generate, `311.55 ms` talker,
+`466.65 ms` code predictor, RTF `0.257`. That was noisier and slower than the
+previous alternating clean-baseline/current result.
+
+Latest speaker performance smoke after adding the parity-only gate was
+current-only, no-debug, 8 in-process repeats with the same speaker prompt and
+BF16 parity model. Warm median (`runs 2..8`) was `920.3 ms` total generate,
+`346.1 ms` talker, `509.5 ms` code predictor, `945.0 ms` pipeline total, and
+RTF `0.241`. This is a current-only smoke; the stronger regression signal is
+still the same-session clean-baseline/current benchmark below.
+
+Latest speaker performance smoke after moving parity expectations into
+`tests/fixtures/python_parity_expectations.json` was current-only, no-debug, 4
+in-process repeats. Warm median (`runs 2..4`) was `915.4 ms` total generate,
+`345.7 ms` talker, `511.1 ms` code predictor, `943.0 ms` pipeline total, and
+RTF `0.241`. This was a script/test metadata change only.
+
+Latest speaker performance smoke after adding near-tie diagnostics to
+`scripts/parity_trace_summary.py` was current-only, no-debug, 4 in-process
+repeats. Warm median (`runs 2..4`) was `931.2 ms` total generate, `353.2 ms`
+talker, `524.3 ms` code predictor, `957.0 ms` pipeline total, and RTF `0.244`.
+This was a Python reporting change only; no inference hot path changed.
+
+Latest speaker performance smoke after adding the first-diff step trajectory to
+`scripts/parity_trace_summary.py` was current-only, no-debug, 4 in-process
+repeats. Warm median (`runs 2..4`) was `917.4 ms` total generate, `349.6 ms`
+talker, `513.6 ms` code predictor, `943.0 ms` pipeline total, and RTF `0.241`.
+This was also a Python reporting change only.
+
+Latest speaker performance smoke after adding aggregate trajectory metrics was
+current-only, no-debug, 4 in-process repeats, and was anomalously slower despite
+this being another Python reporting-only change. First run warm median
+(`runs 2..4`) was `1091.3 ms` total generate, `395.9 ms` talker, `636.1 ms`
+code predictor, `1121.0 ms` pipeline total, and RTF `0.286`. A rerun remained
+slow: `1062.8 ms` total generate, `389.7 ms` talker, `616.9 ms` code predictor,
+`1100.0 ms` pipeline total, and RTF `0.281`. Treat this as an environment
+warning, not a regression caused by the reporting patch; no C++ inference path
+changed in this step.
+
+Latest speaker performance smoke with `scripts/benchmark_parity_smoke.ps1`
+verified the reusable wrapper and landed closer to the previous band: 3
+in-process repeats, warm median (`runs 2..3`) `953.6 ms` total generate,
+`357.3 ms` talker, `536.9 ms` code predictor, `1015.0 ms` pipeline total, and
+RTF `0.2585`. This was a benchmark-script addition only.
+
+Latest speaker performance smoke after adding baseline-summary comparison to
+`scripts/benchmark_parity_smoke.ps1` used the prior wrapper summary as the
+baseline with loose `50%` thresholds to verify the comparison path. The 3-repeat
+current run had warm median (`runs 2..3`) `948.85 ms` total generate,
+`349.95 ms` talker, `524.8 ms` code predictor, `995.5 ms` pipeline total, and
+RTF `0.2535`. Compared with the saved wrapper baseline, generate was `-0.50%`,
+pipeline total was `-1.92%`, and RTF was `-1.93%`; no regression threshold
+failed.
+
+Latest speaker performance smoke after adding debug-only code-predictor
+per-layer trace dumps was no-debug and compared against the same saved wrapper
+baseline with loose `50%` thresholds. The 3-repeat current run had warm median
+(`runs 2..3`) `834.3 ms` total generate, `312.5 ms` talker, `467.05 ms` code
+predictor, `864.0 ms` pipeline total, and RTF `0.2205`. Compared with the saved
+wrapper baseline, generate was `-12.51%`, pipeline total was `-14.88%`, and RTF
+was `-14.70%`; no regression threshold failed. This supports that the new
+diagnostics are gated behind debug tracing and do not affect normal no-debug
+performance.
+
+Latest speaker performance smoke after adding debug-only code-predictor
+sub-layer trace dumps was also no-debug and compared against the same saved
+wrapper baseline with loose `50%` thresholds. The 3-repeat current run had warm
+median (`runs 2..3`) `962.2 ms` total generate, `359.85 ms` talker, `549.05 ms`
+code predictor, `1007.5 ms` pipeline total, and RTF `0.257`. Compared with the
+saved wrapper baseline, generate was `+0.90%`, code predictor was `+2.26%`,
+pipeline total was `-0.74%`, and RTF was `-0.58%`; no regression threshold
+failed. Treat this as normal desktop benchmark noise; no-debug performance
+remains effectively unchanged by the debug-only dumps.
+
+Latest ICL performance smoke after the non-streaming prefill fix was
+current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
+Median was `1294.1 ms` total generate, `50.0 ms` prefill, `415.9 ms` talker,
+`641.1 ms` code predictor, RTF `0.268`.
+
+Same-session clean-baseline/current ICL benchmark for the non-streaming prefill
+fix used 5 alternating runs per binary with inline stripped reference text. The
+corrected current path was `1276.0 ms` median total generate vs `1266.6 ms`
+baseline (`+0.74%`). Prefill was `50.5 ms` vs `47.1 ms` (`+3.4 ms`,
+`+7.22%`), talker was `409.9 ms` vs `415.1 ms` (`-1.25%`), code predictor was
+`631.1 ms` vs `621.8 ms` (`+1.50%`), and RTF was `0.265` vs `0.263`
+(`+0.76%`).
