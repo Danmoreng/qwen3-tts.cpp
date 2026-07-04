@@ -422,27 +422,22 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
             append_row(ref_codec, summed.data());
         }
 
+        const float * codec_pad_embed = codec_tail_embed.data();
         const int32_t text_rows = (int32_t) (text_embed.size() / hidden_size);
-        const int32_t ref_codec_rows = (int32_t) (ref_codec.size() / hidden_size);
-        const int32_t overlap_rows = std::min(text_rows, ref_codec_rows);
-        for (int32_t row = 0; row < overlap_rows; ++row) {
+        for (int32_t row = 0; row < text_rows; ++row) {
             append_added_row(prompt,
                              text_embed.data() + (size_t) row * hidden_size,
-                             ref_codec.data() + (size_t) row * hidden_size);
+                             codec_pad_embed);
         }
-        for (int32_t row = overlap_rows; row < ref_codec_rows; ++row) {
+
+        const int32_t ref_codec_rows = (int32_t) (ref_codec.size() / hidden_size);
+        for (int32_t row = 0; row < ref_codec_rows; ++row) {
             append_added_row(prompt,
                              tts_pad_embed.data(),
                              ref_codec.data() + (size_t) row * hidden_size);
         }
 
-        if (text_rows > ref_codec_rows) {
-            const size_t offset = (size_t) ref_codec_rows * hidden_size;
-            trailing_text_hidden.assign(text_embed.begin() + (std::ptrdiff_t) offset,
-                                        text_embed.end());
-        } else {
-            trailing_text_hidden = tts_pad_embed;
-        }
+        trailing_text_hidden = tts_pad_embed;
 
         prefill_embd = std::move(prompt);
         return true;
