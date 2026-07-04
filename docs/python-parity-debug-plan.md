@@ -29,7 +29,7 @@ speaker-only trace setup:
 | Python prompt extraction | Faster Qwen3 TTS matches Python prompt codes exactly when extra silence appending is disabled. | Verified |
 | audio.cpp prompt extraction | Reference-code values diverge from Python despite matching frame count. | Verified divergent |
 | BF16 GGUF conversion | A mostly-BF16 GGUF can be built directly from the BF16 HuggingFace checkpoint. `scripts/convert_tts_to_gguf.py` also supports repeatable `--keep-f32-regex` overrides for targeted parity model variants without runtime casts. | Implemented locally |
-| Source checkpoint precision | The local `Qwen3-TTS-12Hz-1.7B-Base/model.safetensors` checkpoint stores all `480/480` tensors as BF16, including code-predictor layer-4 MLP weights. Targeted F32 GGUF storage cannot recover precision that is not present in the source checkpoint. | Verified |
+| Source checkpoint precision | The local `Qwen3-TTS-12Hz-1.7B-Base/model.safetensors` checkpoint stores all `480/480` tensors as BF16, including code-predictor layer-4 MLP weights. `scripts/inspect_safetensors_dtypes.py` makes this check repeatable. Targeted F32 GGUF storage cannot recover precision that is not present in the source checkpoint. | Verified |
 | Speaker-only BF16 generation parity | With Python speaker embedding, corrected non-streaming/base prompt layout, `do_sample=True`, and `top_k=1`, frames `0..8` match exactly. First divergence is frame `9`, codebook `6`: Python token `517`, C++ token `9`. | Late drift |
 | Python CPU BF16 trace | CPU BF16 PyTorch is not a reliable parity proxy for the current CUDA/GGUF path: it matches only `94/160` tokens against C++ over the 10-frame fixture and first diverges at frame `0`, codebook `14`. | Diagnostic only |
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
@@ -154,12 +154,27 @@ Required implementation:
 - `scripts/convert_tokenizer_to_gguf.py` supports `--type bf16`.
 - BF16 tensors are written as `GGML_TYPE_BF16`, not NumPy `float16`.
 - 1D tensors and precision-sensitive tensors remain F32 where current policy requires it.
+- Use `scripts/inspect_safetensors_dtypes.py` to verify source checkpoint dtype
+  before trying targeted F32 GGUF storage variants.
 
 Success criteria:
 
 - GGUF inspection shows a mostly-BF16 model with expected F32 exceptions.
 - The C++ loader can load and run the BF16 model.
 - The BF16 path reproduces the same first-divergence location as the current parity fixture.
+
+Source dtype inspection command:
+
+```powershell
+python .\scripts\inspect_safetensors_dtypes.py `
+  C:\Development\Qwen3TTSDev\audio.cpp\models\Qwen3-TTS-12Hz-1.7B-Base `
+  --name-regex 'talker\.code_predictor\.model\.layers\.4\.mlp\.(down|gate|up)_proj\.weight$' `
+  --expect-all-dtype BF16 `
+  --expect-matched-dtype BF16
+```
+
+Current local result: `480/480` tensors are BF16; the three matched layer-4 MLP
+weights are BF16.
 
 ## Phase 3: First Divergence Trace
 
@@ -290,6 +305,9 @@ Candidate gates:
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
+- `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
+  verifier for deciding whether targeted F32 GGUF storage experiments can be
+  meaningful.
 - `scripts/run_speaker_parity_fixture.ps1` is the current speaker-only and ICL fixture regeneration command.
 - `scripts/run_all_tests.ps1 -ParityFixturesOnly` runs both parity fixtures as a required local gate when the large Python/C++ model assets are present.
 - `scripts/convert_tts_to_gguf.py --keep-f32-regex` can produce targeted model variants for parity experiments without broad runtime casting. Example candidate:
