@@ -14,7 +14,20 @@ struct qwen3_tts_context {
     qwen3_tts::Qwen3TTS tts;
     qwen3_tts_progress_callback progress_callback = nullptr;
     void* user_data = nullptr;
+    std::string last_error;
 };
+
+static void clear_last_error(qwen3_tts_context_t* ctx) {
+    if (ctx) {
+        ctx->last_error.clear();
+    }
+}
+
+static void set_last_error(qwen3_tts_context_t* ctx, const std::string & message) {
+    if (ctx) {
+        ctx->last_error = message;
+    }
+}
 
 static int32_t to_model_kind(const std::string & model_type) {
     if (model_type == "base") return QWEN3_TTS_MODEL_KIND_BASE;
@@ -365,14 +378,23 @@ int32_t qwen3_tts_extract_speaker_embedding(
     const char* reference_audio,
     const char* output_path
 ) {
-    if (!ctx || !reference_audio || !output_path) return 0;
+    if (!ctx || !reference_audio || !output_path) {
+        set_last_error(ctx, "Invalid context, reference audio, or output path");
+        return 0;
+    }
+    clear_last_error(ctx);
 
     std::vector<float> speaker_embedding;
     if (!ctx->tts.extract_speaker_embedding(reference_audio, speaker_embedding, nullptr)) {
+        set_last_error(ctx, ctx->tts.get_error());
         return 0;
     }
 
-    return qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding) ? 1 : 0;
+    if (!qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding)) {
+        set_last_error(ctx, std::string("Failed to save speaker embedding file: ") + output_path);
+        return 0;
+    }
+    return 1;
 }
 
 int32_t qwen3_tts_extract_icl_prompt(
@@ -381,14 +403,23 @@ int32_t qwen3_tts_extract_icl_prompt(
     const char* reference_text,
     const char* output_path
 ) {
-    if (!ctx || !reference_audio || !reference_text || !output_path) return 0;
+    if (!ctx || !reference_audio || !reference_text || !output_path) {
+        set_last_error(ctx, "Invalid context, reference audio, reference text, or output path");
+        return 0;
+    }
+    clear_last_error(ctx);
 
     qwen3_tts::icl_prompt prompt;
     if (!ctx->tts.extract_icl_prompt(reference_audio, reference_text, prompt, nullptr)) {
+        set_last_error(ctx, ctx->tts.get_error());
         return 0;
     }
 
-    return qwen3_tts::save_icl_prompt_file(output_path, prompt) ? 1 : 0;
+    if (!qwen3_tts::save_icl_prompt_file(output_path, prompt)) {
+        set_last_error(ctx, std::string("Failed to save ICL prompt file: ") + output_path);
+        return 0;
+    }
+    return 1;
 }
 
 qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(qwen3_tts_context_t* ctx) {
@@ -424,6 +455,14 @@ char* qwen3_tts_get_available_speakers(qwen3_tts_context_t* ctx) {
     }
 
     return strdup(joined.c_str());
+}
+
+char* qwen3_tts_get_last_error(qwen3_tts_context_t* ctx) {
+    if (!ctx) {
+        return strdup("Invalid context");
+    }
+    const std::string & error = !ctx->last_error.empty() ? ctx->last_error : ctx->tts.get_error();
+    return strdup(error.c_str());
 }
 
 void qwen3_tts_free_string(char* value) {

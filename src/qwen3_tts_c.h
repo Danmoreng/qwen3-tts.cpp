@@ -210,6 +210,7 @@ QWEN3_TTS_API qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(
 // Newline-separated speaker names (lowercase), or empty string if unavailable.
 // Returned string is heap-allocated and must be released with qwen3_tts_free_string().
 QWEN3_TTS_API char* qwen3_tts_get_available_speakers(qwen3_tts_context_t* ctx);
+QWEN3_TTS_API char* qwen3_tts_get_last_error(qwen3_tts_context_t* ctx);
 QWEN3_TTS_API void qwen3_tts_free_string(char* value);
 
 QWEN3_TTS_API void qwen3_tts_free_result(qwen3_tts_result_t result);
