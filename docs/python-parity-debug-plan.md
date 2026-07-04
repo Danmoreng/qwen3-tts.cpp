@@ -328,6 +328,9 @@ Candidate gates:
   safetensors smoke for `scripts/inspect_safetensors_dtypes.py`; it verifies
   positive BF16 expectations and negative expectation handling without the real
   checkpoint.
+- `scripts/test_python_parity_expectations_smoke.py` validates the checked-in
+  expectation metadata schema, required fields, category values, and basic
+  numeric ranges without running full model fixtures.
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata and first-diff classification for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/parity_trace_summary.py` also emits `first_diff_classification`
@@ -557,6 +560,13 @@ Targeted BF16 variant experiment:
   used the idle-GPU guard and 3 repeats: warm generate median `885.45 ms`, code
   predictor `496.3 ms`, pipeline `919.5 ms`, RTF `0.2345`; pre-run GPU
   utilization was `0%`.
+- A model-free expectation metadata smoke now validates
+  `tests/fixtures/python_parity_expectations.json` before the full parity
+  fixtures consume it. `run_all_tests.ps1 -ParityFixturesOnly` passed with
+  helper smokes plus both full fixtures (`PASS: 7`, `FAIL: 0`, `SKIP: 4`).
+  Follow-up no-debug timing used the idle-GPU guard and 3 repeats: warm
+  generate median `873.65 ms`, code predictor `492.65 ms`, pipeline `903.0 ms`,
+  RTF `0.2305`; pre-run GPU utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

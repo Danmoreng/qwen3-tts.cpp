@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""
+CI-safe schema smoke for tests/fixtures/python_parity_expectations.json.
+
+The full parity fixtures need large local model artifacts. This check validates
+the small checked-in expectation metadata so obvious schema mistakes fail before
+the expensive local fixture regeneration starts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+
+ALLOWED_CATEGORIES = {"exact_tie", "near_tie_token_swap", "near_tie", "token_swap", "logit_drift"}
+REQUIRED_FIXTURES = ("speaker_only", "icl")
+REQUIRED_EXPECT_FIELDS = {
+    "match_percent_at_least": (int, float),
+    "first_diff_frame": int,
+    "first_diff_codebook": int,
+    "first_diff_token_a": int,
+    "first_diff_token_b": int,
+    "first_diff_cosine_at_least": (int, float),
+    "first_diff_max_abs_at_most": (int, float),
+    "first_diff_category": str,
+    "first_diff_max_abs_over_margin_at_least": (int, float),
+}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate Python parity expectation metadata")
+    parser.add_argument(
+        "--expectations",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "python_parity_expectations.json",
+    )
+    args = parser.parse_args()
+
+    payload = json.loads(args.expectations.read_text(encoding="utf-8"))
+    failures = validate_payload(payload)
+    if failures:
+        for failure in failures:
+            print(f"EXPECTATION SCHEMA FAILED: {failure}")
+        raise SystemExit(1)
+
+    print(f"Python parity expectation schema passed: {args.expectations}")
+
+
+def validate_payload(payload: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    if payload.get("version") != 1:
+        failures.append(f"version: expected 1, got {payload.get('version')!r}")
+
+    fixtures = payload.get("fixtures")
+    if not isinstance(fixtures, dict):
+        return failures + ["fixtures: expected object"]
+
+    for fixture_name in REQUIRED_FIXTURES:
+        fixture = fixtures.get(fixture_name)
+        if not isinstance(fixture, dict):
+            failures.append(f"fixtures.{fixture_name}: missing or not an object")
+            continue
+
+        text = fixture.get("text")
+        if not isinstance(text, str) or not text.strip():
+            failures.append(f"fixtures.{fixture_name}.text: expected non-empty string")
+
+        for key in ("max_tokens", "max_frames"):
+            value = fixture.get(key)
+            if not isinstance(value, int) or value <= 0:
+                failures.append(f"fixtures.{fixture_name}.{key}: expected positive integer")
+
+        expect = fixture.get("expect")
+        if not isinstance(expect, dict):
+            failures.append(f"fixtures.{fixture_name}.expect: expected object")
+            continue
+
+        for field, expected_type in REQUIRED_EXPECT_FIELDS.items():
+            if field not in expect:
+                failures.append(f"fixtures.{fixture_name}.expect.{field}: missing")
+                continue
+            if not isinstance(expect[field], expected_type):
+                failures.append(f"fixtures.{fixture_name}.expect.{field}: expected {expected_type}, got {type(expect[field]).__name__}")
+
+        if isinstance(expect.get("match_percent_at_least"), (int, float)):
+            value = float(expect["match_percent_at_least"])
+            if value < 0.0 or value > 100.0:
+                failures.append(f"fixtures.{fixture_name}.expect.match_percent_at_least: expected 0..100")
+
+        if isinstance(expect.get("first_diff_codebook"), int):
+            value = int(expect["first_diff_codebook"])
+            if value < 0 or value > 15:
+                failures.append(f"fixtures.{fixture_name}.expect.first_diff_codebook: expected 0..15")
+
+        if expect.get("first_diff_category") not in ALLOWED_CATEGORIES:
+            failures.append(
+                f"fixtures.{fixture_name}.expect.first_diff_category: "
+                f"expected one of {sorted(ALLOWED_CATEGORIES)}, got {expect.get('first_diff_category')!r}"
+            )
+
+    return failures
+
+
+if __name__ == "__main__":
+    main()

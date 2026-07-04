@@ -599,6 +599,7 @@ Write-Section "Section 1b: Python Parity Helper Smokes"
 $parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary_smoke.py"
 $debugTraceSmokeScript = Join-Path $repoRoot "scripts/test_debug_trace_report_smoke.py"
 $parityDtypeSmokeScript = Join-Path $repoRoot "scripts/test_inspect_safetensors_dtypes_smoke.py"
+$parityExpectationsSmokeScript = Join-Path $repoRoot "scripts/test_python_parity_expectations_smoke.py"
 $benchmarkParitySmokeScript = Join-Path $repoRoot "scripts/benchmark_parity_smoke.ps1"
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCmd) {
@@ -655,6 +656,23 @@ if ($null -eq $pythonCmd) {
     } else {
         Add-Fail "Safetensors dtype smoke (exit code: $($parityDtypeSmokeRes.ExitCode))"
         Write-OutputTail -output $parityDtypeSmokeRes.Output
+    }
+}
+
+if ($null -eq $pythonCmd) {
+    Add-Skip "Python parity expectations smoke (python missing)"
+} elseif (-not (Test-Path $parityExpectationsSmokeScript)) {
+    Add-Fail "Python parity expectations smoke (script missing)"
+} else {
+    $parityExpectationsSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $parityExpectationsSmokeScript,
+        "--expectations", (Join-Path $repoRoot "tests/fixtures/python_parity_expectations.json")
+    )
+    if ($parityExpectationsSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Python parity expectations smoke"
+    } else {
+        Add-Fail "Python parity expectations smoke (exit code: $($parityExpectationsSmokeRes.ExitCode))"
+        Write-OutputTail -output $parityExpectationsSmokeRes.Output
     }
 }
 
