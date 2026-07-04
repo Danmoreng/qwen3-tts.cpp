@@ -13,6 +13,8 @@ param(
     [switch]$BuildMissingTargets,
     [switch]$RequireComponentTests,
     [switch]$RequireIclSmoke,
+    [switch]$RequireParityFixtures,
+    [switch]$ParityFixturesOnly,
     [switch]$Skip17B,
     [switch]$PrepareAssets,
     [switch]$GenerateMissingAssets
@@ -128,6 +130,10 @@ function Invoke-CommandCapture([string]$exe, [string[]]$commandArgs) {
         ExitCode = $exitCode
         Output   = $text
     }
+}
+
+function ConvertTo-InvariantText([object]$value) {
+    return [System.Convert]::ToString($value, [Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Invoke-CheckedTest(
@@ -346,9 +352,28 @@ function Validate-WavOutput(
     return $true
 }
 
+function Write-FinalSummaryAndExit() {
+    Write-Section "Summary"
+    Write-Host "PASS: $PASS_COUNT"
+    Write-Host "FAIL: $FAIL_COUNT"
+    Write-Host "SKIP: $SKIP_COUNT"
+    Write-Host "Outputs: $resolvedOutputDir"
+
+    Restore-DebugDumpEnv -snapshot $debugDumpEnvSnapshot
+
+    if ($FAIL_COUNT -gt 0) {
+        exit 1
+    }
+
+    exit 0
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
-$run17B = -not $Skip17B
+if ($ParityFixturesOnly) {
+    $RequireParityFixtures = $true
+}
+$run17B = (-not $Skip17B) -and (-not $ParityFixturesOnly)
 
 $debugDumpEnvSnapshot = Save-DebugDumpEnv
 $hadDebugDumpEnv = ($null -ne $debugDumpEnvSnapshot.Dir) -or
@@ -481,6 +506,7 @@ $hasTransformerRefs = $missingTransformerRefs.Count -eq 0
 Write-Section "Section 0: Preflight"
 
 $strictMissingCount = 0
+$mainModelRequired = -not $ParityFixturesOnly
 
 $preflightChecks = @(
     @{ Label = "CLI binary";                 Path = $cliExe;         Required = $false; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
@@ -488,11 +514,11 @@ $preflightChecks = @(
     @{ Label = "Encoder test binary";        Path = $encoderExe;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
     @{ Label = "Transformer test binary";    Path = $transformerExe; Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
     @{ Label = "Decoder test binary";        Path = $decoderExe;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
-    @{ Label = "TTS model (0.6B)";           Path = $ttsModel;       Required = $true;  Hint = "Place $ModelName06 under '$resolvedModelDir'." },
+    @{ Label = "TTS model (0.6B)";           Path = $ttsModel;       Required = $mainModelRequired;  Hint = "Place $ModelName06 under '$resolvedModelDir'." },
     @{ Label = "TTS model (1.7B Base)";      Path = $ttsModel17Base; Required = $run17B; Hint = "Place $ModelName17Base under '$resolvedModelDir'." },
     @{ Label = "TTS model (1.7B Custom)";    Path = $ttsModel17Custom; Required = $run17B; Hint = "Place $ModelName17Custom under '$resolvedModelDir'." },
-    @{ Label = "Tokenizer model";            Path = $tokModel;       Required = $true;  Hint = "Place qwen-tokenizer-12hz-Q8_0.gguf under '$resolvedModelDir'." },
-    @{ Label = "Reference audio";            Path = $refAudio;       Required = $true; Hint = "Use -ReferenceAudio or place examples/readme_clone_input.wav." },
+    @{ Label = "Tokenizer model";            Path = $tokModel;       Required = $mainModelRequired;  Hint = "Place qwen-tokenizer-12hz-Q8_0.gguf under '$resolvedModelDir'." },
+    @{ Label = "Reference audio";            Path = $refAudio;       Required = $mainModelRequired; Hint = "Use -ReferenceAudio or place examples/readme_clone_input.wav." },
     @{ Label = "Encoder reference embedding";Path = $encoderRef;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
     @{ Label = "Decoder codes";              Path = $decoderCodes;   Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
     @{ Label = "Decoder reference audio";    Path = $decoderRef;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" }
@@ -566,6 +592,124 @@ if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
         -forbiddenRegex "FAIL:")
 } else {
     Add-Skip "Decoder (binary/model/codes missing)"
+}
+
+Write-Section "Section 1b: Python Parity Fixtures"
+
+$parityScript = Join-Path $repoRoot "scripts/run_speaker_parity_fixture.ps1"
+$parityPythonPath = Join-Path (Split-Path $repoRoot -Parent) "Qwen3-TTS"
+$parityPythonModel = Join-Path (Split-Path $repoRoot -Parent) "audio.cpp/models/Qwen3-TTS-12Hz-1.7B-Base"
+$parityCppModelDir = Join-Path $repoRoot "benchmark_output/bf16_parity_modeldir"
+$paritySpeakerEmbedding = Join-Path $repoRoot "benchmark_output/python_parity/python_speaker_embedding.json"
+$parityReferenceText = Join-Path $repoRoot "benchmark_output/parity_serveurperso_seed/ref.txt"
+$parityReferenceCodes = Join-Path $repoRoot "benchmark_output/python_parity/python_reference_codes.json"
+$parityExpectationsFile = Join-Path $repoRoot "tests/fixtures/python_parity_expectations.json"
+$parityOutputRoot = Join-Path $resolvedOutputDir "python_parity"
+
+$parityAssets = @(
+    $parityScript,
+    $parityExpectationsFile,
+    $parityPythonPath,
+    $parityPythonModel,
+    $parityCppModelDir,
+    $paritySpeakerEmbedding,
+    $parityReferenceText,
+    $parityReferenceCodes
+)
+$missingParityAssets = @()
+foreach ($asset in $parityAssets) {
+    if (-not (Test-Path $asset)) {
+        $missingParityAssets += $asset
+    }
+}
+
+if (-not $cliExe) {
+    if ($RequireParityFixtures) {
+        Add-Fail "Python parity fixtures (qwen3-tts-cli binary missing)"
+    } else {
+        Add-Skip "Python parity fixtures (qwen3-tts-cli binary missing)"
+    }
+} elseif ($missingParityAssets.Count -gt 0) {
+    if ($RequireParityFixtures) {
+        Add-Fail "Python parity fixtures ($($missingParityAssets.Count) asset(s) missing)"
+        foreach ($asset in $missingParityAssets) {
+            Write-Host "  -> $asset" -ForegroundColor DarkYellow
+        }
+    } else {
+        Add-Skip "Python parity fixtures (local model/parity assets missing)"
+    }
+} else {
+    $parityExpectations = Get-Content -LiteralPath $parityExpectationsFile -Raw | ConvertFrom-Json
+    $speakerFixture = $parityExpectations.fixtures.speaker_only
+    $speakerExpect = $speakerFixture.expect
+    $iclFixture = $parityExpectations.fixtures.icl
+    $iclExpect = $iclFixture.expect
+
+    $speakerParityOut = Join-Path $parityOutputRoot "speaker_fixture"
+    $speakerParityRes = Invoke-CommandCapture -exe "powershell" -commandArgs @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $parityScript,
+        "-PythonPath", $parityPythonPath,
+        "-PythonModel", $parityPythonModel,
+        "-CppModelDir", $parityCppModelDir,
+        "-SpeakerEmbedding", $paritySpeakerEmbedding,
+        "-CliExe", $cliExe,
+        "-OutputDir", $speakerParityOut,
+        "-Text", $speakerFixture.text,
+        "-MaxTokens", (ConvertTo-InvariantText $speakerFixture.max_tokens),
+        "-MaxFrames", (ConvertTo-InvariantText $speakerFixture.max_frames),
+        "-ExpectMatchPercentAtLeast", (ConvertTo-InvariantText $speakerExpect.match_percent_at_least),
+        "-ExpectFirstDiffFrame", (ConvertTo-InvariantText $speakerExpect.first_diff_frame),
+        "-ExpectFirstDiffCodebook", (ConvertTo-InvariantText $speakerExpect.first_diff_codebook),
+        "-ExpectFirstDiffTokenA", (ConvertTo-InvariantText $speakerExpect.first_diff_token_a),
+        "-ExpectFirstDiffTokenB", (ConvertTo-InvariantText $speakerExpect.first_diff_token_b),
+        "-ExpectFirstDiffCosineAtLeast", (ConvertTo-InvariantText $speakerExpect.first_diff_cosine_at_least),
+        "-ExpectFirstDiffMaxAbsAtMost", (ConvertTo-InvariantText $speakerExpect.first_diff_max_abs_at_most),
+        "-RequireAssets"
+    )
+    if ($speakerParityRes.ExitCode -eq 0) {
+        Add-Pass "Python parity fixture (speaker-only)"
+    } else {
+        Add-Fail "Python parity fixture (speaker-only, exit code: $($speakerParityRes.ExitCode))"
+        Write-OutputTail -output $speakerParityRes.Output
+    }
+
+    $iclParityOut = Join-Path $parityOutputRoot "icl_fixture"
+    $iclParityRes = Invoke-CommandCapture -exe "powershell" -commandArgs @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $parityScript,
+        "-PythonPath", $parityPythonPath,
+        "-PythonModel", $parityPythonModel,
+        "-CppModelDir", $parityCppModelDir,
+        "-SpeakerEmbedding", $paritySpeakerEmbedding,
+        "-CliExe", $cliExe,
+        "-OutputDir", $iclParityOut,
+        "-Text", $iclFixture.text,
+        "-MaxTokens", (ConvertTo-InvariantText $iclFixture.max_tokens),
+        "-MaxFrames", (ConvertTo-InvariantText $iclFixture.max_frames),
+        "-ReferenceTextFile", $parityReferenceText,
+        "-ReferenceCodes", $parityReferenceCodes,
+        "-ExpectMatchPercentAtLeast", (ConvertTo-InvariantText $iclExpect.match_percent_at_least),
+        "-ExpectFirstDiffFrame", (ConvertTo-InvariantText $iclExpect.first_diff_frame),
+        "-ExpectFirstDiffCodebook", (ConvertTo-InvariantText $iclExpect.first_diff_codebook),
+        "-ExpectFirstDiffTokenA", (ConvertTo-InvariantText $iclExpect.first_diff_token_a),
+        "-ExpectFirstDiffTokenB", (ConvertTo-InvariantText $iclExpect.first_diff_token_b),
+        "-ExpectFirstDiffCosineAtLeast", (ConvertTo-InvariantText $iclExpect.first_diff_cosine_at_least),
+        "-ExpectFirstDiffMaxAbsAtMost", (ConvertTo-InvariantText $iclExpect.first_diff_max_abs_at_most),
+        "-RequireAssets"
+    )
+    if ($iclParityRes.ExitCode -eq 0) {
+        Add-Pass "Python parity fixture (ICL)"
+    } else {
+        Add-Fail "Python parity fixture (ICL, exit code: $($iclParityRes.ExitCode))"
+        Write-OutputTail -output $iclParityRes.Output
+    }
+}
+
+if ($ParityFixturesOnly) {
+    Write-FinalSummaryAndExit
 }
 
 Write-Section "Section 2: CLI Output Regression Checks (0.6B)"
@@ -740,16 +884,4 @@ if (-not $run17B) {
     }
 }
 
-Write-Section "Summary"
-Write-Host "PASS: $PASS_COUNT"
-Write-Host "FAIL: $FAIL_COUNT"
-Write-Host "SKIP: $SKIP_COUNT"
-Write-Host "Outputs: $resolvedOutputDir"
-
-Restore-DebugDumpEnv -snapshot $debugDumpEnvSnapshot
-
-if ($FAIL_COUNT -gt 0) {
-    exit 1
-}
-
-exit 0
+Write-FinalSummaryAndExit

@@ -126,6 +126,49 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
         return false;
     }
 
+    const auto & trace_cfg = transformer_internal::get_debug_trace_config();
+    if (trace_cfg.enabled) {
+        auto dump_last_token_f32 = [&](const char * tensor_name, const char * out_name) {
+            struct ggml_tensor * tensor = ggml_graph_get_tensor(gf, tensor_name);
+            if (!tensor) {
+                return;
+            }
+            const size_t count = (size_t) ggml_nelements(tensor);
+            const int32_t hidden_size = impl_->model.config.hidden_size;
+            if (count < (size_t) hidden_size || (count % (size_t) hidden_size) != 0) {
+                return;
+            }
+            std::vector<float> all(count);
+            if (tensor->type == GGML_TYPE_F32) {
+                ggml_backend_tensor_get(tensor, all.data(), 0, count * sizeof(float));
+            } else if (tensor->type == GGML_TYPE_F16) {
+                std::vector<ggml_fp16_t> tmp(count);
+                ggml_backend_tensor_get(tensor, tmp.data(), 0, count * sizeof(ggml_fp16_t));
+                ggml_fp16_to_fp32_row(tmp.data(), all.data(), (int64_t) count);
+            } else if (tensor->type == GGML_TYPE_BF16) {
+                std::vector<ggml_bf16_t> tmp(count);
+                ggml_backend_tensor_get(tensor, tmp.data(), 0, count * sizeof(ggml_bf16_t));
+                ggml_bf16_to_fp32_row(tmp.data(), all.data(), (int64_t) count);
+            } else {
+                return;
+            }
+            const size_t row_offset = count - (size_t) hidden_size;
+            transformer_internal::debug_trace_write_bin(trace_cfg, out_name, all.data() + row_offset,
+                                                        (size_t) hidden_size, "f32",
+                                                        {(int64_t) hidden_size});
+        };
+
+        const int32_t n_layer = impl_->model.config.n_layers;
+        for (int32_t il = 0; il < n_layer; ++il) {
+            char tensor_name[96];
+            char out_name[128];
+            snprintf(tensor_name, sizeof(tensor_name), "talker_prefill_layer%02d_hidden", il);
+            snprintf(out_name, sizeof(out_name), "talker_prefill_layer%02d_hidden.f32.bin", il);
+            dump_last_token_f32(tensor_name, out_name);
+        }
+        dump_last_token_f32("hidden_states", "talker_prefill_final_hidden.f32.bin");
+    }
+
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif

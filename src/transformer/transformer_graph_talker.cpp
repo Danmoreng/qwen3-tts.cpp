@@ -3,6 +3,7 @@
 #include "transformer/transformer_internal.h"
 
 #include <cmath>
+#include <cstdio>
 
 namespace qwen3_tts {
 
@@ -43,6 +44,7 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
 
     struct ggml_tensor * cur = inp_prefill_embd;
     struct ggml_tensor * inpL = cur;
+    const bool debug_trace_enabled = transformer_internal::get_debug_trace_config().enabled;
 
     const float KQscale = 1.0f / sqrtf((float) head_dim);
     int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
@@ -150,6 +152,11 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
+        if (debug_trace_enabled) {
+            ggml_format_name(inpL, "talker_prefill_layer%02d_hidden", il);
+            ggml_set_output(inpL);
+            ggml_build_forward_expand(gf, inpL);
+        }
     }
 
     cur = inpL;

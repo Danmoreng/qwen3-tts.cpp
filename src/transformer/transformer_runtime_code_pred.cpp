@@ -246,6 +246,10 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
     if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.codec_embd, codebook_0_token, cb0_embd.data())) {
         return false;
     }
+    std::vector<float> prefill_input((size_t) 2 * cfg.hidden_size);
+    memcpy(prefill_input.data(), hidden, (size_t) cfg.hidden_size * sizeof(float));
+    memcpy(prefill_input.data() + cfg.hidden_size, cb0_embd.data(),
+           (size_t) cfg.hidden_size * sizeof(float));
     if (trace_frame_enabled) {
         char hidden_name[128];
         snprintf(hidden_name, sizeof(hidden_name),
@@ -260,11 +264,47 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         transformer_internal::debug_trace_write_bin(trace_cfg, embd_name, cb0_embd.data(),
                                                     (size_t) cfg.hidden_size, "f32",
                                                     {(int64_t) cfg.hidden_size});
+
+        char prefill_input_name[128];
+        snprintf(prefill_input_name, sizeof(prefill_input_name),
+                 "frame%03d_codepred_prefill_input.f32.bin", trace_frame);
+        transformer_internal::debug_trace_write_bin(trace_cfg, prefill_input_name, prefill_input.data(),
+                                                    prefill_input.size(), "f32",
+                                                    {2, (int64_t) cfg.hidden_size});
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
     if (impl_->timing) impl_->timing->t_code_pred_init_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 #endif
+
+    auto dump_graph_tensor_f32 = [&](struct ggml_cgraph * gf,
+                                     const char * tensor_name,
+                                     const char * file_suffix,
+                                     const std::vector<int64_t> & shape) {
+        struct ggml_tensor * tensor = ggml_graph_get_tensor(gf, tensor_name);
+        if (!tensor || !trace_frame_enabled) {
+            return;
+        }
+        const size_t count = (size_t) ggml_nelements(tensor);
+        std::vector<float> data(count);
+        if (tensor->type == GGML_TYPE_F32) {
+            ggml_backend_tensor_get(tensor, data.data(), 0, count * sizeof(float));
+        } else if (tensor->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> tmp(count);
+            ggml_backend_tensor_get(tensor, tmp.data(), 0, count * sizeof(ggml_fp16_t));
+            ggml_fp16_to_fp32_row(tmp.data(), data.data(), (int64_t) count);
+        } else if (tensor->type == GGML_TYPE_BF16) {
+            std::vector<ggml_bf16_t> tmp(count);
+            ggml_backend_tensor_get(tensor, tmp.data(), 0, count * sizeof(ggml_bf16_t));
+            ggml_bf16_to_fp32_row(tmp.data(), data.data(), (int64_t) count);
+        } else {
+            return;
+        }
+        char out_name[128];
+        snprintf(out_name, sizeof(out_name), "frame%03d_%s.f32.bin", trace_frame, file_suffix);
+        transformer_internal::debug_trace_write_bin(trace_cfg, out_name, data.data(), data.size(),
+                                                    "f32", shape);
+    };
 
     {
 #ifdef QWEN3_TTS_TIMING
@@ -295,20 +335,23 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        struct ggml_tensor * inp_hidden = ggml_graph_get_tensor(gf, "inp_hidden");
-        if (inp_hidden) {
-            ggml_backend_tensor_set(inp_hidden, hidden, 0, cfg.hidden_size * sizeof(float));
-        }
-
-        struct ggml_tensor * inp_cb0_embd = ggml_graph_get_tensor(gf, "inp_cb0_embd");
-        if (inp_cb0_embd) {
-            ggml_backend_tensor_set(inp_cb0_embd, cb0_embd.data(), 0, cfg.hidden_size * sizeof(float));
+        struct ggml_tensor * inp_prefill = ggml_graph_get_tensor(gf, "inp_prefill");
+        if (inp_prefill) {
+            ggml_backend_tensor_set(inp_prefill, prefill_input.data(), 0,
+                                    prefill_input.size() * sizeof(float));
         }
 
         struct ggml_tensor * inp_pos = ggml_graph_get_tensor(gf, "inp_pos");
         if (inp_pos) {
             int32_t positions[2] = {0, 1};
             ggml_backend_tensor_set(inp_pos, positions, 0, 2 * sizeof(int32_t));
+            if (trace_frame_enabled) {
+                char pos_name[128];
+                snprintf(pos_name, sizeof(pos_name),
+                         "frame%03d_codepred_prefill_pos.i32.bin", trace_frame);
+                transformer_internal::debug_trace_write_bin(trace_cfg, pos_name, positions, 2,
+                                                            "i32", {2});
+            }
         }
 
         struct ggml_tensor * inp_mrope_pos = ggml_graph_get_tensor(gf, "inp_mrope_pos");
@@ -326,6 +369,14 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
             mask[2] = zero;
             mask[3] = zero;
             ggml_backend_tensor_set(inp_mask, mask, 0, sizeof(mask));
+            if (trace_frame_enabled) {
+                float mask_f32[4] = {0.0f, -INFINITY, 0.0f, 0.0f};
+                char mask_name[128];
+                snprintf(mask_name, sizeof(mask_name),
+                         "frame%03d_codepred_prefill_mask.f32.bin", trace_frame);
+                transformer_internal::debug_trace_write_bin(trace_cfg, mask_name, mask_f32, 4,
+                                                            "f32", {2, 2});
+            }
         }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
@@ -357,6 +408,32 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #endif
         ggml_backend_tensor_get(logits, logits_data.data(), 0,
                                 cfg.code_pred_vocab_size * sizeof(float));
+
+        dump_graph_tensor_f32(gf, "inp_prefill", "codepred_prefill_concat",
+                              {2, (int64_t) cfg.hidden_size});
+        dump_graph_tensor_f32(gf, "codepred_prefill_projected", "codepred_prefill_projected",
+                              {2, (int64_t) cfg.code_pred_hidden_size});
+        const char * sublayer_suffixes[] = {"attn_norm", "attn_out", "ffn_norm", "ffn_out"};
+        for (int il = 0; il < cfg.code_pred_layers; ++il) {
+            for (const char * sublayer_suffix : sublayer_suffixes) {
+                char tensor_name[96];
+                char file_suffix[128];
+                snprintf(tensor_name, sizeof(tensor_name), "codepred_prefill_layer%02d_%s",
+                         il, sublayer_suffix);
+                snprintf(file_suffix, sizeof(file_suffix), "codepred_prefill_layer%02d_%s",
+                         il, sublayer_suffix);
+                dump_graph_tensor_f32(gf, tensor_name, file_suffix,
+                                      {2, (int64_t) cfg.code_pred_hidden_size});
+            }
+            char tensor_name[64];
+            char file_suffix[96];
+            snprintf(tensor_name, sizeof(tensor_name), "codepred_prefill_layer%02d_hidden", il);
+            snprintf(file_suffix, sizeof(file_suffix), "codepred_prefill_layer%02d_hidden", il);
+            dump_graph_tensor_f32(gf, tensor_name, file_suffix,
+                                  {2, (int64_t) cfg.code_pred_hidden_size});
+        }
+        dump_graph_tensor_f32(gf, "codepred_prefill_final_hidden", "codepred_prefill_final_hidden",
+                              {2, (int64_t) cfg.code_pred_hidden_size});
 
         if (trace_frame_enabled && 0 < trace_cfg.max_code_steps) {
             char logits_name[128];
@@ -480,6 +557,36 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                 cfg.code_pred_vocab_size * sizeof(float));
 
         if (trace_frame_enabled && step < trace_cfg.max_code_steps) {
+            char projected_suffix[96];
+            snprintf(projected_suffix, sizeof(projected_suffix), "codepred_step%02d_projected", step);
+            dump_graph_tensor_f32(gf, "codepred_step_projected", projected_suffix,
+                                  {1, (int64_t) cfg.code_pred_hidden_size});
+            const char * sublayer_suffixes[] = {"attn_norm", "attn_out", "ffn_norm", "ffn_out"};
+            for (int il = 0; il < cfg.code_pred_layers; ++il) {
+                for (const char * sublayer_suffix : sublayer_suffixes) {
+                    char tensor_name[96];
+                    char file_suffix[128];
+                    snprintf(tensor_name, sizeof(tensor_name), "codepred_step%02d_layer%02d_%s",
+                             step, il, sublayer_suffix);
+                    snprintf(file_suffix, sizeof(file_suffix), "codepred_step%02d_layer%02d_%s",
+                             step, il, sublayer_suffix);
+                    dump_graph_tensor_f32(gf, tensor_name, file_suffix,
+                                          {1, (int64_t) cfg.code_pred_hidden_size});
+                }
+                char tensor_name[64];
+                char file_suffix[96];
+                snprintf(tensor_name, sizeof(tensor_name), "codepred_step%02d_layer%02d_hidden", step, il);
+                snprintf(file_suffix, sizeof(file_suffix), "codepred_step%02d_layer%02d_hidden", step, il);
+                dump_graph_tensor_f32(gf, tensor_name, file_suffix,
+                                      {1, (int64_t) cfg.code_pred_hidden_size});
+            }
+            char final_tensor_name[64];
+            char final_file_suffix[96];
+            snprintf(final_tensor_name, sizeof(final_tensor_name), "codepred_step%02d_final_hidden", step);
+            snprintf(final_file_suffix, sizeof(final_file_suffix), "codepred_step%02d_final_hidden", step);
+            dump_graph_tensor_f32(gf, final_tensor_name, final_file_suffix,
+                                  {1, (int64_t) cfg.code_pred_hidden_size});
+
             char logits_name[128];
             snprintf(logits_name, sizeof(logits_name),
                      "frame%03d_codepred_logits_step%02d.f32.bin", trace_frame, step);

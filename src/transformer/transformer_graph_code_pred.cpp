@@ -17,6 +17,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
     const float eps = cfg.code_pred_rms_norm_eps;
     const int n_layer = cfg.code_pred_layers;
     const int n_codebooks = cfg.n_codebooks;
+    const bool debug_trace_enabled = false;
 
     struct ggml_init_params params = {
         /*.mem_size   =*/ impl->state.compute_meta.size(),
@@ -56,7 +57,6 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
             cur = ggml_add(ctx0, cur, bias);
         }
     }
-
     struct ggml_tensor * inpL = cur;
     const float KQscale = 1.0f / sqrtf((float) head_dim);
 
@@ -65,6 +65,11 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
 
         cur = ggml_rms_norm(ctx0, inpL, eps);
         cur = ggml_mul(ctx0, cur, layer.attn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_prefill_layer%02d_attn_norm", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.attn_q, cur);
         struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.attn_k, cur);
@@ -143,6 +148,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
     const int n_layer = cfg.code_pred_layers;
     const int n_tokens = 2;
     const bool use_code_pred_mrope = false;
+    const bool debug_trace_enabled = transformer_internal::get_debug_trace_config().enabled;
 
     struct ggml_init_params params = {
         /*.mem_size   =*/ impl->state.code_pred_compute_meta[0].size(),
@@ -153,13 +159,9 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
     struct ggml_context * ctx0 = ggml_init(params);
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, QWEN3_TTS_MAX_NODES, false);
 
-    struct ggml_tensor * inp_hidden = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, in_hidden_size);
-    ggml_set_name(inp_hidden, "inp_hidden");
-    ggml_set_input(inp_hidden);
-
-    struct ggml_tensor * inp_cb0_embd = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, in_hidden_size);
-    ggml_set_name(inp_cb0_embd, "inp_cb0_embd");
-    ggml_set_input(inp_cb0_embd);
+    struct ggml_tensor * inp_prefill = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, in_hidden_size, n_tokens);
+    ggml_set_name(inp_prefill, "inp_prefill");
+    ggml_set_input(inp_prefill);
 
     struct ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_name(inp_pos, "inp_pos");
@@ -176,9 +178,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
         ggml_set_input(inp_mrope_pos);
     }
 
-    struct ggml_tensor * hidden_2d = ggml_reshape_2d(ctx0, inp_hidden, in_hidden_size, 1);
-    struct ggml_tensor * cb0_2d = ggml_reshape_2d(ctx0, inp_cb0_embd, in_hidden_size, 1);
-    struct ggml_tensor * cur = ggml_concat(ctx0, hidden_2d, cb0_2d, 1);
+    struct ggml_tensor * cur = inp_prefill;
 
     if (impl->model.code_pred_small_to_mtp_weight) {
         cur = ggml_mul_mat(ctx0, impl->model.code_pred_small_to_mtp_weight, cur);
@@ -187,6 +187,11 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
                 ctx0, ggml_reshape_2d(ctx0, impl->model.code_pred_small_to_mtp_bias, hidden_size, 1), cur);
             cur = ggml_add(ctx0, cur, bias);
         }
+    }
+    ggml_set_name(cur, "codepred_prefill_projected");
+    if (debug_trace_enabled) {
+        ggml_set_output(cur);
+        ggml_build_forward_expand(gf, cur);
     }
 
     struct ggml_tensor * inpL = cur;
@@ -266,11 +271,21 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
         ggml_flash_attn_ext_set_prec(KQV_fa, GGML_PREC_F32);
         cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_prefill_layer%02d_attn_out", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
         cur = ggml_add(ctx0, cur, inpL);
         struct ggml_tensor * inpFF = cur;
 
         cur = ggml_rms_norm(ctx0, inpFF, eps);
         cur = ggml_mul(ctx0, cur, layer.ffn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_prefill_layer%02d_ffn_norm", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, cur);
         struct ggml_tensor * up = ggml_mul_mat(ctx0, layer.ffn_up, cur);
@@ -279,13 +294,28 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
         cur = ggml_mul(ctx0, gate, up);
 
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_prefill_layer%02d_ffn_out", il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         inpL = ggml_add(ctx0, cur, inpFF);
+        if (debug_trace_enabled) {
+            ggml_format_name(inpL, "codepred_prefill_layer%02d_hidden", il);
+            ggml_set_output(inpL);
+            ggml_build_forward_expand(gf, inpL);
+        }
     }
 
     cur = inpL;
     cur = ggml_rms_norm(ctx0, cur, eps);
     cur = ggml_mul(ctx0, cur, impl->model.code_pred_output_norm);
+    ggml_set_name(cur, "codepred_prefill_final_hidden");
+    if (debug_trace_enabled) {
+        ggml_set_output(cur);
+        ggml_build_forward_expand(gf, cur);
+    }
 
     struct ggml_tensor * last_hidden = ggml_view_2d(ctx0, cur, hidden_size, 1,
                                                     cur->nb[1], hidden_size * sizeof(float));
@@ -312,6 +342,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
     const int n_layer = cfg.code_pred_layers;
     const int n_tokens = 1;
     const bool use_code_pred_mrope = false;
+    const bool debug_trace_enabled = transformer_internal::get_debug_trace_config().enabled;
 
     struct ggml_init_params params = {
         /*.mem_size   =*/ impl->state.code_pred_compute_meta[generation_step].size(),
@@ -361,6 +392,11 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
             cur = ggml_add(ctx0, cur, bias);
         }
     }
+    ggml_set_name(cur, "codepred_step_projected");
+    if (debug_trace_enabled) {
+        ggml_set_output(cur);
+        ggml_build_forward_expand(gf, cur);
+    }
 
     struct ggml_tensor * inpL = cur;
     const float KQscale = 1.0f / sqrtf((float) head_dim);
@@ -371,6 +407,11 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
 
         cur = ggml_rms_norm(ctx0, inpL, eps);
         cur = ggml_mul(ctx0, cur, layer.attn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_step%02d_layer%02d_attn_norm", generation_step, il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.attn_q, cur);
         struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.attn_k, cur);
@@ -458,11 +499,21 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
         }
 
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_step%02d_layer%02d_attn_out", generation_step, il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
         cur = ggml_add(ctx0, cur, inpL);
         struct ggml_tensor * inpFF = cur;
 
         cur = ggml_rms_norm(ctx0, inpFF, eps);
         cur = ggml_mul(ctx0, cur, layer.ffn_norm);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_step%02d_layer%02d_ffn_norm", generation_step, il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         struct ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, cur);
         struct ggml_tensor * up = ggml_mul_mat(ctx0, layer.ffn_up, cur);
@@ -471,13 +522,28 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
         cur = ggml_mul(ctx0, gate, up);
 
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        if (debug_trace_enabled) {
+            ggml_format_name(cur, "codepred_step%02d_layer%02d_ffn_out", generation_step, il);
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+        }
 
         inpL = ggml_add(ctx0, cur, inpFF);
+        if (debug_trace_enabled) {
+            ggml_format_name(inpL, "codepred_step%02d_layer%02d_hidden", generation_step, il);
+            ggml_set_output(inpL);
+            ggml_build_forward_expand(gf, inpL);
+        }
     }
 
     cur = inpL;
     cur = ggml_rms_norm(ctx0, cur, eps);
     cur = ggml_mul(ctx0, cur, impl->model.code_pred_output_norm);
+    ggml_format_name(cur, "codepred_step%02d_final_hidden", generation_step);
+    if (debug_trace_enabled) {
+        ggml_set_output(cur);
+        ggml_build_forward_expand(gf, cur);
+    }
 
     struct ggml_tensor * logits = ggml_mul_mat(ctx0, impl->model.code_pred_head[generation_step], cur);
     ggml_set_name(logits, "logits");

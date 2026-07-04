@@ -135,6 +135,13 @@ def summarize_trace(trace_dir: Path, entries: dict[str, dict[str, Any]], top_k_n
             for m in [step_re.match(name)]
             if m is not None
         )
+        post_step_re = re.compile(rf"^frame{frame:03d}_codepred_logits_step(\d+)_post_warp\.f32\.bin$")
+        post_steps = sorted(
+            int(m.group(1))
+            for name in entries
+            for m in [post_step_re.match(name)]
+            if m is not None
+        )
 
         for step in steps:
             name = f"frame{frame:03d}_codepred_logits_step{step:02d}.f32.bin"
@@ -142,7 +149,18 @@ def summarize_trace(trace_dir: Path, entries: dict[str, dict[str, Any]], top_k_n
             selected = None
             if code_tokens is not None and step < code_tokens.size:
                 selected = int(code_tokens[step])
-            info = f"  codepred step {step:02d} top-{top_k_n}: {topk(logits, top_k_n)}"
+            info = f"  codepred step {step:02d} raw top-{top_k_n}: {topk(logits, top_k_n)}"
+            if selected is not None:
+                info += f"  selected={selected}"
+            print(info)
+
+        for step in post_steps:
+            name = f"frame{frame:03d}_codepred_logits_step{step:02d}_post_warp.f32.bin"
+            logits = load_entry(trace_dir, name, entries[name])
+            selected = None
+            if code_tokens is not None and step < code_tokens.size:
+                selected = int(code_tokens[step])
+            info = f"  codepred step {step:02d} post-warp top-{top_k_n}: {topk(logits, top_k_n)}"
             if selected is not None:
                 info += f"  selected={selected}"
             print(info)
