@@ -321,6 +321,9 @@ Candidate gates:
   smoke that validates summary parsing, tensor shapes, first-diff token IDs,
   near-tie classification, boundary/code-predictor tensor comparisons, and
   negative category expectation handling without large model artifacts.
+- `scripts/test_debug_trace_report_smoke.py` is a synthetic smoke for
+  `scripts/debug_trace_report.py`; it checks raw/post-warp labels and compare
+  metrics in the human-readable trace report.
 - `scripts/test_inspect_safetensors_dtypes_smoke.py` is a tiny synthetic
   safetensors smoke for `scripts/inspect_safetensors_dtypes.py`; it verifies
   positive BF16 expectations and negative expectation handling without the real
@@ -538,6 +541,13 @@ Targeted BF16 variant experiment:
   used the idle-GPU guard and 3 repeats: warm generate median `853.95 ms`, code
   predictor `481.2 ms`, pipeline `883.0 ms`, RTF `0.225`; pre-run GPU
   utilization was `0%`.
+- A synthetic debug trace report smoke now covers the human-readable raw vs
+  post-warp diagnostic helper that is useful when inspecting trace dumps by
+  hand. `run_all_tests.ps1 -ParityFixturesOnly` passed with helper smokes plus
+  both full fixtures (`PASS: 5`, `FAIL: 0`, `SKIP: 4`). Follow-up no-debug
+  timing used the idle-GPU guard and 3 repeats: warm generate median
+  `864.75 ms`, code predictor `488.85 ms`, pipeline `893.5 ms`, RTF `0.228`;
+  pre-run GPU utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

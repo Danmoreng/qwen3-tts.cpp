@@ -597,6 +597,7 @@ if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
 Write-Section "Section 1b: Python Parity Helper Smokes"
 
 $parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary_smoke.py"
+$debugTraceSmokeScript = Join-Path $repoRoot "scripts/test_debug_trace_report_smoke.py"
 $parityDtypeSmokeScript = Join-Path $repoRoot "scripts/test_inspect_safetensors_dtypes_smoke.py"
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCmd) {
@@ -614,6 +615,24 @@ if ($null -eq $pythonCmd) {
     } else {
         Add-Fail "Python parity trace smoke (exit code: $($parityTraceSmokeRes.ExitCode))"
         Write-OutputTail -output $parityTraceSmokeRes.Output
+    }
+}
+
+if ($null -eq $pythonCmd) {
+    Add-Skip "Debug trace report smoke (python missing)"
+} elseif (-not (Test-Path $debugTraceSmokeScript)) {
+    Add-Fail "Debug trace report smoke (script missing)"
+} else {
+    $debugTraceSmokeOut = Join-Path $resolvedOutputDir "debug_trace_report_smoke"
+    $debugTraceSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $debugTraceSmokeScript,
+        "--output-dir", $debugTraceSmokeOut
+    )
+    if ($debugTraceSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Debug trace report smoke"
+    } else {
+        Add-Fail "Debug trace report smoke (exit code: $($debugTraceSmokeRes.ExitCode))"
+        Write-OutputTail -output $debugTraceSmokeRes.Output
     }
 }
 
