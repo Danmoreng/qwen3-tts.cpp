@@ -594,7 +594,29 @@ if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
     Add-Skip "Decoder (binary/model/codes missing)"
 }
 
-Write-Section "Section 1b: Python Parity Fixtures"
+Write-Section "Section 1b: Python Parity Trace Smoke"
+
+$parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary_smoke.py"
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $pythonCmd) {
+    Add-Skip "Python parity trace smoke (python missing)"
+} elseif (-not (Test-Path $parityTraceSmokeScript)) {
+    Add-Fail "Python parity trace smoke (script missing)"
+} else {
+    $parityTraceSmokeOut = Join-Path $resolvedOutputDir "python_parity_trace_smoke"
+    $parityTraceSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $parityTraceSmokeScript,
+        "--output-dir", $parityTraceSmokeOut
+    )
+    if ($parityTraceSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Python parity trace smoke"
+    } else {
+        Add-Fail "Python parity trace smoke (exit code: $($parityTraceSmokeRes.ExitCode))"
+        Write-OutputTail -output $parityTraceSmokeRes.Output
+    }
+}
+
+Write-Section "Section 1c: Python Parity Fixtures"
 
 $parityScript = Join-Path $repoRoot "scripts/run_speaker_parity_fixture.ps1"
 $parityPythonPath = Join-Path (Split-Path $repoRoot -Parent) "Qwen3-TTS"
