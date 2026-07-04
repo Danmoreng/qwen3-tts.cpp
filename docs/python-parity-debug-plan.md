@@ -348,7 +348,11 @@ Candidate gates:
   the default 3 warm samples are present after dropping the cold first run. Use
   `-MaxWarmGenerateRangePercent`, `-MaxWarmCodePredRangePercent`,
   `-MaxWarmPipelineRangePercent`, and `-MaxWarmRtfRangePercent` to fail noisy
-  benchmark samples separately from baseline regressions.
+  benchmark samples separately from baseline regressions. Baseline comparisons
+  record workload/sampling compatibility diagnostics; add
+  `-RequireComparableBaseline` to fail when the saved baseline does not match
+  the current model, speaker embedding, text, language, token limit, sampling
+  parameters, or seed.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
   meaningful.
@@ -607,6 +611,21 @@ Targeted BF16 variant experiment:
   pipeline range `2.16%` of median. Baseline comparison remained slower by
   about `+23%` to `+26%`, under the loose smoke thresholds, with no C++
   inference-path changes in this step.
+- `benchmark_parity_smoke.ps1` now records workload/sampling fields in
+  `summary.json` (`Language`, `Temperature`, `TopK`, `TopP`, and `Seed`) and
+  emits `BaselineComparison.Compatibility` diagnostics for saved baselines.
+  `-RequireComparableBaseline` turns incompatibilities into
+  `BASELINE INCOMPARABLE` failures, while the default remains warning-only for
+  older summaries. The self-test covers matching, mismatched, and missing-field
+  baseline metadata. `run_all_tests.ps1 -ParityFixturesOnly` passed with helper
+  smokes plus both full fixtures (`PASS: 7`, `FAIL: 0`, `SKIP: 4`). Follow-up
+  no-debug timing used the idle-GPU guard, 4 repeats, loose `30%` regression
+  thresholds, and `10%` warm-spread thresholds: warm generate median
+  `1085.9 ms`, code predictor `621.7 ms`, pipeline `1123.0 ms`, RTF `0.286`;
+  warm generate range was `7.64%` and pipeline range `7.75%` of median. The old
+  saved expectation-schema baseline remained under loose regression thresholds
+  but reported missing compatibility metadata for `Language`, `Temperature`,
+  `TopK`, `TopP`, and `Seed`, as expected for a pre-metadata summary.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

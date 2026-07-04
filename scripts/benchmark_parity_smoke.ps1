@@ -23,6 +23,7 @@ param(
     [int]$WaitForGpuIdleSeconds = 0,
     [int]$GpuPollIntervalSeconds = 5,
     [int]$MinWarmRuns = 3,
+    [switch]$RequireComparableBaseline,
     [switch]$SelfTest,
     [switch]$RequireAssets
 )
@@ -147,6 +148,54 @@ function Get-ObjectNumber([object]$obj, [string]$name) {
         return $null
     }
     return [double]$property.Value
+}
+
+function Get-ObjectValue([object]$obj, [string]$name) {
+    if ($null -eq $obj) {
+        return $null
+    }
+    $property = $obj.PSObject.Properties[$name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function ConvertTo-ComparableText([object]$value) {
+    if ($null -eq $value) {
+        return $null
+    }
+    return [System.Convert]::ToString($value, [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function New-BaselineCompatibility(
+    [object]$current,
+    [object]$baseline,
+    [string[]]$fields,
+    [bool]$required
+) {
+    $issues = [System.Collections.Generic.List[string]]::new()
+    foreach ($field in $fields) {
+        $currentValue = Get-ObjectValue $current $field
+        $baselineValue = Get-ObjectValue $baseline $field
+        if ($null -eq $baselineValue) {
+            $issues.Add("Baseline summary is missing '$field'; compatibility could not be verified.")
+            continue
+        }
+
+        $currentText = ConvertTo-ComparableText $currentValue
+        $baselineText = ConvertTo-ComparableText $baselineValue
+        if ($currentText -ne $baselineText) {
+            $issues.Add("Baseline '$field' differs: current '$currentText' vs baseline '$baselineText'.")
+        }
+    }
+
+    return [PSCustomObject]@{
+        Required = $required
+        Fields = $fields
+        IsComparable = ($issues.Count -eq 0)
+        Issues = @($issues)
+    }
 }
 
 function New-DeltaMetric([string]$name, [object]$current, [object]$baseline) {
@@ -373,6 +422,40 @@ Repeat 3/3
         Add-WarmRangeFailure $stabilityFailures $warmGenerateStats 10.0
         Assert-SelfTest ($stabilityFailures.Count -eq 0) "warm range threshold pass"
 
+        $currentWorkload = [PSCustomObject]@{
+            ModelDir = "model-a"
+            SpeakerEmbedding = "speaker-a.json"
+            Text = "hello"
+            Language = "en"
+            MaxTokens = 64
+            Temperature = 1.0
+            TopK = 1
+            TopP = 1.0
+            Seed = 0
+        }
+        $matchingBaseline = [PSCustomObject]@{
+            ModelDir = "model-a"
+            SpeakerEmbedding = "speaker-a.json"
+            Text = "hello"
+            Language = "en"
+            MaxTokens = 64
+            Temperature = 1.0
+            TopK = 1
+            TopP = 1.0
+            Seed = 0
+        }
+        $mismatchedBaseline = [PSCustomObject]@{
+            ModelDir = "model-a"
+            SpeakerEmbedding = "speaker-b.json"
+            Text = "hello"
+        }
+        $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed")
+        $compatible = New-BaselineCompatibility $currentWorkload $matchingBaseline $compatFields $true
+        Assert-SelfTest ($compatible.IsComparable) "matching baseline compatibility"
+        $incompatible = New-BaselineCompatibility $currentWorkload $mismatchedBaseline $compatFields $true
+        Assert-SelfTest (-not $incompatible.IsComparable) "mismatched baseline compatibility"
+        Assert-SelfTest ($incompatible.Issues.Count -ge 2) "baseline compatibility issue count"
+
         $metric = New-DeltaMetric "WarmGenerateMedianMs" 110.0 100.0
         Assert-SelfTest ([Math]::Abs(([double]$metric.DeltaPercent) - 10.0) -lt 0.001) "delta percent"
         $failures = [System.Collections.Generic.List[string]]::new()
@@ -476,7 +559,12 @@ if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
         ModelDir = $modelDirResolved
         SpeakerEmbedding = $speakerEmbeddingResolved
         Text = $Text
+        Language = $Language
         MaxTokens = $MaxTokens
+        Temperature = $Temperature
+        TopK = $TopK
+        TopP = $TopP
+        Seed = $Seed
         Repeat = $Repeat
         Skipped = $true
         SkipReason = "GPU utilization before benchmark was $gpuUtilBefore%, above threshold $MaxGpuUtilizationBeforePercent%."
@@ -545,6 +633,19 @@ $benchmarkWarnings = @(New-BenchmarkWarnings $warmRecords.Count $MinWarmRuns)
 $baselineComparison = $null
 $regressionFailures = [System.Collections.Generic.List[string]]::new()
 $stabilityFailures = [System.Collections.Generic.List[string]]::new()
+$baselineCompatibility = $null
+$compatibilityFailures = [System.Collections.Generic.List[string]]::new()
+$currentWorkload = [PSCustomObject]@{
+    ModelDir = $modelDirResolved
+    SpeakerEmbedding = $speakerEmbeddingResolved
+    Text = $Text
+    Language = $Language
+    MaxTokens = $MaxTokens
+    Temperature = $Temperature
+    TopK = $TopK
+    TopP = $TopP
+    Seed = $Seed
+}
 
 Add-WarmRangeFailure $stabilityFailures $warmMetricStats.GenerateMs $MaxWarmGenerateRangePercent
 Add-WarmRangeFailure $stabilityFailures $warmMetricStats.CodePredMs $MaxWarmCodePredRangePercent
@@ -552,6 +653,14 @@ Add-WarmRangeFailure $stabilityFailures $warmMetricStats.PipelineTotalMs $MaxWar
 Add-WarmRangeFailure $stabilityFailures $warmMetricStats.RTF $MaxWarmRtfRangePercent
 
 if ($null -ne $baselineSummaryObj) {
+    $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed")
+    $baselineCompatibility = New-BaselineCompatibility $currentWorkload $baselineSummaryObj $compatFields $RequireComparableBaseline.IsPresent
+    if ($RequireComparableBaseline.IsPresent -and -not $baselineCompatibility.IsComparable) {
+        foreach ($issue in $baselineCompatibility.Issues) {
+            $compatibilityFailures.Add($issue)
+        }
+    }
+
     $metricsList = [System.Collections.Generic.List[object]]::new()
     [void]$metricsList.Add((New-DeltaMetric "WarmGenerateMedianMs" $warmGenerateMedianMs (Get-ObjectNumber $baselineSummaryObj "WarmGenerateMedianMs")))
     [void]$metricsList.Add((New-DeltaMetric "WarmTalkerMedianMs" $warmTalkerMedianMs (Get-ObjectNumber $baselineSummaryObj "WarmTalkerMedianMs")))
@@ -566,6 +675,7 @@ if ($null -ne $baselineSummaryObj) {
 
     $baselineComparison = [PSCustomObject]@{
         BaselineSummary = $baselineSummaryResolved
+        Compatibility = $baselineCompatibility
         Metrics = $metrics
         Thresholds = [PSCustomObject]@{
             MaxGenerateRegressionPercent = $MaxGenerateRegressionPercent
@@ -581,7 +691,12 @@ $summary = [PSCustomObject]@{
     ModelDir = $modelDirResolved
     SpeakerEmbedding = $speakerEmbeddingResolved
     Text = $Text
+    Language = $Language
     MaxTokens = $MaxTokens
+    Temperature = $Temperature
+    TopK = $TopK
+    TopP = $TopP
+    Seed = $Seed
     Repeat = $Repeat
     WarmRepeatStart = if ($records.Count -ge 2) { 2 } else { 1 }
     Runs = $records.Count
@@ -622,6 +737,11 @@ if ($stabilityFailures.Count -gt 0) {
         Write-Host "BENCHMARK UNSTABLE: $failure" -ForegroundColor Red
     }
 }
-if ($regressionFailures.Count -gt 0 -or $stabilityFailures.Count -gt 0) {
+if ($compatibilityFailures.Count -gt 0) {
+    foreach ($failure in $compatibilityFailures) {
+        Write-Host "BASELINE INCOMPARABLE: $failure" -ForegroundColor Red
+    }
+}
+if ($regressionFailures.Count -gt 0 -or $stabilityFailures.Count -gt 0 -or $compatibilityFailures.Count -gt 0) {
     exit 1
 }
