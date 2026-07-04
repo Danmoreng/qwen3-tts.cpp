@@ -84,6 +84,15 @@ def top1_margin(top: list[dict[str, float | int]]) -> float | None:
     return float(top[0]["logit"] - top[1]["logit"])
 
 
+def finite_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    value_float = float(value)
+    if not np.isfinite(value_float):
+        return None
+    return value_float
+
+
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
     aa = a.reshape(-1).astype(np.float64)
     bb = b.reshape(-1).astype(np.float64)
@@ -229,6 +238,64 @@ def logit_evidence(
         "token_a_margin_over_token_b_in_a": float(flat_a[token_a] - flat_a[token_b]),
         "token_b_margin_over_token_a_in_b": float(flat_b[token_b] - flat_b[token_a]),
     }
+
+
+def classify_first_diff(
+    logits: dict[str, Any] | None,
+    near_tie_margin: float,
+    rank_threshold: int,
+) -> dict[str, Any] | None:
+    if logits is None:
+        return None
+
+    margin_a = finite_float(logits.get("top1_margin_a"))
+    margin_b = finite_float(logits.get("top1_margin_b"))
+    max_abs = finite_float(logits.get("max_abs"))
+    token_a_rank_in_b = logits.get("token_a_rank_in_b")
+    token_b_rank_in_a = logits.get("token_b_rank_in_a")
+    token_a_rank_in_b = int(token_a_rank_in_b) if token_a_rank_in_b is not None else None
+    token_b_rank_in_a = int(token_b_rank_in_a) if token_b_rank_in_a is not None else None
+
+    margins = [margin for margin in (margin_a, margin_b) if margin is not None]
+    min_margin = min(margins) if margins else None
+    exact_tie_a = margin_a is not None and margin_a == 0.0
+    exact_tie_b = margin_b is not None and margin_b == 0.0
+    near_tie_a = margin_a is not None and margin_a <= near_tie_margin
+    near_tie_b = margin_b is not None and margin_b <= near_tie_margin
+    cross_rank_close = (
+        token_a_rank_in_b is not None
+        and token_b_rank_in_a is not None
+        and token_a_rank_in_b <= rank_threshold
+        and token_b_rank_in_a <= rank_threshold
+    )
+
+    if exact_tie_a or exact_tie_b:
+        category = "exact_tie"
+    elif cross_rank_close and (near_tie_a or near_tie_b):
+        category = "near_tie_token_swap"
+    elif near_tie_a or near_tie_b:
+        category = "near_tie"
+    elif cross_rank_close:
+        category = "token_swap"
+    else:
+        category = "logit_drift"
+
+    result: dict[str, Any] = {
+        "category": category,
+        "near_tie_margin": near_tie_margin,
+        "rank_threshold": rank_threshold,
+        "exact_tie_a": exact_tie_a,
+        "exact_tie_b": exact_tie_b,
+        "near_tie_a": near_tie_a,
+        "near_tie_b": near_tie_b,
+        "cross_rank_close": cross_rank_close,
+        "min_top1_margin": min_margin,
+    }
+    if max_abs is not None:
+        result["max_abs"] = max_abs
+    if min_margin is not None and min_margin > 0.0 and max_abs is not None:
+        result["max_abs_over_min_top1_margin"] = float(max_abs / min_margin)
+    return result
 
 
 def first_diff_step_trajectory(
@@ -516,6 +583,8 @@ def main() -> None:
     parser.add_argument("--label-a", default="a")
     parser.add_argument("--label-b", default="b")
     parser.add_argument("--top-k", type=int, default=8)
+    parser.add_argument("--near-tie-margin", type=float, default=0.02)
+    parser.add_argument("--near-tie-rank-threshold", type=int, default=2)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--expect-match-percent-at-least", type=float, default=None)
     parser.add_argument("--expect-first-diff-frame", type=int, default=None)
@@ -536,19 +605,25 @@ def main() -> None:
         entries_b,
         token_summary["first_diff"],
     )
+    logits = logit_evidence(
+        args.trace_a,
+        entries_a,
+        args.trace_b,
+        entries_b,
+        token_summary["first_diff"],
+        args.top_k,
+    )
     result = {
         "trace_a": str(args.trace_a),
         "trace_b": str(args.trace_b),
         "label_a": args.label_a,
         "label_b": args.label_b,
         "tokens": token_summary,
-        "logits_at_first_diff": logit_evidence(
-            args.trace_a,
-            entries_a,
-            args.trace_b,
-            entries_b,
-            token_summary["first_diff"],
-            args.top_k,
+        "logits_at_first_diff": logits,
+        "first_diff_classification": classify_first_diff(
+            logits,
+            args.near_tie_margin,
+            args.near_tie_rank_threshold,
         ),
         "boundary_tensors_at_first_diff": boundary_evidence(
             args.trace_a,

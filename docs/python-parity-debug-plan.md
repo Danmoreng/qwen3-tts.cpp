@@ -36,7 +36,7 @@ speaker-only trace setup:
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
 | Greedy path | Greedy currently produces invalid/repetitive output and should not be used as the main parity gate until fixed. | Known failing |
 | No-debug performance guard | Alternating clean-baseline/current CUDA timing run showed no regression after debug-only trace hooks: current median `Total generate` was `872.1 ms` vs baseline `882.2 ms` for the 64-token speaker-only benchmark. | Verified |
-| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, code-predictor layer/sub-layer comparisons, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
+| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins and classifications, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, code-predictor layer/sub-layer comparisons, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
 | Benchmark tooling | `scripts/benchmark_parity_smoke.ps1` runs the standard speaker-embedding parity timing smoke, captures logs, parses warm medians, records before/after `nvidia-smi` snapshots when available, and can compare against a saved baseline summary with regression thresholds. | Added |
 
 ## Guiding Rules
@@ -320,6 +320,10 @@ Candidate gates:
 - A CI-safe smoke test that validates tensor shapes and known first-step token IDs.
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
+- `scripts/parity_trace_summary.py` also emits `first_diff_classification`
+  with `exact_tie`, `near_tie_token_swap`, `near_tie`, `token_swap`, or
+  `logit_drift` categories. Defaults are `--near-tie-margin 0.02` and
+  `--near-tie-rank-threshold 2`.
 - `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
@@ -488,6 +492,13 @@ Targeted BF16 variant experiment:
   guard with threshold `20`, wait `60s`, and 3 repeats. Warm generate median was
   `919.5 ms`, code predictor `523.35 ms`, pipeline `950.0 ms`, RTF `0.2425`;
   pre-run GPU utilization was `0%`.
+- After adding structured first-diff classification, existing traces classify
+  as expected: speaker F32 is `near_tie_token_swap`, ICL F32 is `near_tie`,
+  and both CUDA BF16 traces are `exact_tie`.
+- Follow-up no-debug timing for the classification-only reporting change used
+  the idle-GPU guard with threshold `20`, wait `60s`, and 3 repeats. Warm
+  generate median was `982.25 ms`, code predictor `566.0 ms`, pipeline
+  `1015.5 ms`, RTF `0.259`; pre-run GPU utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
