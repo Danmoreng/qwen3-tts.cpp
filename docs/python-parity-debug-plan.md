@@ -32,6 +32,7 @@ that hurt performance:
 | Python prompt extraction | Faster Qwen3 TTS matches Python prompt codes exactly when extra silence appending is disabled. | Verified |
 | audio.cpp prompt extraction | Reference-code values diverge from Python despite matching frame count. | Verified divergent |
 | qwen.cpp ICL prompt extraction | The speech-tokenizer encoder downsample now mirrors Mimi's causal right `extra_padding`, so `--extract-icl-prompt` emits `75` reference-code frames for the local prompt instead of `74`. VQ quantization is exact when fed Python projected features, but full WAV-to-code extraction still has projection/feature drift versus Python. | Frame count fixed, values still divergent |
+| F32 speech-tokenizer GGUF control | Converting the Python `speech_tokenizer` source with `convert_tokenizer_to_gguf.py --type f32` improves some continuous projection errors but does not improve prompt-code parity overall (`570/1200` vs `571/1200` matches against Python on the local ICL reference). The current GGML CPU conv op still requires F16 conv weights, so this is diagnostic rather than a default candidate. | Tested, not adopted |
 | BF16 GGUF conversion | A mostly-BF16 GGUF can be built directly from the BF16 HuggingFace checkpoint. `scripts/convert_tts_to_gguf.py` also supports repeatable `--keep-f32-regex` overrides for targeted parity model variants without runtime casts. | Implemented locally |
 | Source checkpoint precision | The local `Qwen3-TTS-12Hz-1.7B-Base/model.safetensors` checkpoint stores all `480/480` tensors as BF16, including code-predictor layer-4 MLP weights. `scripts/inspect_safetensors_dtypes.py` makes this check repeatable. Targeted F32 GGUF storage cannot recover precision that is not present in the source checkpoint. | Verified |
 | Speaker-only BF16 generation parity | With Python speaker embedding, corrected non-streaming/base prompt layout, `do_sample=True`, `top_k=1`, and the default F32 talker KV cache, the 10-frame fixture matches Python F32 exactly (`160/160`). | Verified |
@@ -854,6 +855,28 @@ Targeted BF16 variant experiment:
   passed with no failures under `10%` thresholds: warm generate median
   `864.4 ms` (`-0.73%`), pipeline `888.0 ms` (`-1.66%`), RTF `0.227`
   (`-1.30%`).
+- F32 speech-tokenizer GGUF control: converted the same local Python
+  `speech_tokenizer` source with
+  `python .\scripts\convert_tokenizer_to_gguf.py --input
+  C:\Development\Qwen3TTSDev\audio.cpp\models\Qwen3-TTS-12Hz-1.7B-Base
+  --output benchmark_output\f32_tokenizer_modeldir\qwen-tokenizer-12hz-F32.gguf
+  --type f32`. The targeted Golden test shows `quantize_projected` remains
+  exact for Python projected features. Full `project()` improves continuous
+  projection error versus the BF16 tokenizer GGUF (`semantic rmse 0.0568029`
+  vs `0.0786482`; `acoustic rmse 0.0203045` vs `0.0215511`), but final VQ code
+  parity is worse on the same Python `model_input_values` (`196/1200`
+  mismatches vs `176/1200`). On the real `--extract-icl-prompt` path, the F32
+  tokenizer fixes the previous first mismatch at frame `0`, codebook `8`, but
+  total prompt-code parity is essentially unchanged/slightly worse: `570/1200`
+  matches (`47.50%`) versus the BF16 tokenizer's `571/1200` (`47.58%`). Prompt
+  encoder timing was similar (`645 ms` F32 vs `618 ms` BF16 for the local
+  reference clip). A same-session speaker-only timing smoke with the F32
+  tokenizer modeldir showed no regression in warm medians, but the comparison is
+  diagnostic because `benchmark_parity_smoke.ps1 -RequireComparableBaseline`
+  correctly flags the different `ModelDir` values as incomparable. Conclusion:
+  keep the BF16 tokenizer GGUF default and keep using Python reference codes for
+  transformer ICL parity; fixing extracted-code parity likely needs a conv or
+  feature-extraction change, not merely F32 GGUF storage.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1
