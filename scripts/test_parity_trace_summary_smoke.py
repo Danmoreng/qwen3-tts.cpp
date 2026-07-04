@@ -58,6 +58,11 @@ def make_synthetic_traces(root: Path) -> tuple[Path, Path]:
     write_trace_entry(trace_a, rows_a, "frame000_talker_hidden.f32.bin", "f32", hidden_a)
     write_trace_entry(trace_b, rows_b, "frame000_talker_hidden.f32.bin", "f32", hidden_b)
 
+    talker_layer_a = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+    talker_layer_b = np.array([0.0, 1.0, 2.6, 3.0], dtype=np.float32)
+    write_trace_entry(trace_a, rows_a, "frame000_talker_layer00_hidden.f32.bin", "f32", talker_layer_a)
+    write_trace_entry(trace_b, rows_b, "frame000_talker_layer00_hidden.f32.bin", "f32", talker_layer_b)
+
     projected_a = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
     projected_b = np.array([[1.0, 0.0, 0.0, 0.25]], dtype=np.float32)
     write_trace_entry(trace_a, rows_a, "frame000_codepred_step05_projected.f32.bin", "f32", projected_a)
@@ -144,6 +149,9 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
     category = summary["first_diff_classification"]["category"]
     first_diff = summary["tokens"]["first_diff"]
     boundary_hidden = summary["boundary_tensors_at_first_diff"]["frame000_talker_hidden.f32.bin"]
+    talker_layer = summary["talker_layer_tensors_at_first_diff"]["tensors"][
+        "frame000_talker_layer00_hidden.f32.bin"
+    ]
     layer_projected = summary["codepred_layer_tensors_at_first_diff"]["tensors"][
         "frame000_codepred_step05_projected.f32.bin"
     ]
@@ -153,6 +161,7 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
     ratio = summary["first_diff_classification"]["max_abs_over_min_top1_margin"]
     hotspots = summary["first_diff_drift_hotspots"]
     assert_close(boundary_hidden["max_abs"], 0.5, "boundary max_abs")
+    assert_close(talker_layer["max_abs"], 0.6, "talker layer max_abs")
     assert_close(layer_projected["max_abs"], 0.25, "projected max_abs")
     assert_close(layer_hidden["max_abs"], 0.75, "layer hidden max_abs")
     if not hotspots:

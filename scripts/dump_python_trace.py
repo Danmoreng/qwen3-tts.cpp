@@ -413,6 +413,22 @@ def main() -> None:
             hidden,
             "f32",
         )
+        frame_hidden_layers = talker_result.hidden_states[frame][0]
+        for layer_idx, layer_hidden in enumerate(frame_hidden_layers[1:-1]):
+            save_tensor(
+                trace_dir,
+                manifest,
+                f"frame{frame:03d}_talker_layer{layer_idx:02d}_hidden.f32.bin",
+                layer_hidden[:, -1, :].reshape(-1),
+                "f32",
+            )
+        save_tensor(
+            trace_dir,
+            manifest,
+            f"frame{frame:03d}_talker_final_hidden.f32.bin",
+            frame_hidden_layers[-1][:, -1, :].reshape(-1),
+            "f32",
+        )
 
         cb0_embd = talker.get_input_embeddings()(cb0_token.view(1, 1))
         cp_input_hidden = hidden.view(1, 1, -1)

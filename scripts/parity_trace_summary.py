@@ -483,6 +483,37 @@ def boundary_evidence(
     return tensors
 
 
+def talker_layer_evidence(
+    trace_a: Path,
+    entries_a: dict[str, Any],
+    trace_b: Path,
+    entries_b: dict[str, Any],
+    first_diff: dict[str, int] | None,
+) -> dict[str, Any] | None:
+    if first_diff is None:
+        return None
+
+    frame = first_diff["frame"]
+    candidates = [
+        f"frame{frame:03d}_talker_layer{layer_idx:02d}_hidden.f32.bin"
+        for layer_idx in range(128)
+    ]
+    candidates.append(f"frame{frame:03d}_talker_final_hidden.f32.bin")
+
+    tensors: dict[str, Any] = {}
+    for name in candidates:
+        if name not in entries_a or name not in entries_b:
+            continue
+        a = load_entry(trace_a, entries_a, name)
+        b = load_entry(trace_b, entries_b, name)
+        tensors[name] = compare_arrays(a, b)
+
+    return {
+        "frame": frame,
+        "tensors": tensors,
+    }
+
+
 def codepred_layer_evidence(
     trace_a: Path,
     entries_a: dict[str, Any],
@@ -526,6 +557,7 @@ def codepred_layer_evidence(
 def drift_hotspots(
     logits: dict[str, Any] | None,
     boundary: dict[str, Any] | None,
+    talker_layers: dict[str, Any] | None,
     codepred_layers: dict[str, Any] | None,
     limit: int,
 ) -> list[dict[str, Any]]:
@@ -553,6 +585,13 @@ def drift_hotspots(
         for name, metrics in boundary.items():
             if isinstance(metrics, dict):
                 add_row("boundary_tensors_at_first_diff", name, metrics)
+
+    if talker_layers is not None:
+        tensors = talker_layers.get("tensors")
+        if isinstance(tensors, dict):
+            for name, metrics in tensors.items():
+                if isinstance(metrics, dict):
+                    add_row("talker_layer_tensors_at_first_diff", name, metrics)
 
     if codepred_layers is not None:
         tensors = codepred_layers.get("tensors")
@@ -694,6 +733,13 @@ def main() -> None:
         entries_b,
         token_summary["first_diff"],
     )
+    talker_layers = talker_layer_evidence(
+        args.trace_a,
+        entries_a,
+        args.trace_b,
+        entries_b,
+        token_summary["first_diff"],
+    )
     codepred_layers = codepred_layer_evidence(
         args.trace_a,
         entries_a,
@@ -714,8 +760,9 @@ def main() -> None:
             args.near_tie_rank_threshold,
         ),
         "boundary_tensors_at_first_diff": boundary,
+        "talker_layer_tensors_at_first_diff": talker_layers,
         "codepred_layer_tensors_at_first_diff": codepred_layers,
-        "first_diff_drift_hotspots": drift_hotspots(logits, boundary, codepred_layers, args.hotspot_limit),
+        "first_diff_drift_hotspots": drift_hotspots(logits, boundary, talker_layers, codepred_layers, args.hotspot_limit),
         "first_diff_step_trajectory_summary": summarize_first_diff_step_trajectory(
             trajectory,
             token_summary["first_diff"],

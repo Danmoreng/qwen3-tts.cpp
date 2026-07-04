@@ -294,7 +294,10 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        if (!forward_step(step_embd.data(), n_past, logits)) {
+        const int32_t next_frame = frame + 1;
+        const int32_t trace_step_frame =
+            transformer_internal::debug_trace_should_dump_frame(trace_cfg, next_frame) ? next_frame : -1;
+        if (!forward_step(step_embd.data(), n_past, logits, nullptr, trace_step_frame)) {
             return false;
         }
 #ifdef QWEN3_TTS_TIMING

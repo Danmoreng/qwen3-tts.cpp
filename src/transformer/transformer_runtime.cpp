@@ -165,8 +165,11 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
             snprintf(tensor_name, sizeof(tensor_name), "talker_prefill_layer%02d_hidden", il);
             snprintf(out_name, sizeof(out_name), "talker_prefill_layer%02d_hidden.f32.bin", il);
             dump_last_token_f32(tensor_name, out_name);
+            snprintf(out_name, sizeof(out_name), "frame000_talker_layer%02d_hidden.f32.bin", il);
+            dump_last_token_f32(tensor_name, out_name);
         }
         dump_last_token_f32("hidden_states", "talker_prefill_final_hidden.f32.bin");
+        dump_last_token_f32("hidden_states", "frame000_talker_final_hidden.f32.bin");
     }
 
 #ifdef QWEN3_TTS_TIMING
@@ -237,7 +240,8 @@ bool TTSTransformer::forward_text(const int32_t * text_tokens, int32_t n_tokens,
 
 bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
                                   std::vector<float> & output,
-                                  std::vector<float> * hidden_out) {
+                                  std::vector<float> * hidden_out,
+                                  int32_t trace_frame) {
     if (!impl_->model.ctx) {
         error_msg_ = "Model not loaded";
         return false;
@@ -341,6 +345,45 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
         return false;
     }
 
+    const auto & trace_cfg = transformer_internal::get_debug_trace_config();
+    if (transformer_internal::debug_trace_should_dump_frame(trace_cfg, trace_frame)) {
+        auto dump_tensor_f32 = [&](const char * tensor_name, const char * out_name) {
+            struct ggml_tensor * tensor = ggml_graph_get_tensor(gf, tensor_name);
+            if (!tensor) {
+                return;
+            }
+            const size_t count = (size_t) ggml_nelements(tensor);
+            std::vector<float> all(count);
+            if (tensor->type == GGML_TYPE_F32) {
+                ggml_backend_tensor_get(tensor, all.data(), 0, count * sizeof(float));
+            } else if (tensor->type == GGML_TYPE_F16) {
+                std::vector<ggml_fp16_t> tmp(count);
+                ggml_backend_tensor_get(tensor, tmp.data(), 0, count * sizeof(ggml_fp16_t));
+                ggml_fp16_to_fp32_row(tmp.data(), all.data(), (int64_t) count);
+            } else if (tensor->type == GGML_TYPE_BF16) {
+                std::vector<ggml_bf16_t> tmp(count);
+                ggml_backend_tensor_get(tensor, tmp.data(), 0, count * sizeof(ggml_bf16_t));
+                ggml_bf16_to_fp32_row(tmp.data(), all.data(), (int64_t) count);
+            } else {
+                return;
+            }
+            transformer_internal::debug_trace_write_bin(trace_cfg, out_name, all.data(), count, "f32",
+                                                        {(int64_t) count});
+        };
+
+        const int32_t n_layer = impl_->model.config.n_layers;
+        for (int32_t il = 0; il < n_layer; ++il) {
+            char tensor_name[96];
+            char out_name[128];
+            snprintf(tensor_name, sizeof(tensor_name), "talker_step_layer%02d_hidden", il);
+            snprintf(out_name, sizeof(out_name), "frame%03d_talker_layer%02d_hidden.f32.bin", trace_frame, il);
+            dump_tensor_f32(tensor_name, out_name);
+        }
+        char final_name[128];
+        snprintf(final_name, sizeof(final_name), "frame%03d_talker_final_hidden.f32.bin", trace_frame);
+        dump_tensor_f32("hidden_states", final_name);
+    }
+
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
@@ -385,7 +428,7 @@ bool TTSTransformer::forward_codec(int32_t codec_token, int32_t n_past,
         return false;
     }
 
-    return forward_step(codec_row.data(), n_past, output, nullptr);
+    return forward_step(codec_row.data(), n_past, output, nullptr, -1);
 }
 
 } // namespace qwen3_tts

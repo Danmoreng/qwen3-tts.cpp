@@ -127,7 +127,8 @@ public:
 
     bool forward_step(const float * step_embd, int32_t n_past,
                       std::vector<float> & output,
-                      std::vector<float> * hidden_out = nullptr);
+                      std::vector<float> * hidden_out = nullptr,
+                      int32_t trace_frame = -1);
     
     // Get hidden states from last forward pass (for code predictor)
     bool get_hidden_states(std::vector<float> & hidden) const;
