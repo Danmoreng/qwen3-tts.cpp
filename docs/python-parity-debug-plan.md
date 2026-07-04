@@ -314,6 +314,13 @@ Current result:
   `ffn_out` `0.138855` and layer `26` residual hidden `0.104679`. This points
   at normalization of accumulated late talker residual drift as the strongest
   local amplifier, not a fresh code-predictor structural mismatch.
+- A targeted experiment that set talker flash-attention precision to
+  `GGML_PREC_F32`, mirroring the code-predictor step path, produced identical
+  fixture summaries. Speaker-only stayed at `93.75%` with first diff
+  frame `9`, codebook `6`, logit max absolute drift `0.044123`; ICL stayed at
+  `56.25%` with first diff frame `0`, codebook `8`, logit max absolute drift
+  `0.036032`. Do not keep that hot-path precision change without a separate
+  reason.
 - First-diff step trajectory for codebook `6`:
   - Frames `0..8` have matching top tokens at the same codebook/step.
   - The smallest earlier Python top-1 margin is frame `6` at `0.108820`; the frame `9` Python margin collapses to `0.005629`.
@@ -360,6 +367,9 @@ Current result:
     `attn_norm` amplification in ICL: layer `26` max absolute drift
     `1.493149`, layer `27` `1.374287`, layer `25` `1.133768`, and layer `24`
     `0.881341`, before layer `26` residual hidden at `0.445413`.
+  - The talker flash-attention `GGML_PREC_F32` experiment also left the ICL
+    first diff and logit drift unchanged, so this is not the current ICL
+    parity lever.
 
 ## Phase 6: Regression Gates
 
@@ -649,6 +659,19 @@ Targeted BF16 variant experiment:
   `benchmark_output\perf_parity_smoke_comparable_baseline\summary.json`,
   generate was `+8.42%`, pipeline `+7.95%`, and RTF `+8.10%`; no benchmark
   warnings, stability failures, or configured regression thresholds failed.
+- A targeted talker flash-attention precision experiment set the talker
+  `ggml_flash_attn_ext` nodes to `GGML_PREC_F32`, matching the code-predictor
+  step path. `run_all_tests.ps1 -ParityFixturesOnly` still passed
+  (`PASS: 10`, `FAIL: 0`, `SKIP: 4`), but the parity summaries were identical:
+  speaker-only stayed at `93.75%` with first diff frame `9`, codebook `6`,
+  logit max absolute drift `0.044123`; ICL stayed at `56.25%` with first diff
+  frame `0`, codebook `8`, logit max absolute drift `0.036032`. The hot-path
+  code change was reverted. Follow-up no-debug timing on the reverted state used
+  the comparable baseline guard with 4 repeats: warm generate median
+  `862.1 ms`, talker `323.0 ms`, code predictor `485.7 ms`, pipeline
+  `897.0 ms`, and RTF `0.229`. Compared with the baseline summary, generate
+  was `-7.17%`, pipeline `-7.33%`, and RTF `-7.29%`; no benchmark warnings,
+  stability failures, or configured regression thresholds failed.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1
