@@ -675,6 +675,19 @@ Targeted BF16 variant experiment:
   pipeline `965.0 ms`, RTF `0.246`. Compatibility was `IsComparable=true`, no
   benchmark warnings or stability failures were emitted, and the current run was
   within `-0.08%` generate and `-0.31%` pipeline of the fresh baseline.
+- The parity fixture metadata gate now also validates the sampling contract used
+  for the current Python-vs-C++ oracle: Python `DoSample=true`/`DType=float32`
+  and C++ `Temperature=1.0`, `TopK=1`, `TopP=1.0`, `Seed=0`. This keeps the
+  fixture gate on the deterministic top-k sampling path and prevents accidental
+  reuse of the known-failing greedy special case as a parity signal.
+  `run_all_tests.ps1 -ParityFixturesOnly` passed with the tightened sidecar
+  checks (`PASS: 10`, `FAIL: 0`, `SKIP: 4`). Follow-up comparable no-debug
+  timing used the metadata-bearing baseline with `-RequireComparableBaseline`:
+  warm generate median `910.6 ms`, code predictor `520.6 ms`, pipeline
+  `935.0 ms`, RTF `0.239`; compatibility was `IsComparable=true`, there were
+  no benchmark warnings or stability failures, and deltas versus baseline were
+  `-1.95%` generate, `-0.93%` code predictor, `-3.41%` pipeline, and `-3.24%`
+  RTF.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

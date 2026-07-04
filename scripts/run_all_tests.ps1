@@ -188,6 +188,24 @@ function Test-ParityFixtureMetadata(
             if ($metadata.FixtureMode -ne $expectedMode) {
                 $failures.Add("FixtureMode expected $expectedMode, got $($metadata.FixtureMode)")
             }
+            if ($metadata.Python.DoSample -ne $true) {
+                $failures.Add("Python.DoSample expected true, got $($metadata.Python.DoSample)")
+            }
+            if ($metadata.Python.DType -ne "float32") {
+                $failures.Add("Python.DType expected float32, got $($metadata.Python.DType)")
+            }
+            if ([double]$metadata.Cpp.Temperature -ne 1.0) {
+                $failures.Add("Cpp.Temperature expected 1.0, got $($metadata.Cpp.Temperature)")
+            }
+            if ([int]$metadata.Cpp.TopK -ne 1) {
+                $failures.Add("Cpp.TopK expected 1, got $($metadata.Cpp.TopK)")
+            }
+            if ([double]$metadata.Cpp.TopP -ne 1.0) {
+                $failures.Add("Cpp.TopP expected 1.0, got $($metadata.Cpp.TopP)")
+            }
+            if ([int]$metadata.Cpp.Seed -ne 0) {
+                $failures.Add("Cpp.Seed expected 0, got $($metadata.Cpp.Seed)")
+            }
             if ($metadata.Inputs.Text -ne $fixture.text) {
                 $failures.Add("Inputs.Text did not match fixture text")
             }

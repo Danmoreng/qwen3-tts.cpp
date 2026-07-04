@@ -154,6 +154,29 @@ def validate_payload(payload: dict[str, Any], expected_mode: str, fixture: dict[
         if inputs.get("MaxFrames") != fixture["max_frames"]:
             failures.append(f"Inputs.MaxFrames: expected {fixture['max_frames']}, got {inputs.get('MaxFrames')!r}")
 
+    python = payload.get("Python")
+    if not isinstance(python, dict):
+        failures.append("Python: expected object")
+    else:
+        if python.get("DoSample") is not True:
+            failures.append(f"Python.DoSample: expected True, got {python.get('DoSample')!r}")
+        if python.get("DType") != "float32":
+            failures.append(f"Python.DType: expected 'float32', got {python.get('DType')!r}")
+
+    cpp = payload.get("Cpp")
+    if not isinstance(cpp, dict):
+        failures.append("Cpp: expected object")
+    else:
+        expected_cpp = {
+            "Temperature": 1.0,
+            "TopK": 1,
+            "TopP": 1.0,
+            "Seed": 0,
+        }
+        for field, expected_value in expected_cpp.items():
+            if cpp.get(field) != expected_value:
+                failures.append(f"Cpp.{field}: expected {expected_value!r}, got {cpp.get(field)!r}")
+
     expect = fixture["expect"]
     metadata_expect = payload.get("Expectations")
     if not isinstance(metadata_expect, dict):
