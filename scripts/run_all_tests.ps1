@@ -568,6 +568,26 @@ if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
     Add-Skip "Decoder (binary/model/codes missing)"
 }
 
+Write-Section "Section 1b: Lightweight Helper Smokes"
+
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+$speechTokenizerPaddingSmokeScript = Join-Path $repoRoot "scripts/test_speech_tokenizer_padding_smoke.py"
+if ($null -eq $pythonCmd) {
+    Add-Skip "Speech tokenizer padding smoke (python missing)"
+} elseif (-not (Test-Path $speechTokenizerPaddingSmokeScript)) {
+    Add-Fail "Speech tokenizer padding smoke (script missing)"
+} else {
+    $speechTokenizerPaddingSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $speechTokenizerPaddingSmokeScript
+    )
+    if ($speechTokenizerPaddingSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Speech tokenizer padding smoke"
+    } else {
+        Add-Fail "Speech tokenizer padding smoke (exit code: $($speechTokenizerPaddingSmokeRes.ExitCode))"
+        Write-OutputTail -output $speechTokenizerPaddingSmokeRes.Output
+    }
+}
+
 Write-Section "Section 2: CLI Output Regression Checks (0.6B)"
 
 if (-not $cliExe) {
