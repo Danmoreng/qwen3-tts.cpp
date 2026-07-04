@@ -119,11 +119,11 @@ static inline int32_t transformer_sample_top_k_p(float * logits,
                                                  const int32_t * history,
                                                  int32_t n_history,
                                                  transformer_sampling_state & sampling) {
+    transformer_apply_repetition_penalty(logits, vocab_size, history, n_history, repetition_penalty);
+
     if (temperature <= 0.0f) {
         return transformer_argmax(logits, vocab_size);
     }
-
-    transformer_apply_repetition_penalty(logits, vocab_size, history, n_history, repetition_penalty);
 
     const float inv_temp = 1.0f / temperature;
     for (int32_t i = 0; i < vocab_size; ++i) {

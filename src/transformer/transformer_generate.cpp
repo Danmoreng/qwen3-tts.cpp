@@ -160,12 +160,10 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             }
         }
 
-        if (temperature > 0.0f) {
-            transformer_apply_repetition_penalty(logits.data(), cfg.codec_vocab_size,
-                                                 generated_cb0_tokens.data(),
-                                                 (int32_t) generated_cb0_tokens.size(),
-                                                 repetition_penalty);
-        }
+        transformer_apply_repetition_penalty(logits.data(), cfg.codec_vocab_size,
+                                             generated_cb0_tokens.data(),
+                                             (int32_t) generated_cb0_tokens.size(),
+                                             repetition_penalty);
 
         if (trace_frame) {
             char post_rules_name[128];
