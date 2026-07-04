@@ -584,6 +584,20 @@ def check_expectations(result: dict[str, Any], args: argparse.Namespace) -> list
                 args.expect_first_diff_category,
             )
 
+    if args.expect_first_diff_max_abs_over_margin_at_least is not None:
+        classification = result.get("first_diff_classification")
+        if classification is None:
+            failures.append("first_diff_classification: missing; cannot check max_abs_over_min_top1_margin")
+        else:
+            ratio = classification.get("max_abs_over_min_top1_margin")
+            if ratio is None:
+                failures.append("first_diff max_abs_over_min_top1_margin: missing")
+            elif ratio < args.expect_first_diff_max_abs_over_margin_at_least:
+                failures.append(
+                    "first_diff max_abs_over_min_top1_margin: "
+                    f"expected >= {args.expect_first_diff_max_abs_over_margin_at_least}, got {ratio}"
+                )
+
     return failures
 
 
@@ -609,6 +623,7 @@ def main() -> None:
         choices=["exact_tie", "near_tie_token_swap", "near_tie", "token_swap", "logit_drift"],
         default=None,
     )
+    parser.add_argument("--expect-first-diff-max-abs-over-margin-at-least", type=float, default=None)
     args = parser.parse_args()
 
     entries_a = load_manifest(args.trace_a)

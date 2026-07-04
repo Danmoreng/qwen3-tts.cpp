@@ -73,34 +73,44 @@ def make_synthetic_traces(root: Path) -> tuple[Path, Path]:
     return trace_a, trace_b
 
 
-def run_summary(script: Path, trace_a: Path, trace_b: Path, output: Path, category: str) -> subprocess.CompletedProcess[str]:
+def run_summary(
+    script: Path,
+    trace_a: Path,
+    trace_b: Path,
+    output: Path,
+    category: str,
+    min_ratio: float = 1.0,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(script),
+        "--trace-a",
+        str(trace_a),
+        "--trace-b",
+        str(trace_b),
+        "--label-a",
+        "synthetic_a",
+        "--label-b",
+        "synthetic_b",
+        "--output",
+        str(output),
+        "--expect-match-percent-at-least",
+        "93.0",
+        "--expect-first-diff-frame",
+        "0",
+        "--expect-first-diff-codebook",
+        "6",
+        "--expect-first-diff-token-a",
+        "10",
+        "--expect-first-diff-token-b",
+        "11",
+        "--expect-first-diff-category",
+        category,
+        "--expect-first-diff-max-abs-over-margin-at-least",
+        f"{min_ratio}",
+    ]
     return subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--trace-a",
-            str(trace_a),
-            "--trace-b",
-            str(trace_b),
-            "--label-a",
-            "synthetic_a",
-            "--label-b",
-            "synthetic_b",
-            "--output",
-            str(output),
-            "--expect-match-percent-at-least",
-            "93.0",
-            "--expect-first-diff-frame",
-            "0",
-            "--expect-first-diff-codebook",
-            "6",
-            "--expect-first-diff-token-a",
-            "10",
-            "--expect-first-diff-token-b",
-            "11",
-            "--expect-first-diff-category",
-            category,
-        ],
+        command,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -140,14 +150,17 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
     layer_hidden = summary["codepred_layer_tensors_at_first_diff"]["tensors"][
         "frame000_codepred_step05_layer00_hidden.f32.bin"
     ]
+    ratio = summary["first_diff_classification"]["max_abs_over_min_top1_margin"]
     assert_close(boundary_hidden["max_abs"], 0.5, "boundary max_abs")
     assert_close(layer_projected["max_abs"], 0.25, "projected max_abs")
     assert_close(layer_hidden["max_abs"], 0.5, "layer hidden max_abs")
+    if ratio < 1.0:
+        raise AssertionError(f"expected max_abs_over_min_top1_margin >= 1.0, got {ratio}")
     print(
         "Synthetic parity summary: "
         f"frame={first_diff['frame']} codebook={first_diff['codebook']} "
         f"token_a={first_diff['token_a']} token_b={first_diff['token_b']} "
-        f"category={category} boundary_max_abs={boundary_hidden['max_abs']}"
+        f"category={category} boundary_max_abs={boundary_hidden['max_abs']} ratio={ratio}"
     )
 
     bad = run_summary(summary_script, trace_a, trace_b, output_dir / "bad_summary.json", "logit_drift")
@@ -155,6 +168,19 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
         print(bad.stdout)
         raise SystemExit("negative category expectation unexpectedly passed")
     print("Negative category expectation failed as expected.")
+
+    bad_ratio = run_summary(
+        summary_script,
+        trace_a,
+        trace_b,
+        output_dir / "bad_ratio_summary.json",
+        "near_tie_token_swap",
+        min_ratio=100.0,
+    )
+    if bad_ratio.returncode == 0:
+        print(bad_ratio.stdout)
+        raise SystemExit("negative ratio expectation unexpectedly passed")
+    print("Negative ratio expectation failed as expected.")
 
 
 def assert_close(actual: float, expected: float, label: str, tol: float = 1e-6) -> None:

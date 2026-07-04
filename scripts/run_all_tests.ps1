@@ -689,6 +689,7 @@ if (-not $cliExe) {
         "-ExpectFirstDiffCosineAtLeast", (ConvertTo-InvariantText $speakerExpect.first_diff_cosine_at_least),
         "-ExpectFirstDiffMaxAbsAtMost", (ConvertTo-InvariantText $speakerExpect.first_diff_max_abs_at_most),
         "-ExpectFirstDiffCategory", $speakerExpect.first_diff_category,
+        "-ExpectFirstDiffMaxAbsOverMarginAtLeast", (ConvertTo-InvariantText $speakerExpect.first_diff_max_abs_over_margin_at_least),
         "-RequireAssets"
     )
     if ($speakerParityRes.ExitCode -eq 0) {
@@ -722,6 +723,7 @@ if (-not $cliExe) {
         "-ExpectFirstDiffCosineAtLeast", (ConvertTo-InvariantText $iclExpect.first_diff_cosine_at_least),
         "-ExpectFirstDiffMaxAbsAtMost", (ConvertTo-InvariantText $iclExpect.first_diff_max_abs_at_most),
         "-ExpectFirstDiffCategory", $iclExpect.first_diff_category,
+        "-ExpectFirstDiffMaxAbsOverMarginAtLeast", (ConvertTo-InvariantText $iclExpect.first_diff_max_abs_over_margin_at_least),
         "-RequireAssets"
     )
     if ($iclParityRes.ExitCode -eq 0) {

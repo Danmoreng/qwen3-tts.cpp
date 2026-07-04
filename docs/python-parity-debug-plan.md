@@ -327,7 +327,8 @@ Candidate gates:
   with `exact_tie`, `near_tie_token_swap`, `near_tie`, `token_swap`, or
   `logit_drift` categories. Defaults are `--near-tie-margin 0.02` and
   `--near-tie-rank-threshold 2`; local gates can enforce it with
-  `--expect-first-diff-category`.
+  `--expect-first-diff-category` and
+  `--expect-first-diff-max-abs-over-margin-at-least`.
 - `scripts/benchmark_parity_smoke.ps1` is the local JSON-reporting primitive for repeat timing smokes and should be used before/after C++ hot-path parity experiments. Use `-BaselineSummary` plus `-MaxGenerateRegressionPercent`, `-MaxPipelineRegressionPercent`, and `-MaxRtfRegressionPercent` when a saved baseline is available.
 - `scripts/inspect_safetensors_dtypes.py` is the local source-checkpoint dtype
   verifier for deciding whether targeted F32 GGUF storage experiments can be
@@ -366,14 +367,11 @@ Success criteria:
 
 ## Recommended Next Step
 
-Continue Phase 5 and classify the frame `9`, codebook `6` near-tie.
-
-Use the raw-logit trace for frame `9`, codebook `6`, using:
-
-- Python speaker embedding
-- `top_k=1`
-- `temperature=1.0`
-- BF16 model path where available
+The frame `9`, codebook `6` speaker-only divergence is now classified and gated
+as a late `near_tie_token_swap`, and the ICL first divergence is gated as
+`near_tie`. Keep the current CPU F32 trace as the structural reference and use
+the parity fixtures as regression gates while pursuing any future hot-path
+changes.
 
 Do not add broad F32 casts as a parity fix unless a targeted benchmark shows the
 tradeoff is acceptable. The current evidence points to a late near-tie caused by
@@ -522,6 +520,13 @@ Targeted BF16 variant experiment:
   idle-GPU guard and 3 repeats: warm generate median `956.4 ms`, code predictor
   `540.55 ms`, pipeline `999.5 ms`, RTF `0.255`; pre-run GPU utilization was
   `0%`.
+- The parity gate now also asserts that first-diff logit max-absolute drift is
+  at least as large as the smallest local top-1 margin, making the near-tie
+  classification numeric rather than just categorical.
+  `run_all_tests.ps1 -ParityFixturesOnly` passed with `PASS: 3`, `FAIL: 0`,
+  `SKIP: 4`. Follow-up no-debug timing used the idle-GPU guard and 3 repeats:
+  warm generate median `980.7 ms`, code predictor `559.95 ms`, pipeline
+  `1027.0 ms`, RTF `0.262`; pre-run GPU utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

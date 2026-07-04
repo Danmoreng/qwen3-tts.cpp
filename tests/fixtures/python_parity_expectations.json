@@ -14,7 +14,8 @@
         "first_diff_token_b": 9,
         "first_diff_cosine_at_least": 0.99999,
         "first_diff_max_abs_at_most": 0.05,
-        "first_diff_category": "near_tie_token_swap"
+        "first_diff_category": "near_tie_token_swap",
+        "first_diff_max_abs_over_margin_at_least": 1.0
       }
     },
     "icl": {
@@ -29,7 +30,8 @@
         "first_diff_token_b": 1481,
         "first_diff_cosine_at_least": 0.99999,
         "first_diff_max_abs_at_most": 0.05,
-        "first_diff_category": "near_tie"
+        "first_diff_category": "near_tie",
+        "first_diff_max_abs_over_margin_at_least": 1.0
       }
     }
   }
