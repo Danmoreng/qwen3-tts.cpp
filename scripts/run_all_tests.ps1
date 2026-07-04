@@ -594,9 +594,10 @@ if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
     Add-Skip "Decoder (binary/model/codes missing)"
 }
 
-Write-Section "Section 1b: Python Parity Trace Smoke"
+Write-Section "Section 1b: Python Parity Helper Smokes"
 
 $parityTraceSmokeScript = Join-Path $repoRoot "scripts/test_parity_trace_summary_smoke.py"
+$parityDtypeSmokeScript = Join-Path $repoRoot "scripts/test_inspect_safetensors_dtypes_smoke.py"
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCmd) {
     Add-Skip "Python parity trace smoke (python missing)"
@@ -613,6 +614,27 @@ if ($null -eq $pythonCmd) {
     } else {
         Add-Fail "Python parity trace smoke (exit code: $($parityTraceSmokeRes.ExitCode))"
         Write-OutputTail -output $parityTraceSmokeRes.Output
+    }
+}
+
+if ($null -eq $pythonCmd) {
+    Add-Skip "Safetensors dtype smoke (python missing)"
+} elseif (-not (Test-Path $parityDtypeSmokeScript)) {
+    Add-Fail "Safetensors dtype smoke (script missing)"
+} else {
+    $parityDtypeSmokeOut = Join-Path $resolvedOutputDir "safetensors_dtype_smoke"
+    $parityDtypeSmokeRes = Invoke-CommandCapture -exe $pythonCmd.Source -commandArgs @(
+        $parityDtypeSmokeScript,
+        "--output-dir", $parityDtypeSmokeOut
+    )
+    if ($parityDtypeSmokeRes.ExitCode -eq 0) {
+        Add-Pass "Safetensors dtype smoke"
+    } elseif ($parityDtypeSmokeRes.ExitCode -eq 77) {
+        Add-Skip "Safetensors dtype smoke (Python deps missing)"
+        Write-OutputTail -output $parityDtypeSmokeRes.Output -maxLines 5
+    } else {
+        Add-Fail "Safetensors dtype smoke (exit code: $($parityDtypeSmokeRes.ExitCode))"
+        Write-OutputTail -output $parityDtypeSmokeRes.Output
     }
 }
 

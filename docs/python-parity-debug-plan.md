@@ -321,6 +321,10 @@ Candidate gates:
   smoke that validates summary parsing, tensor shapes, first-diff token IDs,
   near-tie classification, boundary/code-predictor tensor comparisons, and
   negative category expectation handling without large model artifacts.
+- `scripts/test_inspect_safetensors_dtypes_smoke.py` is a tiny synthetic
+  safetensors smoke for `scripts/inspect_safetensors_dtypes.py`; it verifies
+  positive BF16 expectations and negative expectation handling without the real
+  checkpoint.
 - `tests/fixtures/python_parity_expectations.json` stores the small checked-in expected first-diff metadata and first-diff classification for local full-model parity fixtures.
 - `scripts/parity_trace_summary.py` is the local JSON-reporting primitive for first-diff gates and supports expected match percentage, first-diff token, cosine, and max-absolute thresholds.
 - `scripts/parity_trace_summary.py` also emits `first_diff_classification`
@@ -527,6 +531,13 @@ Targeted BF16 variant experiment:
   `SKIP: 4`. Follow-up no-debug timing used the idle-GPU guard and 3 repeats:
   warm generate median `980.7 ms`, code predictor `559.95 ms`, pipeline
   `1027.0 ms`, RTF `0.262`; pre-run GPU utilization was `0%`.
+- A synthetic safetensors dtype smoke now covers the helper used to verify that
+  the local source checkpoint is BF16 before targeted F32-storage experiments.
+  `run_all_tests.ps1 -ParityFixturesOnly` passed with helper smokes plus both
+  full fixtures (`PASS: 4`, `FAIL: 0`, `SKIP: 4`). Follow-up no-debug timing
+  used the idle-GPU guard and 3 repeats: warm generate median `853.95 ms`, code
+  predictor `481.2 ms`, pipeline `883.0 ms`, RTF `0.225`; pre-run GPU
+  utilization was `0%`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
