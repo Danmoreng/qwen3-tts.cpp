@@ -64,7 +64,7 @@ def make_synthetic_traces(root: Path) -> tuple[Path, Path]:
     write_trace_entry(trace_b, rows_b, "frame000_codepred_step05_projected.f32.bin", "f32", projected_b)
 
     layer_hidden_a = np.array([[0.0, 1.0, 2.0, 3.0]], dtype=np.float32)
-    layer_hidden_b = np.array([[0.0, 1.0, 2.5, 3.0]], dtype=np.float32)
+    layer_hidden_b = np.array([[0.0, 1.0, 2.75, 3.0]], dtype=np.float32)
     write_trace_entry(trace_a, rows_a, "frame000_codepred_step05_layer00_hidden.f32.bin", "f32", layer_hidden_a)
     write_trace_entry(trace_b, rows_b, "frame000_codepred_step05_layer00_hidden.f32.bin", "f32", layer_hidden_b)
 
@@ -151,16 +151,23 @@ def run_smoke(summary_script: Path, output_dir: Path) -> None:
         "frame000_codepred_step05_layer00_hidden.f32.bin"
     ]
     ratio = summary["first_diff_classification"]["max_abs_over_min_top1_margin"]
+    hotspots = summary["first_diff_drift_hotspots"]
     assert_close(boundary_hidden["max_abs"], 0.5, "boundary max_abs")
     assert_close(layer_projected["max_abs"], 0.25, "projected max_abs")
-    assert_close(layer_hidden["max_abs"], 0.5, "layer hidden max_abs")
+    assert_close(layer_hidden["max_abs"], 0.75, "layer hidden max_abs")
+    if not hotspots:
+        raise AssertionError("expected at least one drift hotspot")
+    if hotspots[0]["tensor"] != "frame000_codepred_step05_layer00_hidden.f32.bin":
+        raise AssertionError(f"expected layer hidden as top hotspot, got {hotspots[0]}")
+    assert_close(hotspots[0]["max_abs"], 0.75, "top hotspot max_abs")
     if ratio < 1.0:
         raise AssertionError(f"expected max_abs_over_min_top1_margin >= 1.0, got {ratio}")
     print(
         "Synthetic parity summary: "
         f"frame={first_diff['frame']} codebook={first_diff['codebook']} "
         f"token_a={first_diff['token_a']} token_b={first_diff['token_b']} "
-        f"category={category} boundary_max_abs={boundary_hidden['max_abs']} ratio={ratio}"
+        f"category={category} boundary_max_abs={boundary_hidden['max_abs']} "
+        f"top_hotspot={hotspots[0]['tensor']} ratio={ratio}"
     )
 
     bad = run_summary(summary_script, trace_a, trace_b, output_dir / "bad_summary.json", "logit_drift")

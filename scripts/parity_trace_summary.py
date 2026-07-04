@@ -523,6 +523,48 @@ def codepred_layer_evidence(
     }
 
 
+def drift_hotspots(
+    logits: dict[str, Any] | None,
+    boundary: dict[str, Any] | None,
+    codepred_layers: dict[str, Any] | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def add_row(source: str, name: str, metrics: dict[str, Any]) -> None:
+        max_abs = finite_float(metrics.get("max_abs"))
+        if max_abs is None:
+            return
+        row: dict[str, Any] = {
+            "source": source,
+            "tensor": name,
+            "max_abs": max_abs,
+        }
+        for key in ("mean_abs", "rmse", "cosine"):
+            value = finite_float(metrics.get(key))
+            if value is not None:
+                row[key] = value
+        rows.append(row)
+
+    if logits is not None:
+        add_row("logits_at_first_diff", logits.get("tensor", "logits"), logits)
+
+    if boundary is not None:
+        for name, metrics in boundary.items():
+            if isinstance(metrics, dict):
+                add_row("boundary_tensors_at_first_diff", name, metrics)
+
+    if codepred_layers is not None:
+        tensors = codepred_layers.get("tensors")
+        if isinstance(tensors, dict):
+            for name, metrics in tensors.items():
+                if isinstance(metrics, dict):
+                    add_row("codepred_layer_tensors_at_first_diff", name, metrics)
+
+    rows.sort(key=lambda row: row["max_abs"], reverse=True)
+    return rows[: max(0, limit)]
+
+
 def check_expectations(result: dict[str, Any], args: argparse.Namespace) -> list[str]:
     failures: list[str] = []
     tokens = result["tokens"]
@@ -608,6 +650,7 @@ def main() -> None:
     parser.add_argument("--label-a", default="a")
     parser.add_argument("--label-b", default="b")
     parser.add_argument("--top-k", type=int, default=8)
+    parser.add_argument("--hotspot-limit", type=int, default=8)
     parser.add_argument("--near-tie-margin", type=float, default=0.02)
     parser.add_argument("--near-tie-rank-threshold", type=int, default=2)
     parser.add_argument("--output", type=Path, default=None)
@@ -644,6 +687,20 @@ def main() -> None:
         token_summary["first_diff"],
         args.top_k,
     )
+    boundary = boundary_evidence(
+        args.trace_a,
+        entries_a,
+        args.trace_b,
+        entries_b,
+        token_summary["first_diff"],
+    )
+    codepred_layers = codepred_layer_evidence(
+        args.trace_a,
+        entries_a,
+        args.trace_b,
+        entries_b,
+        token_summary["first_diff"],
+    )
     result = {
         "trace_a": str(args.trace_a),
         "trace_b": str(args.trace_b),
@@ -656,20 +713,9 @@ def main() -> None:
             args.near_tie_margin,
             args.near_tie_rank_threshold,
         ),
-        "boundary_tensors_at_first_diff": boundary_evidence(
-            args.trace_a,
-            entries_a,
-            args.trace_b,
-            entries_b,
-            token_summary["first_diff"],
-        ),
-        "codepred_layer_tensors_at_first_diff": codepred_layer_evidence(
-            args.trace_a,
-            entries_a,
-            args.trace_b,
-            entries_b,
-            token_summary["first_diff"],
-        ),
+        "boundary_tensors_at_first_diff": boundary,
+        "codepred_layer_tensors_at_first_diff": codepred_layers,
+        "first_diff_drift_hotspots": drift_hotspots(logits, boundary, codepred_layers, args.hotspot_limit),
         "first_diff_step_trajectory_summary": summarize_first_diff_step_trajectory(
             trajectory,
             token_summary["first_diff"],

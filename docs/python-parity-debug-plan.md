@@ -36,7 +36,7 @@ speaker-only trace setup:
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
 | Greedy path | Greedy currently produces invalid/repetitive output and should not be used as the main parity gate until fixed. | Known failing |
 | No-debug performance guard | Alternating clean-baseline/current CUDA timing run showed no regression after debug-only trace hooks: current median `Total generate` was `872.1 ms` vs baseline `882.2 ms` for the 64-token speaker-only benchmark. | Verified |
-| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins and classifications, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, code-predictor layer/sub-layer comparisons, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
+| Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins and classifications, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, code-predictor layer/sub-layer comparisons, ranked first-diff drift hotspots, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
 | Benchmark tooling | `scripts/benchmark_parity_smoke.ps1` runs the standard speaker-embedding parity timing smoke, captures logs, parses warm medians, records before/after `nvidia-smi` snapshots when available, and can compare against a saved baseline summary with regression thresholds. | Added |
 
 ## Guiding Rules
@@ -296,6 +296,11 @@ Current result:
   - MLP/FFN output: max absolute difference `0.019901`
   - layer residual output: max absolute difference `0.017359`
   - This points at accumulated residual/MLP numerical drift rather than a large attention-output mismatch.
+- Ranked first-diff hotspot summaries make the same pattern visible without
+  scanning the full JSON: speaker-only top entries are inherited talker/code
+  predictor input drift (`0.057430` max absolute), first-diff logits
+  (`0.044123`), final hidden (`0.037262`), and then layer-4 FFN output/hidden
+  (`0.019901`/`0.017359`).
 - First-diff step trajectory for codebook `6`:
   - Frames `0..8` have matching top tokens at the same codebook/step.
   - The smallest earlier Python top-1 margin is frame `6` at `0.108820`; the frame `9` Python margin collapses to `0.005629`.
@@ -330,6 +335,10 @@ Current result:
     - post-attention FFN norm: max absolute difference `0.022301`
     - MLP/FFN output: max absolute difference `0.025537`
     - layer residual output: max absolute difference `0.025833`
+  - Ranked first-diff hotspots show larger inherited talker/code-predictor
+    input drift (`0.269569` max absolute), projected prefill drift `0.086384`,
+    final hidden/logits around `0.0367`/`0.0360`, then layer-4 hidden/FFN output
+    around `0.0258`/`0.0255`.
 
 ## Phase 6: Regression Gates
 
@@ -704,6 +713,20 @@ Targeted BF16 variant experiment:
   `+16.07%` generate, `+19.01%` code predictor, `+14.46%` pipeline, `+14.57%`
   RTF. This was a test/smoke validation change only and did not touch the C++
   inference path.
+- `scripts/parity_trace_summary.py` now emits
+  `first_diff_drift_hotspots`, a ranked list of the compared boundary/logit/code
+  predictor tensors by max-absolute drift. The synthetic smoke asserts the top
+  hotspot and negative expectation paths. Regenerated speaker and ICL fixture
+  summaries passed (`PASS: 10`, `FAIL: 0`, `SKIP: 4`) and show the same
+  localization pattern as the hand notes: inherited talker/code-predictor input
+  drift is largest, while code-predictor-local drift peaks at final hidden and
+  layer-4 FFN output/hidden. Follow-up no-debug timing used the comparable
+  baseline with `-RequireComparableBaseline` and produced no benchmark warnings
+  or stability failures: warm generate median `1110.3 ms`, code predictor
+  `622.2 ms`, pipeline `1148.0 ms`, RTF `0.293`; deltas versus baseline were
+  `+19.55%` generate, `+18.40%` code predictor, `+18.60%` pipeline, and
+  `+18.62%` RTF. This was a Python reporting-only change and did not touch the
+  C++ inference path.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.
