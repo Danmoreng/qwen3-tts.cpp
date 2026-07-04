@@ -37,7 +37,7 @@ bool env_flag_enabled(const char * name) {
 
 bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     const auto & cfg = impl_->model.config;
-    const bool use_f32_cache = env_flag_enabled("QWEN3_TTS_TALKER_KV_F32");
+    const bool use_f32_cache = !env_flag_enabled("QWEN3_TTS_TALKER_KV_F16");
     const ggml_type cache_type = use_f32_cache ? GGML_TYPE_F32 : GGML_TYPE_F16;
 
     free_tts_kv_cache(impl_->state.cache);
@@ -68,7 +68,9 @@ bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     impl_->state.cache.v_cache.resize(cfg.n_layers);
 
     if (use_f32_cache) {
-        fprintf(stderr, "  Talker KV cache: F32 (QWEN3_TTS_TALKER_KV_F32 enabled)\n");
+        fprintf(stderr, "  Talker KV cache: F32 (default)\n");
+    } else {
+        fprintf(stderr, "  Talker KV cache: F16 (QWEN3_TTS_TALKER_KV_F16 enabled)\n");
     }
 
     for (int il = 0; il < cfg.n_layers; ++il) {
