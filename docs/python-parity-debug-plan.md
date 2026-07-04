@@ -131,6 +131,7 @@ Baseline comparison command:
   -RequireAssets `
   -BaselineSummary benchmark_output\perf_parity_smoke_baseline\summary.json `
   -MaxGpuUtilizationBeforePercent 20 `
+  -WaitForGpuIdleSeconds 120 `
   -MaxGenerateRegressionPercent 5 `
   -MaxPipelineRegressionPercent 5 `
   -MaxRtfRegressionPercent 5
@@ -141,8 +142,9 @@ The script writes `summary.json` with warm medians, per-repeat details, and GPU
 snapshots. When `-BaselineSummary` is provided, `summary.json` also includes
 per-metric deltas for generate, talker, code predictor, pipeline total, and RTF;
 the script exits non-zero if any enabled threshold is exceeded. Use
-`-MaxGpuUtilizationBeforePercent` to fail fast before inference when another
-process is already saturating the GPU.
+`-MaxGpuUtilizationBeforePercent` to guard against another process saturating
+the GPU before inference; add `-WaitForGpuIdleSeconds` when the benchmark should
+poll briefly for the GPU to become idle before writing a skipped summary.
 
 ## Phase 2: BF16 Model Path
 
@@ -461,8 +463,12 @@ Targeted BF16 variant experiment:
   total generate, so the timing sample is contaminated and not evidence of a
   model-specific regression.
 - `scripts/benchmark_parity_smoke.ps1 -MaxGpuUtilizationBeforePercent` now
-  catches this case before inference; a test run with threshold `50` skipped
-  immediately because pre-run GPU utilization was `98%`.
+  catches this case before inference; add `-WaitForGpuIdleSeconds` to wait for a
+  quiet GPU before skipping. A test run with threshold `50` skipped because
+  pre-run GPU utilization stayed at `98%`.
+- Wait-guard validation with threshold `50`, wait `2s`, poll `1s` saw the GPU
+  settle to `0%` and ran a 3-repeat smoke: warm generate median `1108.05 ms`,
+  pipeline median `1141.0 ms`, RTF median `0.291`.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

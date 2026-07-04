@@ -16,6 +16,8 @@ param(
     [double]$MaxPipelineRegressionPercent = -1.0,
     [double]$MaxRtfRegressionPercent = -1.0,
     [double]$MaxGpuUtilizationBeforePercent = -1.0,
+    [int]$WaitForGpuIdleSeconds = 0,
+    [int]$GpuPollIntervalSeconds = 5,
     [switch]$RequireAssets
 )
 
@@ -23,6 +25,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     $PSNativeCommandUseErrorActionPreference = $false
+}
+if ($WaitForGpuIdleSeconds -lt 0) {
+    throw "-WaitForGpuIdleSeconds must be greater than or equal to 0."
+}
+if ($GpuPollIntervalSeconds -lt 1) {
+    throw "-GpuPollIntervalSeconds must be at least 1."
 }
 
 function Resolve-RepoPath([string]$path) {
@@ -291,6 +299,31 @@ $debugSnapshot = Save-DebugDumpEnv
 Disable-DebugDumpEnv
 $gpuBefore = Get-GpuSnapshot
 $gpuUtilBefore = Get-ObjectNumber $gpuBefore "UtilizationPercent"
+if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
+    $WaitForGpuIdleSeconds -gt 0 -and
+    $null -ne $gpuUtilBefore -and
+    $gpuUtilBefore -gt $MaxGpuUtilizationBeforePercent) {
+    $deadline = (Get-Date).AddSeconds($WaitForGpuIdleSeconds)
+    Write-Host ("GPU utilization before benchmark is {0}%, above threshold {1}%; waiting up to {2}s." -f `
+        ($gpuUtilBefore.ToString("0.###", [Globalization.CultureInfo]::InvariantCulture)),
+        ($MaxGpuUtilizationBeforePercent.ToString("0.###", [Globalization.CultureInfo]::InvariantCulture)),
+        $WaitForGpuIdleSeconds) -ForegroundColor Yellow
+
+    while ((Get-Date) -lt $deadline -and
+        $null -ne $gpuUtilBefore -and
+        $gpuUtilBefore -gt $MaxGpuUtilizationBeforePercent) {
+        $remainingSeconds = [Math]::Max(0, [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds))
+        $sleepSeconds = [Math]::Min($GpuPollIntervalSeconds, [Math]::Max(1, $remainingSeconds))
+        Start-Sleep -Seconds $sleepSeconds
+        $gpuBefore = Get-GpuSnapshot
+        $gpuUtilBefore = Get-ObjectNumber $gpuBefore "UtilizationPercent"
+    }
+
+    if ($null -ne $gpuUtilBefore -and $gpuUtilBefore -le $MaxGpuUtilizationBeforePercent) {
+        Write-Host ("GPU utilization settled at {0}%; running benchmark." -f `
+            ($gpuUtilBefore.ToString("0.###", [Globalization.CultureInfo]::InvariantCulture)))
+    }
+}
 if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
     $null -ne $gpuUtilBefore -and
     $gpuUtilBefore -gt $MaxGpuUtilizationBeforePercent) {
