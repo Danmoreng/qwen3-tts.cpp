@@ -23,6 +23,7 @@ param(
     [int]$WaitForGpuIdleSeconds = 0,
     [int]$GpuPollIntervalSeconds = 5,
     [int]$MinWarmRuns = 3,
+    [switch]$TalkerKvCacheF32,
     [switch]$RequireComparableBaseline,
     [switch]$SelfTest,
     [switch]$RequireAssets
@@ -179,6 +180,9 @@ function New-BaselineCompatibility(
         $currentValue = Get-ObjectValue $current $field
         $baselineValue = Get-ObjectValue $baseline $field
         if ($null -eq $baselineValue) {
+            if ($field -eq "TalkerKvCacheF32" -and $currentValue -eq $false) {
+                continue
+            }
             $issues.Add("Baseline summary is missing '$field'; compatibility could not be verified.")
             continue
         }
@@ -313,6 +317,24 @@ function Disable-DebugDumpEnv() {
     Remove-Item Env:QWEN3_TTS_DEBUG_DUMP_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES -ErrorAction SilentlyContinue
     Remove-Item Env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS -ErrorAction SilentlyContinue
+}
+
+function Save-TalkerKvCacheEnv() {
+    return [PSCustomObject]@{
+        TalkerKvCacheF32 = $env:QWEN3_TTS_TALKER_KV_F32
+    }
+}
+
+function Restore-TalkerKvCacheEnv([object]$snapshot) {
+    if ($null -eq $snapshot) {
+        return
+    }
+
+    if ($null -ne $snapshot.TalkerKvCacheF32) {
+        $env:QWEN3_TTS_TALKER_KV_F32 = $snapshot.TalkerKvCacheF32
+    } else {
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-GpuSnapshot() {
@@ -451,6 +473,7 @@ Repeat 3/3
             TopK = 1
             TopP = 1.0
             Seed = 0
+            TalkerKvCacheF32 = $false
         }
         $matchingBaseline = [PSCustomObject]@{
             ModelDir = "model-a"
@@ -462,13 +485,14 @@ Repeat 3/3
             TopK = 1
             TopP = 1.0
             Seed = 0
+            TalkerKvCacheF32 = $false
         }
         $mismatchedBaseline = [PSCustomObject]@{
             ModelDir = "model-a"
             SpeakerEmbedding = "speaker-b.json"
             Text = "hello"
         }
-        $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed")
+        $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed", "TalkerKvCacheF32")
         $compatible = New-BaselineCompatibility $currentWorkload $matchingBaseline $compatFields $true
         Assert-SelfTest ($compatible.IsComparable) "matching baseline compatibility"
         $incompatible = New-BaselineCompatibility $currentWorkload $mismatchedBaseline $compatFields $true
@@ -544,12 +568,16 @@ Write-Host "  Model dir:      $modelDirResolved"
 Write-Host "  Speaker embed:  $speakerEmbeddingResolved"
 Write-Host "  Output dir:     $outputDirResolved"
 Write-Host "  Repeat:         $Repeat"
+if ($TalkerKvCacheF32) {
+    Write-Host "  Talker KV cache: F32 (QWEN3_TTS_TALKER_KV_F32=1)"
+}
 if ($null -ne $baselineSummaryObj) {
     Write-Host "  Baseline:       $baselineSummaryResolved"
 }
 
 $debugSnapshot = Save-DebugDumpEnv
 Disable-DebugDumpEnv
+$talkerKvCacheSnapshot = Save-TalkerKvCacheEnv
 $gpuBefore = Get-GpuSnapshot
 $gpuUtilBefore = Get-ObjectNumber $gpuBefore "UtilizationPercent"
 if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
@@ -591,6 +619,7 @@ if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
         TopK = $TopK
         TopP = $TopP
         Seed = $Seed
+        TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
         Repeat = $Repeat
         Skipped = $true
         SkipReason = "GPU utilization before benchmark was $gpuUtilBefore%, above threshold $MaxGpuUtilizationBeforePercent%."
@@ -598,6 +627,7 @@ if ($MaxGpuUtilizationBeforePercent -ge 0.0 -and
     }
     $summary | ConvertTo-Json -Depth 6 | Tee-Object -FilePath $summaryPath
     Restore-DebugDumpEnv $debugSnapshot
+    Restore-TalkerKvCacheEnv $talkerKvCacheSnapshot
     Write-Host ""
     Write-Host "BENCHMARK SKIPPED: $($summary.SkipReason)" -ForegroundColor Yellow
     exit 2
@@ -621,6 +651,11 @@ try {
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
+        if ($TalkerKvCacheF32) {
+            $env:QWEN3_TTS_TALKER_KV_F32 = "1"
+        } else {
+            Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+        }
         $output = & $cliExeResolved @cliArgs 2>&1
         $exitCode = $LASTEXITCODE
     } finally {
@@ -634,6 +669,7 @@ try {
     }
 } finally {
     Restore-DebugDumpEnv $debugSnapshot
+    Restore-TalkerKvCacheEnv $talkerKvCacheSnapshot
 }
 
 $gpuAfter = Get-GpuSnapshot
@@ -674,6 +710,7 @@ $currentWorkload = [PSCustomObject]@{
     TopK = $TopK
     TopP = $TopP
     Seed = $Seed
+    TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
 }
 
 Add-WarmRangeFailure $stabilityFailures $warmMetricStats.GenerateMs $MaxWarmGenerateRangePercent
@@ -682,7 +719,7 @@ Add-WarmRangeFailure $stabilityFailures $warmMetricStats.PipelineTotalMs $MaxWar
 Add-WarmRangeFailure $stabilityFailures $warmMetricStats.RTF $MaxWarmRtfRangePercent
 
 if ($null -ne $baselineSummaryObj) {
-    $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed")
+    $compatFields = @("ModelDir", "SpeakerEmbedding", "Text", "Language", "MaxTokens", "Temperature", "TopK", "TopP", "Seed", "TalkerKvCacheF32")
     $baselineCompatibility = New-BaselineCompatibility $currentWorkload $baselineSummaryObj $compatFields $RequireComparableBaseline.IsPresent
     Add-BaselineCompatibilityMessages $benchmarkWarnings $compatibilityFailures $baselineCompatibility $RequireComparableBaseline.IsPresent
 
@@ -722,6 +759,7 @@ $summary = [PSCustomObject]@{
     TopK = $TopK
     TopP = $TopP
     Seed = $Seed
+    TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
     Repeat = $Repeat
     WarmRepeatStart = if ($records.Count -ge 2) { 2 } else { 1 }
     Runs = $records.Count

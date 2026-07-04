@@ -3,6 +3,7 @@
 #include "transformer/transformer_internal.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <string>
 
@@ -16,10 +17,28 @@ void reset_scheduler_reserve_state(tts_transformer_state & state) {
     state.sched_reserved_prefill_len = 0;
 }
 
+bool env_flag_enabled(const char * name) {
+#if defined(_MSC_VER)
+    char * value = nullptr;
+    size_t value_len = 0;
+    if (_dupenv_s(&value, &value_len, name) != 0 || !value) {
+        return false;
+    }
+    const bool enabled = value[0] != '\0' && value[0] != '0';
+    std::free(value);
+    return enabled;
+#else
+    const char * value = std::getenv(name);
+    return value && value[0] != '\0' && value[0] != '0';
+#endif
+}
+
 } // namespace
 
 bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     const auto & cfg = impl_->model.config;
+    const bool use_f32_cache = env_flag_enabled("QWEN3_TTS_TALKER_KV_F32");
+    const ggml_type cache_type = use_f32_cache ? GGML_TYPE_F32 : GGML_TYPE_F16;
 
     free_tts_kv_cache(impl_->state.cache);
 
@@ -48,14 +67,18 @@ bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     impl_->state.cache.k_cache.resize(cfg.n_layers);
     impl_->state.cache.v_cache.resize(cfg.n_layers);
 
+    if (use_f32_cache) {
+        fprintf(stderr, "  Talker KV cache: F32 (QWEN3_TTS_TALKER_KV_F32 enabled)\n");
+    }
+
     for (int il = 0; il < cfg.n_layers; ++il) {
         impl_->state.cache.k_cache[il] = ggml_new_tensor_3d(
-            impl_->state.cache.ctx, GGML_TYPE_F16,
+            impl_->state.cache.ctx, cache_type,
             cfg.head_dim, cfg.n_key_value_heads, n_ctx);
         ggml_format_name(impl_->state.cache.k_cache[il], "k_cache_%d", il);
 
         impl_->state.cache.v_cache[il] = ggml_new_tensor_3d(
-            impl_->state.cache.ctx, GGML_TYPE_F16,
+            impl_->state.cache.ctx, cache_type,
             cfg.head_dim, cfg.n_key_value_heads, n_ctx);
         ggml_format_name(impl_->state.cache.v_cache[il], "v_cache_%d", il);
     }

@@ -95,6 +95,7 @@ def make_payload(mode: str, fixture: dict[str, Any], summary_path: Path) -> dict
             "TopK": 1,
             "TopP": 1.0,
             "Seed": 0,
+            "TalkerKvCacheF32": False,
         },
         "Inputs": {
             "Text": fixture["text"],
@@ -214,6 +215,7 @@ def validate_payload(payload: dict[str, Any], expected_mode: str, fixture: dict[
             "TopK": 1,
             "TopP": 1.0,
             "Seed": 0,
+            "TalkerKvCacheF32": False,
         }
         for field, expected_value in expected_cpp.items():
             if cpp.get(field) != expected_value:

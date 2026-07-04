@@ -29,6 +29,7 @@ param(
     [ValidateSet("", "exact_tie", "near_tie_token_swap", "near_tie", "token_swap", "logit_drift")]
     [string]$ExpectFirstDiffCategory = "",
     [double]$ExpectFirstDiffMaxAbsOverMarginAtLeast = -1.0,
+    [switch]$TalkerKvCacheF32,
     [switch]$RequireAssets
 )
 
@@ -127,6 +128,24 @@ function Restore-DebugDumpEnv([object]$snapshot) {
         $env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS = $snapshot.MaxCodeSteps
     } else {
         Remove-Item Env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS -ErrorAction SilentlyContinue
+    }
+}
+
+function Save-TalkerKvCacheEnv() {
+    return [PSCustomObject]@{
+        TalkerKvCacheF32 = $env:QWEN3_TTS_TALKER_KV_F32
+    }
+}
+
+function Restore-TalkerKvCacheEnv([object]$snapshot) {
+    if ($null -eq $snapshot) {
+        return
+    }
+
+    if ($null -ne $snapshot.TalkerKvCacheF32) {
+        $env:QWEN3_TTS_TALKER_KV_F32 = $snapshot.TalkerKvCacheF32
+    } else {
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
     }
 }
 
@@ -234,6 +253,7 @@ $fixtureMetadata = [PSCustomObject]@{
         TopK = 1
         TopP = 1.0
         Seed = 0
+        TalkerKvCacheF32 = [bool]$TalkerKvCacheF32
     }
     Inputs = [PSCustomObject]@{
         Text = $Text
@@ -276,6 +296,9 @@ if ($isIclFixture) {
     Write-Host "  Reference codes:  $referenceCodesResolved"
 }
 Write-Host "  CLI:              $cliExeResolved"
+if ($TalkerKvCacheF32) {
+    Write-Host "  Talker KV cache:  F32 (QWEN3_TTS_TALKER_KV_F32=1)"
+}
 Write-Host "  Output dir:       $outputDirResolved"
 Write-Host "  Metadata:         $metadataPath"
 
@@ -284,6 +307,7 @@ if (-not [string]::IsNullOrWhiteSpace($PythonPath)) {
     $env:PYTHONPATH = (Resolve-Path -LiteralPath (Resolve-RepoPath $PythonPath)).Path
 }
 $debugSnapshot = Save-DebugDumpEnv
+$talkerKvCacheSnapshot = Save-TalkerKvCacheEnv
 
 try {
     $dumpArgs = @(
@@ -314,6 +338,11 @@ try {
     $env:QWEN3_TTS_DEBUG_DUMP_DIR = $cppTrace
     $env:QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES = "$MaxFrames"
     $env:QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS = "15"
+    if ($TalkerKvCacheF32) {
+        $env:QWEN3_TTS_TALKER_KV_F32 = "1"
+    } else {
+        Remove-Item Env:QWEN3_TTS_TALKER_KV_F32 -ErrorAction SilentlyContinue
+    }
     $cppArgs = @(
         "--model", $cppModelDirResolved,
         "--text", $Text,
@@ -381,6 +410,7 @@ try {
     Write-Host "Summary written to: $summaryPath" -ForegroundColor Green
 } finally {
     Restore-DebugDumpEnv $debugSnapshot
+    Restore-TalkerKvCacheEnv $talkerKvCacheSnapshot
     if ($null -ne $previousPythonPath) {
         $env:PYTHONPATH = $previousPythonPath
     } else {
