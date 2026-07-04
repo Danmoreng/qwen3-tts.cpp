@@ -37,14 +37,14 @@ that hurt performance:
 | Python CPU BF16 trace | CPU BF16 PyTorch is not a reliable parity proxy for the current CUDA/GGUF path: it matches only `94/160` tokens against C++ over the 10-frame fixture and first diverges at frame `0`, codebook `14`. | Diagnostic only |
 | Python CUDA BF16 trace | CUDA BF16 PyTorch is also not a stronger top-token oracle for the current GGUF path. Speaker-only matches `94/160` tokens and first diverges at frame `0`, codebook `14`; ICL matches `3/16` tokens and first diverges at frame `0`, codebook `3`. Both first divergences are BF16 top-logit ties in Python. | Diagnostic only |
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. Rechecked with the stable `MaxTokens=12`, `MaxFrames=10` ICL fixture, the current default BF16 GGUF modeldir matches Python F32 exactly (`160/160`). | Verified on stable fixture |
-| Greedy path | Greedy currently produces invalid/repetitive output and should not be used as the main parity gate until fixed. | Known failing |
+| Greedy path | The `temperature=0` special case now applies the same CB0 repetition penalty before argmax as the deterministic `top_k=1` sampling path. A local probe that previously diverged at frame `27` now matches the `temperature=1`, `top_k=1`, `top_p=1` code dump exactly. Keep parity gates on `top_k=1` for consistency with Python `do_sample=True`. | Locally fixed/probed |
 | No-debug performance guard | Alternating clean-baseline/current CUDA timing run showed no regression after debug-only trace hooks: current median `Total generate` was `872.1 ms` vs baseline `882.2 ms` for the 64-token speaker-only benchmark. | Verified |
 | Trace tooling | `scripts/dump_python_trace.py` can dump external speaker-embedding traces, generated-frame talker layer/sub-layer tensors, raw per-step code-predictor logits when supported by Transformers, and debug-only code-predictor per-layer/sub-layer tensors at AR steps. `scripts/debug_trace_report.py` labels raw vs post-warp logits. `scripts/parity_trace_summary.py` emits compact JSON first-diff summaries, near-tie margins and classifications, first-diff step trajectories with aggregate metrics, boundary tensor comparisons, talker/code-predictor layer comparisons, ranked first-diff drift hotspots, and optional expectation checks. `scripts/run_speaker_parity_fixture.ps1` regenerates speaker-only and ICL fixtures. | Improved |
 | Benchmark tooling | `scripts/benchmark_parity_smoke.ps1` runs the standard speaker-embedding parity timing smoke, captures logs, parses warm medians, records before/after `nvidia-smi` snapshots when available, and can compare against a saved baseline summary with regression thresholds. | Added |
 
 ## Guiding Rules
 
-- Prefer deterministic `top_k=1`, `temperature=1.0`, `top_p=1.0` over the current greedy special case.
+- Prefer deterministic `top_k=1`, `temperature=1.0`, `top_p=1.0` for parity gates, even though the `temperature=0` greedy special case now shares the same CB0 repetition-penalty behavior.
 - Compare speech-code tokens before comparing audio.
 - Compare logits and hidden tensors at the first divergent step before inspecting later frames.
 - Use Python-provided speaker embeddings and Python-provided reference codes when testing transformer parity, so encoder differences do not contaminate the result.
@@ -477,7 +477,9 @@ Success criteria:
 ## Open Questions
 
 - Should BF16 conversion remain a documented user-facing model format, or only a debug/developer format?
-- Should the greedy path be fixed before or after code-predictor parity?
+- Should `temperature=0` greedy get its own full Python-vs-C++ fixture, or is
+  the local top-k-equivalence probe enough while primary parity stays on
+  `do_sample=True`, `top_k=1`?
 - Should parity fixtures live only in `benchmark_output/`, or should a small reproducible subset move under `tests/fixtures/`?
 - Can we create a tiny synthetic code-predictor fixture that avoids loading the full 1.7B model?
 
@@ -497,8 +499,8 @@ beat the stable default fixture results.
 
 Next practical step: make the `MaxTokens=12`, `MaxFrames=10` speaker-only and
 ICL fixtures the primary parity gates, keep performance smoke runs paired with
-any inference-path change, and tackle remaining separate items: the greedy path,
-audio.cpp prompt-code divergence, and smaller reproducible test fixtures.
+any inference-path change, and tackle remaining separate items: audio.cpp
+prompt-code divergence and smaller reproducible test fixtures.
 
 Latest speaker performance smoke after adding the fixture runner was
 current-only, no-debug, 8 process runs with the same 64-token speaker prompt.
@@ -802,6 +804,21 @@ Targeted BF16 variant experiment:
   `474.9 ms`, pipeline `882.0 ms`, and RTF `0.225`
   (`benchmark_output\perf_parity_smoke_stable_12tok_gate_update`), with no
   benchmark warnings or stability failures.
+- Greedy special-case follow-up: `temperature=0` previously skipped the CB0
+  repetition penalty and diverged from deterministic `temperature=1`,
+  `top_k=1`, `top_p=1` at frame `27` on the local probe text
+  `"This is a short greedy decoding probe."` The greedy path now applies the
+  repetition penalty before argmax, and the same probe's generated-code dump is
+  exactly equal to the top-k deterministic dump. This is a behavior fix for the
+  CLI greedy option; Python parity gates intentionally remain on `do_sample=True`
+  / `top_k=1`. Verification after the fix:
+  `run_all_tests.ps1 -ParityFixturesOnly -BuildDir build-timing-current
+  -OutputDir test_output\python_parity_gate_after_greedy_penalty_fix` passed
+  with `PASS: 10`, `FAIL: 0`, `SKIP: 4`; timing measured warm generate median
+  `870.8 ms`, talker `321.7 ms`, code predictor `487.1 ms`, pipeline
+  `903.0 ms`, and RTF `0.230`
+  (`benchmark_output\perf_parity_smoke_after_greedy_penalty_fix`), with no
+  benchmark warnings or stability failures.
 - `benchmark_parity_smoke.ps1` now reports warm-run min/max/range percentages
   and warns when fewer than `-MinWarmRuns` warm samples are present. The
   self-test covers the spread math and warning path. `run_all_tests.ps1
@@ -873,7 +890,7 @@ Targeted BF16 variant experiment:
   for the current Python-vs-C++ oracle: Python `DoSample=true`/`DType=float32`
   and C++ `Temperature=1.0`, `TopK=1`, `TopP=1.0`, `Seed=0`. This keeps the
   fixture gate on the deterministic top-k sampling path and prevents accidental
-  reuse of the known-failing greedy special case as a parity signal.
+  reuse of the separate `temperature=0` greedy special case as a parity signal.
   `run_all_tests.ps1 -ParityFixturesOnly` passed with the tightened sidecar
   checks (`PASS: 10`, `FAIL: 0`, `SKIP: 4`). Follow-up comparable no-debug
   timing used the metadata-bearing baseline with `-RequireComparableBaseline`:
