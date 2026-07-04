@@ -33,12 +33,18 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     speaker_summary = args.output_dir / "speaker_summary.json"
-    speaker_summary.write_text("{}\n", encoding="utf-8")
     icl_summary = args.output_dir / "icl_summary.json"
-    icl_summary.write_text("{}\n", encoding="utf-8")
 
     speaker_payload = make_payload("speaker", expectations["fixtures"]["speaker_only"], speaker_summary)
     icl_payload = make_payload("icl", expectations["fixtures"]["icl"], icl_summary)
+    speaker_summary.write_text(
+        json.dumps(make_summary(expectations["fixtures"]["speaker_only"]), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    icl_summary.write_text(
+        json.dumps(make_summary(expectations["fixtures"]["icl"]), indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     failures = validate_payload(speaker_payload, "speaker", expectations["fixtures"]["speaker_only"])
     failures += validate_payload(icl_payload, "icl", expectations["fixtures"]["icl"])
@@ -51,10 +57,20 @@ def main() -> None:
     if not invalid_failures:
         raise SystemExit("negative fixture metadata check unexpectedly passed")
 
+    bad_summary = args.output_dir / "bad_summary.json"
+    bad_payload = make_payload("speaker", expectations["fixtures"]["speaker_only"], bad_summary)
+    bad_summary_payload = make_summary(expectations["fixtures"]["speaker_only"])
+    bad_summary_payload["tokens"]["first_diff"]["token_a"] = -1
+    bad_summary.write_text(json.dumps(bad_summary_payload, indent=2) + "\n", encoding="utf-8")
+    bad_summary_failures = validate_payload(bad_payload, "speaker", expectations["fixtures"]["speaker_only"])
+    if not any("summary.tokens.first_diff.token_a" in failure for failure in bad_summary_failures):
+        raise SystemExit("negative fixture summary check unexpectedly passed")
+
     (args.output_dir / "speaker_fixture_metadata.json").write_text(json.dumps(speaker_payload, indent=2) + "\n", encoding="utf-8")
     (args.output_dir / "icl_fixture_metadata.json").write_text(json.dumps(icl_payload, indent=2) + "\n", encoding="utf-8")
     print("Parity fixture metadata smoke passed.")
     print("Negative fixture metadata check failed as expected.")
+    print("Negative fixture summary check failed as expected.")
 
 
 def make_payload(mode: str, fixture: dict[str, Any], summary_path: Path) -> dict[str, Any]:
@@ -124,6 +140,32 @@ def make_invalid_payload() -> dict[str, Any]:
         },
         "Outputs": {
             "Summary": "missing-summary.json",
+        },
+    }
+
+
+def make_summary(fixture: dict[str, Any]) -> dict[str, Any]:
+    expect = fixture["expect"]
+    return {
+        "tokens": {
+            "frames_compared": fixture["max_frames"],
+            "tokens_compared": fixture["max_frames"] * 16,
+            "tokens_matching": int(fixture["max_frames"] * 16 * expect["match_percent_at_least"] / 100),
+            "match_percent": expect["match_percent_at_least"],
+            "first_diff": {
+                "frame": expect["first_diff_frame"],
+                "codebook": expect["first_diff_codebook"],
+                "token_a": expect["first_diff_token_a"],
+                "token_b": expect["first_diff_token_b"],
+            },
+        },
+        "logits_at_first_diff": {
+            "cosine": expect["first_diff_cosine_at_least"],
+            "max_abs": expect["first_diff_max_abs_at_most"],
+        },
+        "first_diff_classification": {
+            "category": expect["first_diff_category"],
+            "max_abs_over_min_top1_margin": expect["first_diff_max_abs_over_margin_at_least"],
         },
     }
 
@@ -202,6 +244,72 @@ def validate_payload(payload: dict[str, Any], expected_mode: str, fixture: dict[
             failures.append("Outputs.Summary: expected non-empty path")
         elif not Path(summary).exists():
             failures.append(f"Outputs.Summary: does not exist: {summary}")
+        else:
+            summary_payload = json.loads(Path(summary).read_text(encoding="utf-8"))
+            failures.extend(validate_summary(summary_payload, fixture))
+
+    return failures
+
+
+def validate_summary(summary: dict[str, Any], fixture: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    expect = fixture["expect"]
+
+    tokens = summary.get("tokens")
+    if not isinstance(tokens, dict):
+        failures.append("summary.tokens: expected object")
+    else:
+        if tokens.get("match_percent") is None or tokens["match_percent"] < expect["match_percent_at_least"]:
+            failures.append(
+                "summary.tokens.match_percent: "
+                f"expected >= {expect['match_percent_at_least']}, got {tokens.get('match_percent')!r}"
+            )
+        first_diff = tokens.get("first_diff")
+        if not isinstance(first_diff, dict):
+            failures.append("summary.tokens.first_diff: expected object")
+        else:
+            expected_fields = {
+                "frame": expect["first_diff_frame"],
+                "codebook": expect["first_diff_codebook"],
+                "token_a": expect["first_diff_token_a"],
+                "token_b": expect["first_diff_token_b"],
+            }
+            for field, expected_value in expected_fields.items():
+                if first_diff.get(field) != expected_value:
+                    failures.append(
+                        f"summary.tokens.first_diff.{field}: expected {expected_value!r}, got {first_diff.get(field)!r}"
+                    )
+
+    logits = summary.get("logits_at_first_diff")
+    if not isinstance(logits, dict):
+        failures.append("summary.logits_at_first_diff: expected object")
+    else:
+        if logits.get("cosine") is None or logits["cosine"] < expect["first_diff_cosine_at_least"]:
+            failures.append(
+                "summary.logits_at_first_diff.cosine: "
+                f"expected >= {expect['first_diff_cosine_at_least']}, got {logits.get('cosine')!r}"
+            )
+        if logits.get("max_abs") is None or logits["max_abs"] > expect["first_diff_max_abs_at_most"]:
+            failures.append(
+                "summary.logits_at_first_diff.max_abs: "
+                f"expected <= {expect['first_diff_max_abs_at_most']}, got {logits.get('max_abs')!r}"
+            )
+
+    classification = summary.get("first_diff_classification")
+    if not isinstance(classification, dict):
+        failures.append("summary.first_diff_classification: expected object")
+    else:
+        if classification.get("category") != expect["first_diff_category"]:
+            failures.append(
+                "summary.first_diff_classification.category: "
+                f"expected {expect['first_diff_category']!r}, got {classification.get('category')!r}"
+            )
+        ratio = classification.get("max_abs_over_min_top1_margin")
+        if ratio is None or ratio < expect["first_diff_max_abs_over_margin_at_least"]:
+            failures.append(
+                "summary.first_diff_classification.max_abs_over_min_top1_margin: "
+                f"expected >= {expect['first_diff_max_abs_over_margin_at_least']}, got {ratio!r}"
+            )
 
     return failures
 

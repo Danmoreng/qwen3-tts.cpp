@@ -688,6 +688,22 @@ Targeted BF16 variant experiment:
   no benchmark warnings or stability failures, and deltas versus baseline were
   `-1.95%` generate, `-0.93%` code predictor, `-3.41%` pipeline, and `-3.24%`
   RTF.
+- The parity fixture metadata gate now cross-checks the actual generated
+  `summary_python_float32_vs_cpp.json` against the checked-in expectation
+  metadata, including match percent, first-diff token IDs, first-diff logit
+  cosine/max-absolute drift, near-tie category, and the
+  max-absolute-over-margin ratio. The model-free fixture metadata smoke now
+  writes synthetic summary payloads and verifies that a deliberately mismatched
+  summary fails. `run_all_tests.ps1 -ParityFixturesOnly` passed with the
+  tightened summary checks (`PASS: 10`, `FAIL: 0`, `SKIP: 4`). Follow-up
+  no-debug timing first produced a borderline noisy failure on the generate
+  threshold (`+20.577%` vs a `20%` limit) while pipeline and RTF stayed under
+  threshold; an immediate rerun with the same comparable baseline passed with
+  no benchmark warnings or stability failures: warm generate median `1077.9 ms`,
+  code predictor `625.4 ms`, pipeline `1108.0 ms`, RTF `0.283`, and deltas
+  `+16.07%` generate, `+19.01%` code predictor, `+14.46%` pipeline, `+14.57%`
+  RTF. This was a test/smoke validation change only and did not touch the C++
+  inference path.
 
 Latest ICL performance smoke after the non-streaming prefill fix was
 current-only, no-debug, 5 process runs with the same 64-token ICL prompt.

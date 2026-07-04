@@ -226,6 +226,39 @@ function Test-ParityFixtureMetadata(
             }
             if ([string]::IsNullOrWhiteSpace($metadata.Outputs.Summary) -or -not (Test-Path -LiteralPath $metadata.Outputs.Summary)) {
                 $failures.Add("Outputs.Summary missing or does not exist: $($metadata.Outputs.Summary)")
+            } else {
+                try {
+                    $summary = Get-Content -LiteralPath $metadata.Outputs.Summary -Raw | ConvertFrom-Json
+                    if ([double]$summary.tokens.match_percent -lt [double]$expect.match_percent_at_least) {
+                        $failures.Add("Summary tokens.match_percent expected >= $($expect.match_percent_at_least), got $($summary.tokens.match_percent)")
+                    }
+                    if ([int]$summary.tokens.first_diff.frame -ne [int]$expect.first_diff_frame) {
+                        $failures.Add("Summary tokens.first_diff.frame expected $($expect.first_diff_frame), got $($summary.tokens.first_diff.frame)")
+                    }
+                    if ([int]$summary.tokens.first_diff.codebook -ne [int]$expect.first_diff_codebook) {
+                        $failures.Add("Summary tokens.first_diff.codebook expected $($expect.first_diff_codebook), got $($summary.tokens.first_diff.codebook)")
+                    }
+                    if ([int]$summary.tokens.first_diff.token_a -ne [int]$expect.first_diff_token_a) {
+                        $failures.Add("Summary tokens.first_diff.token_a expected $($expect.first_diff_token_a), got $($summary.tokens.first_diff.token_a)")
+                    }
+                    if ([int]$summary.tokens.first_diff.token_b -ne [int]$expect.first_diff_token_b) {
+                        $failures.Add("Summary tokens.first_diff.token_b expected $($expect.first_diff_token_b), got $($summary.tokens.first_diff.token_b)")
+                    }
+                    if ([double]$summary.logits_at_first_diff.cosine -lt [double]$expect.first_diff_cosine_at_least) {
+                        $failures.Add("Summary logits_at_first_diff.cosine expected >= $($expect.first_diff_cosine_at_least), got $($summary.logits_at_first_diff.cosine)")
+                    }
+                    if ([double]$summary.logits_at_first_diff.max_abs -gt [double]$expect.first_diff_max_abs_at_most) {
+                        $failures.Add("Summary logits_at_first_diff.max_abs expected <= $($expect.first_diff_max_abs_at_most), got $($summary.logits_at_first_diff.max_abs)")
+                    }
+                    if ($summary.first_diff_classification.category -ne $expect.first_diff_category) {
+                        $failures.Add("Summary first_diff_classification.category expected $($expect.first_diff_category), got $($summary.first_diff_classification.category)")
+                    }
+                    if ([double]$summary.first_diff_classification.max_abs_over_min_top1_margin -lt [double]$expect.first_diff_max_abs_over_margin_at_least) {
+                        $failures.Add("Summary first_diff_classification.max_abs_over_min_top1_margin expected >= $($expect.first_diff_max_abs_over_margin_at_least), got $($summary.first_diff_classification.max_abs_over_min_top1_margin)")
+                    }
+                } catch {
+                    $failures.Add("could not parse or validate summary: $($_.Exception.Message)")
+                }
             }
         } catch {
             $failures.Add("could not parse metadata: $($_.Exception.Message)")
