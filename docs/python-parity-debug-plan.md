@@ -29,6 +29,7 @@ speaker-only trace setup:
 | Python prompt extraction | Faster Qwen3 TTS matches Python prompt codes exactly when extra silence appending is disabled. | Verified |
 | audio.cpp prompt extraction | Reference-code values diverge from Python despite matching frame count. | Verified divergent |
 | BF16 GGUF conversion | A mostly-BF16 GGUF can be built directly from the BF16 HuggingFace checkpoint. `scripts/convert_tts_to_gguf.py` also supports repeatable `--keep-f32-regex` overrides for targeted parity model variants without runtime casts. | Implemented locally |
+| Source checkpoint precision | The local `Qwen3-TTS-12Hz-1.7B-Base/model.safetensors` checkpoint stores all `480/480` tensors as BF16, including code-predictor layer-4 MLP weights. Targeted F32 GGUF storage cannot recover precision that is not present in the source checkpoint. | Verified |
 | Speaker-only BF16 generation parity | With Python speaker embedding, corrected non-streaming/base prompt layout, `do_sample=True`, and `top_k=1`, frames `0..8` match exactly. First divergence is frame `9`, codebook `6`: Python token `517`, C++ token `9`. | Late drift |
 | Python CPU BF16 trace | CPU BF16 PyTorch is not a reliable parity proxy for the current CUDA/GGUF path: it matches only `94/160` tokens against C++ over the 10-frame fixture and first diverges at frame `0`, codebook `14`. | Diagnostic only |
 | ICL BF16 generation parity | The old frame `0`, codebook `1` divergence was caused by an ICL prompt-layout mismatch. C++ now uses the Python non-streaming ICL layout and trims `--reference-text-file` outer whitespace. First local F32-vs-GGUF-BF16 drift is frame `0`, codebook `8`: Python token `499`, C++ token `1481`. | Late-step near-tie |
@@ -337,12 +338,13 @@ tradeoff is acceptable. The current evidence points to a late near-tie caused by
 small BF16/GGUF vs PyTorch F32 numerical differences, not a frame-0 structural
 implementation bug.
 
-Next practical step: do not pursue the single `code_pred.blk.4.ffn_down.weight`
-F32 GGUF variant further. It produced identical parity summaries because the
-source checkpoint tensor is already BF16, so storing that one tensor as F32 does
-not recover lost precision. The remaining useful options are a broader
-source-precision experiment if an F32 checkpoint is available, or accepting the
-current late-frame near-ties as BF16/PyTorch-vs-GGML numerical drift.
+Next practical step: do not pursue F32 GGUF storage variants from the current
+local HF checkpoint. It is entirely BF16, so those variants cannot recover
+source precision and the single `code_pred.blk.4.ffn_down.weight` test produced
+identical parity summaries. The remaining useful options are a true F32-source
+checkpoint experiment if such a checkpoint exists, a CUDA BF16 Python reference
+trace once the GPU is idle, or accepting the current late-frame near-ties as
+BF16/PyTorch-vs-GGML numerical drift.
 
 Latest speaker performance smoke after adding the fixture runner was
 current-only, no-debug, 8 process runs with the same 64-token speaker prompt.
@@ -425,6 +427,10 @@ Targeted BF16 variant experiment:
 - Built `benchmark_output\bf16_codepred_l4_ffn_down_f32` with
   `--keep-f32-regex '^code_pred\.blk\.4\.ffn_down\.weight$'`.
 - Converter confirmed `code_pred.blk.4.ffn_down.weight` was stored as F32.
+- Follow-up safetensors metadata inspection showed the source HF checkpoint is
+  entirely BF16 (`480/480` tensors), including
+  `talker.code_predictor.model.layers.4.mlp.down_proj.weight`,
+  `gate_proj.weight`, and `up_proj.weight`.
 - Speaker-only parity was unchanged: `93.75%` token match, first diff remained
   frame `9`, codebook `6`, Python token `517` vs C++ token `9`, with the same
   logit cosine `0.999999775` and max absolute difference `0.044123`.
