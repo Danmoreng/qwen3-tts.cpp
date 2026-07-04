@@ -133,10 +133,12 @@ class Qwen3TTSConverter:
         input_dir: Path,
         output_path: Path,
         output_type: str = "f16",
+        keep_f32_regex: list[str] | None = None,
     ):
         self.input_dir = input_dir
         self.output_path = output_path
         self.output_type = output_type
+        self.keep_f32_patterns = [re.compile(pattern) for pattern in (keep_f32_regex or [])]
 
         # Load config
         self.config = self._load_config()
@@ -313,6 +315,9 @@ class Qwen3TTSConverter:
             return False
         return True
 
+    def _should_keep_f32(self, tensor_name: str) -> bool:
+        return any(pattern.search(tensor_name) for pattern in self.keep_f32_patterns)
+
     def _convert_dtype(self, tensor: torch.Tensor, tensor_name: str = "") -> tuple[np.ndarray, gguf.GGMLQuantizationType]:
         """Convert tensor to appropriate dtype for GGUF."""
         # Convert to numpy
@@ -332,6 +337,12 @@ class Qwen3TTSConverter:
 
         # 1D tensors (norms, biases) should be F32
         if n_dims <= 1:
+            return data.astype(np.float32), gguf.GGMLQuantizationType.F32
+
+        # Optional developer parity experiment: keep targeted 2D+ tensors in F32
+        # without adding runtime casts to the hot path.
+        if self._should_keep_f32(tensor_name):
+            logger.info(f"Keeping {tensor_name} in F32 due to --keep-f32-regex")
             return data.astype(np.float32), gguf.GGMLQuantizationType.F32
 
         # For 2D+ tensors, use the specified output type
@@ -646,6 +657,12 @@ def main():
         help="Output data type (default: f16). bf16 matches the common PyTorch CUDA dtype; q8_0 provides ~50%% size reduction, q4_k provides ~70%% size reduction."
     )
     parser.add_argument(
+        "--keep-f32-regex",
+        action="append",
+        default=[],
+        help="Regex over GGUF tensor names to keep in F32 even when --type requests another 2D+ dtype. Can be repeated for targeted parity experiments."
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging"
@@ -660,6 +677,7 @@ def main():
         input_dir=args.input,
         output_path=args.output,
         output_type=args.type,
+        keep_f32_regex=args.keep_f32_regex,
     )
     converter.convert()
 
