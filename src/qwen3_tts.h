@@ -59,8 +59,8 @@ struct tts_params {
     // Repetition penalty for CB0 token generation (HuggingFace style)
     float repetition_penalty = 1.05f;
 
-    // Language ID for codec (2050=en, 2069=ru, 2055=zh, 2058=ja, 2064=ko, 2053=de, 2061=fr, 2054=es)
-    int32_t language_id = 2050;
+    // Language ID for codec (-1=auto, 2050=en, 2069=ru, 2055=zh, 2058=ja, 2064=ko, 2053=de, 2061=fr, 2054=es)
+    int32_t language_id = -1;
 
     // Optional style/voice instruction
     std::string instruction;
@@ -107,6 +107,22 @@ struct tts_result {
     int64_t t_decode_ms = 0;
     int64_t t_total_ms = 0;
 
+    // Reference preparation timing breakdown (milliseconds)
+    int64_t t_reference_speaker_load_ms = 0;
+    int64_t t_reference_speaker_encode_ms = 0;
+    int64_t t_reference_speech_load_ms = 0;
+    int64_t t_reference_speech_encode_ms = 0;
+    int64_t t_reference_speech_project_ms = 0;
+    int64_t t_reference_speech_graph_build_ms = 0;
+    int64_t t_reference_speech_graph_alloc_ms = 0;
+    int64_t t_reference_speech_input_upload_ms = 0;
+    int64_t t_reference_speech_mask_prepare_ms = 0;
+    int64_t t_reference_speech_graph_compute_ms = 0;
+    int64_t t_reference_speech_output_read_ms = 0;
+    int64_t t_reference_speech_quantize_ms = 0;
+    int64_t t_reference_speech_quantize_semantic_ms = 0;
+    int64_t t_reference_speech_quantize_acoustic_ms = 0;
+
     // Decoder timing breakdown (milliseconds)
     int64_t t_decode_graph_build_ms = 0;
     int64_t t_decode_graph_alloc_ms = 0;
@@ -116,6 +132,18 @@ struct tts_result {
     int32_t decode_graph_rebuilt = 0;
     int32_t decode_frames = 0;
     int64_t decode_samples = 0;
+
+    // Streaming decoder counters. For non-streaming synthesis these stay zero.
+    int32_t streaming_decode_chunks = 0;
+    int32_t streaming_decode_input_frames = 0;
+    int32_t streaming_decode_emitted_frames = 0;
+    int32_t streaming_decode_context_frames = 0;
+    int32_t streaming_decode_graph_rebuilds = 0;
+    int64_t streaming_decode_graph_build_ms = 0;
+    int64_t streaming_decode_graph_alloc_ms = 0;
+    int64_t streaming_decode_input_upload_ms = 0;
+    int64_t streaming_decode_graph_compute_ms = 0;
+    int64_t streaming_decode_output_read_ms = 0;
 
     // Process memory snapshots (bytes)
     uint64_t mem_rss_start_bytes = 0;
@@ -184,13 +212,17 @@ public:
     
     // Load all models from directory
     // model_dir should contain: transformer.gguf, tokenizer.gguf, vocoder.gguf
-    bool load_models(const std::string & model_dir, const std::string & model_name = "");
+    bool load_models(const std::string & model_dir,
+                     const std::string & model_name = "",
+                     const std::string & tokenizer_model_path = "");
 
     // Load only the speaker encoder tensors needed by extract_speaker_embedding().
     bool load_speaker_encoder_only(const std::string & model_dir, const std::string & model_name = "");
 
     // Load only the components needed to extract reusable full-ICL prompts.
-    bool load_icl_prompt_encoder_only(const std::string & model_dir, const std::string & model_name = "");
+    bool load_icl_prompt_encoder_only(const std::string & model_dir,
+                                      const std::string & model_name = "",
+                                      const std::string & tokenizer_model_path = "");
     
     // Generate speech from text
     // text: input text to synthesize

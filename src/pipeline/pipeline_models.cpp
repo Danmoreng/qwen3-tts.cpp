@@ -178,7 +178,9 @@ std::string find_speaker_encoder_model(const std::string & tts_model_path,
 
 } // namespace
 
-bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & model_name) {
+bool Qwen3TTS::load_models(const std::string & model_dir,
+                           const std::string & model_name,
+                           const std::string & tokenizer_model_override) {
     configure_ggml_logging_once();
 
     int64_t t_start = get_time_ms();
@@ -235,7 +237,13 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
             tts_model_path = model_dir + "/qwen-talker-0.6b-base-Q8_0.gguf";
         }
     }
-    const std::string tokenizer_model_path = choose_tokenizer_model_path(model_dir, tts_model_path);
+    const std::string tokenizer_model_path = tokenizer_model_override.empty()
+        ? choose_tokenizer_model_path(model_dir, tts_model_path)
+        : tokenizer_model_override;
+    if (!fs::exists(tokenizer_model_path)) {
+        error_msg_ = "Tokenizer/codec model not found: " + tokenizer_model_path;
+        return false;
+    }
 
     fprintf(stderr, "  TTS model path:       %s\n", tts_model_path.c_str());
     fprintf(stderr, "  Tokenizer model path: %s\n", tokenizer_model_path.c_str());
@@ -371,7 +379,9 @@ bool Qwen3TTS::load_speaker_encoder_only(const std::string & model_dir, const st
     return true;
 }
 
-bool Qwen3TTS::load_icl_prompt_encoder_only(const std::string & model_dir, const std::string & model_name) {
+bool Qwen3TTS::load_icl_prompt_encoder_only(const std::string & model_dir,
+                                            const std::string & model_name,
+                                            const std::string & tokenizer_model_override) {
     configure_ggml_logging_once();
 
     const int64_t t_start = get_time_ms();
@@ -394,7 +404,13 @@ bool Qwen3TTS::load_icl_prompt_encoder_only(const std::string & model_dir, const
 
     std::vector<fs::path> tts_candidates;
     tts_model_path_ = choose_tts_model_path(model_dir, model_name, tts_candidates);
-    tokenizer_model_path_ = choose_tokenizer_model_path(model_dir, tts_model_path_);
+    tokenizer_model_path_ = tokenizer_model_override.empty()
+        ? choose_tokenizer_model_path(model_dir, tts_model_path_)
+        : tokenizer_model_override;
+    if (!fs::exists(tokenizer_model_path_)) {
+        error_msg_ = "Tokenizer/codec model not found: " + tokenizer_model_path_;
+        return false;
+    }
     decoder_model_path_ = tokenizer_model_path_;
 
     const int32_t expected_dim = get_talker_embedding_length(tts_model_path_);

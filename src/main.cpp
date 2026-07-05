@@ -116,6 +116,42 @@ static void print_result_timing(const qwen3_tts::tts_result & result) {
     fprintf(stderr, "  Load:      %6lld ms\n", (long long) result.t_load_ms);
     fprintf(stderr, "  Tokenize:  %6lld ms\n", (long long) result.t_tokenize_ms);
     fprintf(stderr, "  Encode:    %6lld ms\n", (long long) result.t_encode_ms);
+    if (result.t_reference_speaker_load_ms != 0 ||
+        result.t_reference_speaker_encode_ms != 0 ||
+        result.t_reference_speech_load_ms != 0 ||
+        result.t_reference_speech_encode_ms != 0) {
+        fprintf(stderr, "    speaker load:  %6lld ms\n",
+                (long long) result.t_reference_speaker_load_ms);
+        fprintf(stderr, "    speaker enc:   %6lld ms\n",
+                (long long) result.t_reference_speaker_encode_ms);
+        fprintf(stderr, "    speech load:   %6lld ms\n",
+                (long long) result.t_reference_speech_load_ms);
+        fprintf(stderr, "    speech enc:    %6lld ms\n",
+                (long long) result.t_reference_speech_encode_ms);
+        if (result.t_reference_speech_project_ms != 0 ||
+            result.t_reference_speech_quantize_ms != 0) {
+            fprintf(stderr, "      project:     %6lld ms\n",
+                    (long long) result.t_reference_speech_project_ms);
+            fprintf(stderr, "        build:     %6lld ms\n",
+                    (long long) result.t_reference_speech_graph_build_ms);
+            fprintf(stderr, "        alloc:     %6lld ms\n",
+                    (long long) result.t_reference_speech_graph_alloc_ms);
+            fprintf(stderr, "        upload:    %6lld ms\n",
+                    (long long) result.t_reference_speech_input_upload_ms);
+            fprintf(stderr, "        mask prep: %6lld ms\n",
+                    (long long) result.t_reference_speech_mask_prepare_ms);
+            fprintf(stderr, "        compute:   %6lld ms\n",
+                    (long long) result.t_reference_speech_graph_compute_ms);
+            fprintf(stderr, "        readback:  %6lld ms\n",
+                    (long long) result.t_reference_speech_output_read_ms);
+            fprintf(stderr, "      quantize:    %6lld ms\n",
+                    (long long) result.t_reference_speech_quantize_ms);
+            fprintf(stderr, "        semantic:  %6lld ms\n",
+                    (long long) result.t_reference_speech_quantize_semantic_ms);
+            fprintf(stderr, "        acoustic:  %6lld ms\n",
+                    (long long) result.t_reference_speech_quantize_acoustic_ms);
+        }
+    }
     fprintf(stderr, "  Generate:  %6lld ms\n", (long long) result.t_generate_ms);
     fprintf(stderr, "  Decode:    %6lld ms\n", (long long) result.t_decode_ms);
     fprintf(stderr, "    graph build:   %6lld ms %s\n",
@@ -127,6 +163,21 @@ static void print_result_timing(const qwen3_tts::tts_result & result) {
     fprintf(stderr, "    output read:   %6lld ms\n", (long long) result.t_decode_output_read_ms);
     fprintf(stderr, "    frames/samples:%6d / %lld\n",
             result.decode_frames, (long long) result.decode_samples);
+    if (result.streaming_decode_chunks > 0) {
+        fprintf(stderr, "    stream chunks: %6d\n", result.streaming_decode_chunks);
+        fprintf(stderr, "    stream frames: input=%d emitted=%d context=%d\n",
+                result.streaming_decode_input_frames,
+                result.streaming_decode_emitted_frames,
+                result.streaming_decode_context_frames);
+        fprintf(stderr,
+                "    stream detail: rebuilds=%d build=%lld ms alloc=%lld ms upload=%lld ms compute=%lld ms read=%lld ms\n",
+                result.streaming_decode_graph_rebuilds,
+                (long long) result.streaming_decode_graph_build_ms,
+                (long long) result.streaming_decode_graph_alloc_ms,
+                (long long) result.streaming_decode_input_upload_ms,
+                (long long) result.streaming_decode_graph_compute_ms,
+                (long long) result.streaming_decode_output_read_ms);
+    }
     fprintf(stderr, "  Total:     %6lld ms\n", (long long) result.t_total_ms);
 }
 
@@ -240,6 +291,8 @@ void print_usage(const char * program) {
     fprintf(stderr, "\n");
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -m, --model <dir>      Model directory (required)\n");
+    fprintf(stderr, "  --codec-model <file>   Codec/tokenizer GGUF override\n");
+    fprintf(stderr, "  --tokenizer-model <file> Alias for --codec-model\n");
     fprintf(stderr, "  -t, --text <text>      Text to synthesize (required)\n");
     fprintf(stderr, "  -o, --output <file>    Output WAV file (default: output.wav)\n");
     fprintf(stderr, "  -r, --reference <file> Reference audio for voice cloning\n");
@@ -266,7 +319,7 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --stream-left-context-sec <s> Streaming decoder left context (default: 2.0)\n");
     fprintf(stderr, "  --vocoder-left-context-sec <s> ICL vocoder reference context (default: 2.0)\n");
     fprintf(stderr, "  --repetition-penalty <val> Repetition penalty (default: 1.05)\n");
-    fprintf(stderr, "  -l, --language <lang>  Language: en,ru,zh,ja,ko,de,fr,es (default: en)\n");
+    fprintf(stderr, "  -l, --language <lang>  Language: auto,en,ru,zh,ja,ko,de,fr,es (default: auto)\n");
     fprintf(stderr, "  --instruction <instr>  Style/voice instruction\n");
     fprintf(stderr, "  --instruct <text>      Voice steering instructions (e.g. \"whispering\")\n");
     fprintf(stderr, "  -j, --threads <n>      CPU thread count (default: physical cores)\n");
@@ -297,6 +350,7 @@ int main(int argc, char ** argv) {
 
     std::string model_dir;
     std::string model_name;
+    std::string tokenizer_model_path;
     std::string text;
     std::string output_file = "output.wav";
     std::string reference_audio;
@@ -335,6 +389,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             model_name = args[i];
+        } else if (arg == "--codec-model" || arg == "--tokenizer-model") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing codec/tokenizer model path\n");
+                return 1;
+            }
+            tokenizer_model_path = args[i];
         } else if (arg == "-t" || arg == "--text") {
             if (++i >= (int) args.size()) {
                 fprintf(stderr, "Error: missing text\n");
@@ -493,7 +553,8 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             std::string lang = args[i];
-            if (lang == "en" || lang == "english")       params.language_id = 2050;
+            if (lang == "auto")                          params.language_id = -1;
+            else if (lang == "en" || lang == "english")  params.language_id = 2050;
             else if (lang == "ru" || lang == "russian")  params.language_id = 2069;
             else if (lang == "zh" || lang == "chinese")  params.language_id = 2055;
             else if (lang == "ja" || lang == "japanese")  params.language_id = 2058;
@@ -504,7 +565,7 @@ int main(int argc, char ** argv) {
             else if (lang == "it" || lang == "italian")  params.language_id = 2070;
             else if (lang == "pt" || lang == "portuguese") params.language_id = 2071;
             else {
-                fprintf(stderr, "Error: unknown language '%s'. Supported: en,ru,zh,ja,ko,de,fr,es,it,pt\n", lang.c_str());
+                fprintf(stderr, "Error: unknown language '%s'. Supported: auto,en,ru,zh,ja,ko,de,fr,es,it,pt\n", lang.c_str());
                 return 1;
             }
         } else if (arg == "--instruction" || arg == "--instruct") {
@@ -527,7 +588,8 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!qwen3_tts::set_cpu_thread_count(threads_set ? params.n_threads : qwen3_tts::default_cpu_thread_count())) {
+    if (!qwen3_tts::set_cpu_thread_count(threads_set ? params.n_threads : qwen3_tts::default_cpu_thread_count(),
+                                         threads_set)) {
         fprintf(stderr, "Error: failed to set CPU thread count\n");
         return 1;
     }
@@ -664,7 +726,7 @@ int main(int argc, char ** argv) {
 
     if (!extract_icl_prompt_file.empty()) {
         fprintf(stderr, "Loading ICL prompt encoders from: %s\n", model_dir.c_str());
-        if (!tts.load_icl_prompt_encoder_only(model_dir, model_name)) {
+        if (!tts.load_icl_prompt_encoder_only(model_dir, model_name, tokenizer_model_path)) {
             fprintf(stderr, "Error: %s\n", tts.get_error().c_str());
             return 1;
         }
@@ -689,7 +751,7 @@ int main(int argc, char ** argv) {
     }
 
     fprintf(stderr, "Loading models from: %s\n", model_dir.c_str());
-    if (!tts.load_models(model_dir, model_name)) {
+    if (!tts.load_models(model_dir, model_name, tokenizer_model_path)) {
         fprintf(stderr, "Error: %s\n", tts.get_error().c_str());
         return 1;
     }

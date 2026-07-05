@@ -4,6 +4,8 @@
 #include <vector>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 #define LOGE(...) fprintf(stderr, "[QwenEngine_JNI] " __VA_ARGS__); fprintf(stderr, "\n")
 
@@ -16,6 +18,32 @@ static jclass g_params_class = nullptr;
 static jfieldID g_lang_id_field = nullptr;
 static jfieldID g_instruction_field = nullptr;
 static jfieldID g_speaker_field = nullptr;
+static jfieldID g_max_audio_tokens_field = nullptr;
+
+struct ProgressCallbackState {
+    JavaVM* vm = nullptr;
+    jobject callback = nullptr;
+    jmethodID on_progress = nullptr;
+};
+
+static std::mutex g_progress_mutex;
+static std::unordered_map<jlong, ProgressCallbackState*> g_progress_callbacks;
+
+static void clear_progress_callback(JNIEnv* env, jlong ctx_ptr) {
+    std::lock_guard<std::mutex> lock(g_progress_mutex);
+    auto it = g_progress_callbacks.find(ctx_ptr);
+    if (it == g_progress_callbacks.end()) {
+        return;
+    }
+    qwen3_tts_set_progress_callback(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr), nullptr, nullptr);
+    if (it->second != nullptr) {
+        if (it->second->callback != nullptr) {
+            env->DeleteGlobalRef(it->second->callback);
+        }
+        delete it->second;
+    }
+    g_progress_callbacks.erase(it);
+}
 
 static jobject make_native_result(JNIEnv* env, qwen3_tts_result_t c_result) {
     if (g_result_class == nullptr || g_result_constructor == nullptr) {
@@ -53,6 +81,9 @@ static void fill_params_from_java(JNIEnv* env, jobject params, qwen3_tts_params_
                                   jstring* j_speaker, const char** c_speaker) {
     if (params != nullptr && g_lang_id_field != nullptr) {
         c_params->language_id = env->GetIntField(params, g_lang_id_field);
+    }
+    if (params != nullptr && g_max_audio_tokens_field != nullptr) {
+        c_params->max_audio_tokens = env->GetIntField(params, g_max_audio_tokens_field);
     }
     if (params != nullptr && g_instruction_field != nullptr) {
         *j_instruction = (jstring)env->GetObjectField(params, g_instruction_field);
@@ -132,6 +163,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
         return JNI_ERR;
     }
 
+    g_max_audio_tokens_field = env->GetFieldID(g_params_class, "maxAudioTokens", "I");
+    if (g_max_audio_tokens_field == nullptr) {
+        LOGE("Could not find maxAudioTokens field in NativeParams");
+        return JNI_ERR;
+    }
+
     return JNI_VERSION_1_6;
 }
 
@@ -150,6 +187,7 @@ JNIEXPORT jlong JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeInit(JN
 
 JNIEXPORT void JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeFree(JNIEnv* env, jobject thiz, jlong ctx_ptr) {
     if (ctx_ptr == 0) return;
+    clear_progress_callback(env, ctx_ptr);
     qwen3_tts_free(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr));
 }
 
@@ -169,6 +207,80 @@ JNIEXPORT jint JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetCpuTh
     JNIEnv* env, jobject thiz
 ) {
     return static_cast<jint>(qwen3_tts_get_cpu_threads());
+}
+
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSetProgressCallback(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr, jobject callback
+) {
+    if (ctx_ptr == 0) return JNI_FALSE;
+
+    clear_progress_callback(env, ctx_ptr);
+    if (callback == nullptr) {
+        return JNI_TRUE;
+    }
+
+    jclass callback_class = env->GetObjectClass(callback);
+    if (callback_class == nullptr) {
+        return JNI_FALSE;
+    }
+    jmethodID on_progress = env->GetMethodID(callback_class, "onProgress", "(II)V");
+    env->DeleteLocalRef(callback_class);
+    if (on_progress == nullptr) {
+        env->ExceptionClear();
+        return JNI_FALSE;
+    }
+
+    auto* state = new ProgressCallbackState();
+    env->GetJavaVM(&state->vm);
+    state->callback = env->NewGlobalRef(callback);
+    state->on_progress = on_progress;
+    if (state->callback == nullptr) {
+        delete state;
+        return JNI_FALSE;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_progress_mutex);
+        g_progress_callbacks[ctx_ptr] = state;
+    }
+
+    qwen3_tts_set_progress_callback(
+        reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+        [](int tokens_generated, int max_tokens, void* user_data) {
+            auto* state = static_cast<ProgressCallbackState*>(user_data);
+            if (state == nullptr || state->vm == nullptr || state->callback == nullptr) {
+                return;
+            }
+
+            JNIEnv* env = nullptr;
+            bool did_attach = false;
+            jint get_env = state->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+            if (get_env == JNI_EDETACHED) {
+                if (state->vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+                    return;
+                }
+                did_attach = true;
+            } else if (get_env != JNI_OK || env == nullptr) {
+                return;
+            }
+
+            env->CallVoidMethod(
+                state->callback,
+                state->on_progress,
+                static_cast<jint>(tokens_generated),
+                static_cast<jint>(max_tokens)
+            );
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            }
+            if (did_attach) {
+                state->vm->DetachCurrentThread();
+            }
+        },
+        state
+    );
+
+    return JNI_TRUE;
 }
 
 JNIEXPORT jint JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetCompiledBackendMask(
@@ -261,7 +373,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
         }
     }
 
-    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr, nullptr, 2.0f};
+    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, -1, nullptr, nullptr, 2.0f};
     
     jstring j_instruction = nullptr;
     const char* c_instruction = nullptr;
@@ -270,6 +382,9 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
 
     if (params != nullptr && g_lang_id_field != nullptr) {
         c_params.language_id = env->GetIntField(params, g_lang_id_field);
+    }
+    if (params != nullptr && g_max_audio_tokens_field != nullptr) {
+        c_params.max_audio_tokens = env->GetIntField(params, g_max_audio_tokens_field);
     }
     if (params != nullptr && g_instruction_field != nullptr) {
         j_instruction = (jstring)env->GetObjectField(params, g_instruction_field);
@@ -320,7 +435,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
         return nullptr;
     }
 
-    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr, nullptr, 2.0f};
+    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, -1, nullptr, nullptr, 2.0f};
 
     jstring j_instruction = nullptr;
     const char* c_instruction = nullptr;
@@ -391,7 +506,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
         return nullptr;
     }
 
-    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr, nullptr, 2.0f};
+    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, -1, nullptr, nullptr, 2.0f};
 
     jstring j_instruction = nullptr;
     const char* c_instruction = nullptr;
