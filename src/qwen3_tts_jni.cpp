@@ -256,9 +256,11 @@ JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSetP
             bool did_attach = false;
             jint get_env = state->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
             if (get_env == JNI_EDETACHED) {
-                if (state->vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+                void* attached_env = nullptr;
+                if (state->vm->AttachCurrentThread(&attached_env, nullptr) != JNI_OK) {
                     return;
                 }
+                env = static_cast<JNIEnv*>(attached_env);
                 did_attach = true;
             } else if (get_env != JNI_OK || env == nullptr) {
                 return;
