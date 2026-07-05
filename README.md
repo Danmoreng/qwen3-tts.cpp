@@ -485,6 +485,13 @@ Low-memory mode can be enabled at runtime:
 QWEN3_TTS_LOW_MEM=1 ./build/qwen3-tts-cli -m models -t "Hello" -o hello.wav
 ```
 
+Runtime performance toggles:
+
+| Variable | Purpose |
+|----------|---------|
+| `QWEN3_TTS_CODE_PRED_REPLAY_GRAPHS=0` | Disable default Code Predictor replay graphs for backend or memory diagnostics |
+| `QWEN3_TTS_TALKER_REPLAY_GRAPHS=0` | Disable default Talker step replay graphs for backend or memory diagnostics |
+
 ## Testing and Debugging
 
 Windows regression runner:

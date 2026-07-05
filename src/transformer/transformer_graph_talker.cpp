@@ -17,6 +17,7 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
     const float eps = cfg.rms_norm_eps;
     const float rope_theta = cfg.rope_theta;
     const int n_layer = cfg.n_layers;
+    const int n_kv_pad = std::min<int>(impl->state.cache.n_ctx, GGML_PAD(n_past + n_tokens, 256));
 
     struct ggml_init_params params = {
         /*.mem_size   =*/ impl->state.compute_meta.size(),
@@ -42,10 +43,13 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
         ggml_set_input(inp_mrope_pos);
     }
 
+    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv_pad, n_tokens);
+    ggml_set_name(inp_mask, "inp_mask");
+    ggml_set_input(inp_mask);
+
     struct ggml_tensor * cur = inp_prefill_embd;
     struct ggml_tensor * inpL = cur;
 
-    const float KQscale = 1.0f / sqrtf((float) head_dim);
     int mrope_sections[GGML_MROPE_SECTIONS] = { cfg.mrope_section[0], cfg.mrope_section[1], cfg.mrope_section[2], 0 };
 
     for (int il = 0; il < n_layer; ++il) {
@@ -106,34 +110,21 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
         ggml_build_forward_expand(gf, v_updated);
 
         struct ggml_tensor * K = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_kv_head, impl->state.cache.n_ctx,
+            head_dim, n_kv_head, n_kv_pad,
             k_cache->nb[1], k_cache->nb[2], 0);
 
         struct ggml_tensor * V = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_kv_head, impl->state.cache.n_ctx,
+            head_dim, n_kv_head, n_kv_pad,
             v_cache->nb[1], v_cache->nb[2], 0);
 
         struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
         K = ggml_permute(ctx0, K, 0, 2, 1, 3);
         V = ggml_permute(ctx0, V, 0, 2, 1, 3);
 
-        if (n_tokens == 1) {
-            struct ggml_tensor * KQ_mask = ggml_get_tensor(ctx0, "inp_mask");
-            struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, KQ_mask,
-                                                              1.0f / sqrtf((float) head_dim), 0.0f, 0.0f);
-            cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
-        } else {
-            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-            KQ = ggml_scale(ctx0, KQ, KQscale);
-            KQ = ggml_diag_mask_inf(ctx0, KQ, n_past);
-            KQ = ggml_soft_max(ctx0, KQ);
-
-            V = ggml_cont(ctx0, ggml_transpose(ctx0, V));
-
-            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
-            KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-            cur = ggml_cont_2d(ctx0, KQV, n_head * head_dim, n_tokens);
-        }
+        struct ggml_tensor * KQV_fa = ggml_flash_attn_ext(ctx0, Q, K, V, inp_mask,
+                                                          1.0f / sqrtf((float) head_dim), 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_prec(KQV_fa, GGML_PREC_F32);
+        cur = ggml_cont_2d(ctx0, KQV_fa, n_head * head_dim, n_tokens);
 
         cur = ggml_mul_mat(ctx0, layer.attn_output, cur);
         cur = ggml_add(ctx0, cur, inpL);
@@ -176,7 +167,8 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
 }
 
 struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer & self, int32_t n_past,
-                                                                 bool use_frame_codes) {
+                                                                 bool use_frame_codes,
+                                                                 std::vector<uint8_t> * meta_override) {
     auto & impl = self.impl_;
     const auto & cfg = impl->model.config;
     const int n_head = cfg.n_attention_heads;
@@ -189,9 +181,10 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
     const int n_tokens = 1;
     const int n_kv_pad = std::min<int>(impl->state.cache.n_ctx, GGML_PAD(n_past + n_tokens, 256));
 
+    std::vector<uint8_t> & meta = meta_override ? *meta_override : impl->state.compute_meta;
     struct ggml_init_params params = {
-        /*.mem_size   =*/ impl->state.compute_meta.size(),
-        /*.mem_buffer =*/ impl->state.compute_meta.data(),
+        /*.mem_size   =*/ meta.size(),
+        /*.mem_buffer =*/ meta.data(),
         /*.no_alloc   =*/ true,
     };
 

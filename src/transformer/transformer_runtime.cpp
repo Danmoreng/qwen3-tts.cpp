@@ -5,9 +5,80 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace qwen3_tts {
+
+namespace {
+
+bool talker_replay_enabled() {
+    const char * value = std::getenv("QWEN3_TTS_TALKER_REPLAY_GRAPHS");
+    return !value || value[0] != '0';
+}
+
+int32_t talker_step_n_kv_pad(const tts_transformer_state & state, int32_t n_past) {
+    return std::min<int32_t>(state.cache.n_ctx, GGML_PAD(n_past + 1, 256));
+}
+
+bool ensure_talker_replay_graph(TTSTransformer & self, tts_transformer_private & impl,
+                                int32_t n_past, bool use_frame_codes,
+                                bool read_hidden, bool has_hidden_out) {
+    auto & state = impl.state;
+    if (!talker_replay_enabled()) {
+        return false;
+    }
+    if (!use_frame_codes || read_hidden || has_hidden_out) {
+        return false;
+    }
+    if (state.talker_replay_failed || !state.backend) {
+        return false;
+    }
+
+    const int32_t n_kv_pad = talker_step_n_kv_pad(state, n_past);
+    if (state.talker_replay_ready && state.talker_replay_n_kv_pad == n_kv_pad) {
+        return true;
+    }
+
+    if (state.talker_replay_sched) {
+        ggml_backend_sched_reset(state.talker_replay_sched);
+    } else {
+        std::vector<ggml_backend_t> backends;
+        backends.push_back(state.backend);
+        if (state.backend_cpu) {
+            backends.push_back(state.backend_cpu);
+        }
+        state.talker_replay_sched = ggml_backend_sched_new(
+            backends.data(), nullptr, (int) backends.size(), QWEN3_TTS_MAX_NODES, false, true);
+        if (!state.talker_replay_sched) {
+            state.talker_replay_failed = true;
+            fprintf(stderr, "  Talker replay graph scheduler failed to initialize; using dynamic graphs\n");
+            return false;
+        }
+    }
+
+    state.talker_replay_graph = transformer_internal::ops::build_step_graph(
+        self, n_past, true, &state.talker_replay_compute_meta);
+    if (!state.talker_replay_graph) {
+        state.talker_replay_failed = true;
+        return false;
+    }
+
+    if (!ggml_backend_sched_alloc_graph(state.talker_replay_sched, state.talker_replay_graph)) {
+        ggml_backend_sched_reset(state.talker_replay_sched);
+        state.talker_replay_ready = false;
+        state.talker_replay_failed = true;
+        fprintf(stderr, "  Talker replay graph allocation failed; using dynamic graphs\n");
+        return false;
+    }
+
+    state.talker_replay_ready = true;
+    state.talker_replay_n_kv_pad = n_kv_pad;
+    fprintf(stderr, "  Talker replay graph: enabled for %d-token bucket (experimental)\n", n_kv_pad);
+    return true;
+}
+
+} // namespace
 
 bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_tokens,
                                      int32_t n_past, std::vector<float> & output,
@@ -100,6 +171,30 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
             fprintf(stderr, "  ERROR: inp_mrope_pos write out of bounds! nbytes=%zu, write=%zu\n", ggml_nbytes(inp_mrope_pos), write_size);
         }
         ggml_backend_tensor_set(inp_mrope_pos, positions.data(), 0, write_size);
+    }
+
+    struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
+    if (inp_mask) {
+        const int32_t n_kv_pad = (int32_t) inp_mask->ne[0];
+        const size_t mask_size = (size_t) n_tokens * (size_t) n_kv_pad;
+        auto & mask = impl_->state.talker_mask;
+        if (mask.size() != mask_size) {
+            mask.resize(mask_size);
+        }
+        const ggml_fp16_t zero_fp16 = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t neg_inf_fp16 = ggml_fp32_to_fp16(-INFINITY);
+        for (size_t i = 0; i < mask.size(); ++i) {
+            mask[i] = neg_inf_fp16;
+        }
+        for (int32_t q = 0; q < n_tokens; ++q) {
+            const int32_t q_pos = n_past + q;
+            const int32_t last_k = std::min<int32_t>(q_pos, n_kv_pad - 1);
+            ggml_fp16_t * row = mask.data() + (size_t) q * (size_t) n_kv_pad;
+            for (int32_t k = 0; k <= last_k; ++k) {
+                row[k] = zero_fp16;
+            }
+        }
+        ggml_backend_tensor_set(inp_mask, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
@@ -226,25 +321,40 @@ bool TTSTransformer::forward_step_internal(const float * step_embd,
     auto t0 = clk::now(), t1 = t0;
 #endif
 
+    const bool use_talker_replay =
+        ensure_talker_replay_graph(*this, *impl_, n_past, use_frame_codes,
+                                   read_hidden, hidden_out != nullptr);
+    ggml_backend_sched_t step_sched = use_talker_replay
+        ? impl_->state.talker_replay_sched
+        : impl_->state.sched;
+
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    struct ggml_cgraph * gf = transformer_internal::ops::build_step_graph(*this, n_past, use_frame_codes);
+    struct ggml_cgraph * gf = use_talker_replay
+        ? impl_->state.talker_replay_graph
+        : transformer_internal::ops::build_step_graph(*this, n_past, use_frame_codes);
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
-    if (impl_->timing) impl_->timing->t_talker_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (impl_->timing && !use_talker_replay) {
+        impl_->timing->t_talker_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 #endif
 
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    if (!ggml_backend_sched_alloc_graph(impl_->state.sched, gf)) {
-        error_msg_ = "Failed to allocate graph";
-        return false;
+    if (!use_talker_replay) {
+        if (!ggml_backend_sched_alloc_graph(step_sched, gf)) {
+            error_msg_ = "Failed to allocate graph";
+            return false;
+        }
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
-    if (impl_->timing) impl_->timing->t_talker_graph_alloc_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (impl_->timing && !use_talker_replay) {
+        impl_->timing->t_talker_graph_alloc_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 #endif
 
 #ifdef QWEN3_TTS_TIMING
@@ -299,15 +409,23 @@ bool TTSTransformer::forward_step_internal(const float * step_embd,
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
-    if (impl_->timing) impl_->timing->t_talker_data_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (impl_->timing) {
+        const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        impl_->timing->t_talker_data_ms += dt_ms;
+        impl_->timing->t_talker_input_upload_ms += dt_ms;
+    }
 #endif
 
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    if (ggml_backend_sched_graph_compute(impl_->state.sched, gf) != GGML_STATUS_SUCCESS) {
+    if (ggml_backend_sched_graph_compute(step_sched, gf) != GGML_STATUS_SUCCESS) {
         error_msg_ = "Failed to compute graph";
-        ggml_backend_sched_reset(impl_->state.sched);
+        if (use_talker_replay) {
+            impl_->state.talker_replay_ready = false;
+            impl_->state.talker_replay_failed = true;
+        }
+        ggml_backend_sched_reset(step_sched);
         return false;
     }
 #ifdef QWEN3_TTS_TIMING
@@ -318,7 +436,9 @@ bool TTSTransformer::forward_step_internal(const float * step_embd,
     struct ggml_tensor * hidden = ggml_graph_get_tensor(gf, "hidden_states");
     if (!hidden) {
         error_msg_ = "Failed to find hidden_states tensor";
-        ggml_backend_sched_reset(impl_->state.sched);
+        if (!use_talker_replay) {
+            ggml_backend_sched_reset(step_sched);
+        }
         return false;
     }
 
@@ -337,23 +457,49 @@ bool TTSTransformer::forward_step_internal(const float * step_embd,
         ggml_backend_tensor_get(hidden, last_hidden_.data(), 0,
                                 impl_->model.config.hidden_size * sizeof(float));
     }
+#ifdef QWEN3_TTS_TIMING
+    t1 = clk::now();
+    if (impl_->timing) {
+        const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        impl_->timing->t_talker_data_ms += dt_ms;
+        impl_->timing->t_talker_hidden_read_ms += dt_ms;
+    }
+    t0 = clk::now();
+#endif
 
     struct ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
     if (!logits) {
         error_msg_ = "Failed to find logits tensor";
-        ggml_backend_sched_reset(impl_->state.sched);
+        if (!use_talker_replay) {
+            ggml_backend_sched_reset(step_sched);
+        }
         return false;
     }
 
     output.resize(impl_->model.config.codec_vocab_size);
     ggml_backend_tensor_get(logits, output.data(), 0, output.size() * sizeof(float));
+#ifdef QWEN3_TTS_TIMING
+    t1 = clk::now();
+    if (impl_->timing) {
+        const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        impl_->timing->t_talker_data_ms += dt_ms;
+        impl_->timing->t_talker_logits_read_ms += dt_ms;
+    }
+    t0 = clk::now();
+#endif
 
     impl_->state.cache.n_used = n_past + 1;
 
-    ggml_backend_sched_reset(impl_->state.sched);
+    if (!use_talker_replay) {
+        ggml_backend_sched_reset(step_sched);
+    }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
-    if (impl_->timing) impl_->timing->t_talker_data_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (impl_->timing && !use_talker_replay) {
+        const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        impl_->timing->t_talker_data_ms += dt_ms;
+        impl_->timing->t_talker_sched_reset_ms += dt_ms;
+    }
 #endif
 
     return true;

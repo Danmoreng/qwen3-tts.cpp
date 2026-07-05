@@ -23,12 +23,23 @@ struct tts_timing {
     double t_prefill_graph_alloc_ms = 0;
     double t_prefill_compute_ms = 0;
     double t_prefill_data_ms = 0;
+    double t_prefill_special_text_proj_ms = 0;
+    double t_prefill_instruct_text_proj_ms = 0;
+    double t_prefill_role_text_proj_ms = 0;
+    double t_prefill_body_text_proj_ms = 0;
+    double t_prefill_codec_lookup_ms = 0;
+    double t_prefill_ref_code_embed_ms = 0;
+    double t_prefill_compose_ms = 0;
 
     double t_talker_forward_ms = 0;
     double t_talker_graph_build_ms = 0;
     double t_talker_graph_alloc_ms = 0;
     double t_talker_compute_ms = 0;
     double t_talker_data_ms = 0;
+    double t_talker_input_upload_ms = 0;
+    double t_talker_hidden_read_ms = 0;
+    double t_talker_logits_read_ms = 0;
+    double t_talker_sched_reset_ms = 0;
 
     double t_code_pred_ms = 0;
     double t_code_pred_init_ms = 0;
@@ -38,16 +49,31 @@ struct tts_timing {
     double t_code_pred_graph_alloc_ms = 0;
     double t_code_pred_compute_ms = 0;
     double t_code_pred_data_ms = 0;
+    double t_code_pred_prefill_graph_build_ms = 0;
+    double t_code_pred_prefill_graph_alloc_ms = 0;
+    double t_code_pred_prefill_compute_ms = 0;
+    double t_code_pred_prefill_data_ms = 0;
+    double t_code_pred_steps_graph_build_ms = 0;
+    double t_code_pred_steps_graph_alloc_ms = 0;
+    double t_code_pred_steps_compute_ms = 0;
+    double t_code_pred_steps_data_ms = 0;
+    double t_code_pred_input_upload_ms = 0;
+    double t_code_pred_logits_read_ms = 0;
+    double t_code_pred_sampling_ms = 0;
+    double t_code_pred_sched_reset_ms = 0;
     double t_code_pred_coreml_ms = 0;
 
     double t_embed_lookup_ms = 0;
 
     int32_t n_frames = 0;
+    int32_t n_prefill_tokens = 0;
+    int32_t n_trailing_tokens = 0;
     double t_generate_total_ms = 0;
 };
 #endif
 
 #define QWEN3_TTS_MAX_NODES 16384
+#define QWEN3_TTS_CODE_PRED_MAX_NODES 4096
 
 struct transformer_layer {
     struct ggml_tensor * attn_norm = nullptr;
@@ -115,15 +141,36 @@ struct tts_transformer_state {
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_sched_t sched = nullptr;
+    ggml_backend_sched_t talker_replay_sched = nullptr;
+    ggml_backend_sched_t code_pred_prefill_sched = nullptr;
+    ggml_backend_sched_t code_pred_step_sched = nullptr;
+    std::vector<ggml_backend_sched_t> code_pred_replay_scheds;
+    std::vector<struct ggml_cgraph *> code_pred_replay_graphs;
     bool sched_reserved = false;
     bool sched_reserve_failed = false;
     int32_t sched_reserved_ctx = 0;
     int32_t sched_reserved_prefill_len = 0;
+    bool code_pred_sched_reserved = false;
+    bool code_pred_sched_reserve_failed = false;
+    bool talker_replay_ready = false;
+    bool talker_replay_failed = false;
+    int32_t talker_replay_n_kv_pad = 0;
+    struct ggml_cgraph * talker_replay_graph = nullptr;
+    bool code_pred_replay_ready = false;
+    bool code_pred_replay_failed = false;
 
     std::vector<uint8_t> compute_meta;
+    std::vector<uint8_t> talker_replay_compute_meta;
     std::vector<std::vector<uint8_t>> code_pred_compute_meta;
     std::vector<ggml_fp16_t> talker_mask;
-    std::vector<ggml_fp16_t> code_pred_mask;
+    std::vector<ggml_fp16_t> code_pred_prefill_mask;
+    std::vector<ggml_fp16_t> code_pred_step_masks;
+    int32_t code_pred_static_mask_n_ctx = 0;
+    struct ggml_tensor * code_pred_prefill_pos = nullptr;
+    struct ggml_tensor * code_pred_prefill_mask_tensor = nullptr;
+    std::vector<struct ggml_tensor *> code_pred_step_pos;
+    std::vector<struct ggml_tensor *> code_pred_step_mask_tensors;
+    std::vector<uint8_t> code_pred_graph_stats_logged;
 
     struct ggml_context * hidden_bridge_ctx = nullptr;
     ggml_backend_buffer_t hidden_bridge_buffer = nullptr;
@@ -137,6 +184,11 @@ struct tts_transformer_private {
     tts_transformer_model model;
     tts_transformer_state state;
     std::vector<ggml_fp16_t> embd_row_fp16_scratch;
+    std::vector<float> cached_special_text_proj;
+    std::vector<int32_t> cached_reference_code_key;
+    std::vector<float> cached_reference_codec_embed;
+    int32_t cached_reference_frames = 0;
+    int32_t cached_reference_codebooks = 0;
     CoreMLCodePredictor coreml_code_predictor;
     bool use_coreml_code_predictor = false;
     std::string coreml_code_predictor_path;

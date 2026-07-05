@@ -250,6 +250,14 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
     const auto & cfg = impl->model.config;
     const int32_t hidden_size = cfg.hidden_size;
 
+#ifdef QWEN3_TTS_TIMING
+    using clk = std::chrono::high_resolution_clock;
+    auto now = []() { return clk::now(); };
+    auto add_elapsed = [&](double &dst, const clk::time_point & start) {
+        dst += std::chrono::duration<double, std::milli>(clk::now() - start).count();
+    };
+#endif
+
     int32_t special_tokens[3] = {
         cfg.tts_bos_token_id,
         cfg.tts_eos_token_id,
@@ -257,28 +265,66 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
     };
 
     std::vector<float> special_proj;
-    if (!project_text_tokens(self, special_tokens, 3, special_proj)) {
-        return false;
+#ifdef QWEN3_TTS_TIMING
+    auto t_part = now();
+#endif
+    const size_t special_proj_size = (size_t) hidden_size * 3;
+    if (impl->cached_special_text_proj.size() == special_proj_size) {
+        special_proj = impl->cached_special_text_proj;
+    } else {
+        if (!project_text_tokens(self, special_tokens, 3, special_proj)) {
+            return false;
+        }
+        impl->cached_special_text_proj = special_proj;
     }
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_special_text_proj_ms, t_part);
+    }
+#endif
 
+#ifdef QWEN3_TTS_TIMING
+    t_part = now();
+#endif
     std::vector<float> tts_bos_embed(hidden_size);
     std::vector<float> tts_eos_embed(hidden_size);
     tts_pad_embed.resize(hidden_size);
     memcpy(tts_bos_embed.data(), special_proj.data() + 0 * hidden_size, hidden_size * sizeof(float));
     memcpy(tts_eos_embed.data(), special_proj.data() + 1 * hidden_size, hidden_size * sizeof(float));
     memcpy(tts_pad_embed.data(), special_proj.data() + 2 * hidden_size, hidden_size * sizeof(float));
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+    }
+#endif
 
     std::vector<float> instruct_embed;
     if (n_instruct_tokens > 0 && instruct_tokens) {
+#ifdef QWEN3_TTS_TIMING
+        t_part = now();
+#endif
         if (!project_text_tokens(self, instruct_tokens, n_instruct_tokens, instruct_embed)) {
             return false;
         }
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_instruct_text_proj_ms, t_part);
+        }
+#endif
     }
 
     std::vector<float> role_embed;
+#ifdef QWEN3_TTS_TIMING
+    t_part = now();
+#endif
     if (!project_text_tokens(self, text_tokens, 3, role_embed)) {
         return false;
     }
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_role_text_proj_ms, t_part);
+    }
+#endif
 
     std::vector<int32_t> codec_prefill_tokens;
     if (language_id < 0) {
@@ -297,20 +343,36 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
     }
 
     std::vector<float> codec_prefill_embed;
+#ifdef QWEN3_TTS_TIMING
+    t_part = now();
+#endif
     if (!lookup_embedding_rows(self, impl->model.codec_embd, codec_prefill_tokens.data(),
                                (int32_t) codec_prefill_tokens.size(),
                                "inp_codec_prefill_tokens", "codec_prefill_rows",
                                codec_prefill_embed)) {
         return false;
     }
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_codec_lookup_ms, t_part);
+    }
+#endif
 
     int32_t codec_tail_tokens[2] = { cfg.codec_pad_id, cfg.codec_bos_id };
     std::vector<float> codec_tail_embed;
+#ifdef QWEN3_TTS_TIMING
+    t_part = now();
+#endif
     if (!lookup_embedding_rows(self, impl->model.codec_embd, codec_tail_tokens, 2,
                                "inp_codec_tail_tokens", "codec_tail_rows",
                                codec_tail_embed)) {
         return false;
     }
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_codec_lookup_ms, t_part);
+    }
+#endif
 
     if (has_reference) {
         if (!speaker_embd) {
@@ -350,6 +412,9 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
         };
 
         std::vector<float> prompt;
+#ifdef QWEN3_TTS_TIMING
+        t_part = now();
+#endif
         if (n_instruct_tokens > 0 && instruct_tokens) {
             append_rows(prompt, instruct_embed);
         }
@@ -375,6 +440,11 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
             append_added_row(prompt, overlay,
                              codec_input_embedding.data() + (size_t) row * hidden_size);
         }
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+        }
+#endif
 
         const int32_t target_text_count = n_tokens - 3 - 5;
         const int32_t reference_text_count = n_reference_tokens - 3 - 2;
@@ -394,55 +464,128 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
 
         std::vector<float> text_embed;
         if (!combined_text.empty()) {
+#ifdef QWEN3_TTS_TIMING
+            t_part = now();
+#endif
             if (!project_text_tokens(self, combined_text.data(), (int32_t) combined_text.size(), text_embed)) {
                 return false;
             }
+#ifdef QWEN3_TTS_TIMING
+            if (impl->timing) {
+                add_elapsed(impl->timing->t_prefill_body_text_proj_ms, t_part);
+            }
+#endif
         }
+#ifdef QWEN3_TTS_TIMING
+        t_part = now();
+#endif
         append_row(text_embed, tts_eos_embed.data());
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+        }
+#endif
 
         std::vector<float> ref_codec;
-        ref_codec.reserve((size_t) (n_reference_frames + 1) * hidden_size);
-        append_row(ref_codec, codec_tail_embed.data() + (size_t) hidden_size);
-        std::vector<float> code_row(hidden_size);
-        std::vector<float> summed(hidden_size);
-        for (int32_t frame = 0; frame < n_reference_frames; ++frame) {
-            std::fill(summed.begin(), summed.end(), 0.0f);
+#ifdef QWEN3_TTS_TIMING
+        t_part = now();
+#endif
+        ref_codec.assign((size_t) (n_reference_frames + 1) * hidden_size, 0.0f);
+        memcpy(ref_codec.data(), codec_tail_embed.data() + (size_t) hidden_size,
+               (size_t) hidden_size * sizeof(float));
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+        }
+        t_part = now();
+#endif
+        const size_t n_reference_codes = (size_t) n_reference_frames * n_reference_codebooks;
+        const bool ref_cache_hit =
+            impl->cached_reference_frames == n_reference_frames &&
+            impl->cached_reference_codebooks == n_reference_codebooks &&
+            impl->cached_reference_code_key.size() == n_reference_codes &&
+            impl->cached_reference_codec_embed.size() == ref_codec.size() &&
+            memcmp(impl->cached_reference_code_key.data(), reference_codes,
+                   n_reference_codes * sizeof(int32_t)) == 0;
+
+        if (ref_cache_hit) {
+            ref_codec = impl->cached_reference_codec_embed;
+        } else {
+            std::vector<int32_t> codebook_tokens((size_t) n_reference_frames);
+            std::vector<float> codebook_rows;
             for (int32_t cb = 0; cb < n_reference_codebooks; ++cb) {
-                const int32_t code = reference_codes[(size_t) frame * n_reference_codebooks + cb];
+                for (int32_t frame = 0; frame < n_reference_frames; ++frame) {
+                    codebook_tokens[(size_t) frame] =
+                        reference_codes[(size_t) frame * n_reference_codebooks + cb];
+                }
+
                 struct ggml_tensor * table = cb == 0
                     ? impl->model.codec_embd
                     : impl->model.code_pred_embd[(size_t) cb - 1];
-                if (!lookup_single_embedding_row(self, table, code, code_row.data())) {
+                char input_name[64];
+                char output_name[64];
+                snprintf(input_name, sizeof(input_name), "inp_ref_codes_cb_%02d", cb);
+                snprintf(output_name, sizeof(output_name), "ref_code_rows_cb_%02d", cb);
+                if (!lookup_embedding_rows(self, table, codebook_tokens.data(), n_reference_frames,
+                                           input_name, output_name, codebook_rows)) {
                     return false;
                 }
-                for (int32_t h = 0; h < hidden_size; ++h) {
-                    summed[h] += code_row[h];
+
+                for (int32_t frame = 0; frame < n_reference_frames; ++frame) {
+                    float * dst = ref_codec.data() + (size_t) (frame + 1) * hidden_size;
+                    const float * src = codebook_rows.data() + (size_t) frame * hidden_size;
+                    for (int32_t h = 0; h < hidden_size; ++h) {
+                        dst[h] += src[h];
+                    }
                 }
             }
-            append_row(ref_codec, summed.data());
-        }
 
-        const float * codec_pad_embed = codec_tail_embed.data();
+            impl->cached_reference_code_key.assign(reference_codes, reference_codes + n_reference_codes);
+            impl->cached_reference_codec_embed = ref_codec;
+            impl->cached_reference_frames = n_reference_frames;
+            impl->cached_reference_codebooks = n_reference_codebooks;
+        }
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_ref_code_embed_ms, t_part);
+        }
+#endif
+
         const int32_t text_rows = (int32_t) (text_embed.size() / hidden_size);
-        for (int32_t row = 0; row < text_rows; ++row) {
-            append_added_row(prompt,
-                             text_embed.data() + (size_t) row * hidden_size,
-                             codec_pad_embed);
-        }
-
         const int32_t ref_codec_rows = (int32_t) (ref_codec.size() / hidden_size);
+#ifdef QWEN3_TTS_TIMING
+        t_part = now();
+#endif
         for (int32_t row = 0; row < ref_codec_rows; ++row) {
+            const float * text_row = row < text_rows
+                ? text_embed.data() + (size_t) row * hidden_size
+                : tts_pad_embed.data();
             append_added_row(prompt,
-                             tts_pad_embed.data(),
+                             text_row,
                              ref_codec.data() + (size_t) row * hidden_size);
         }
 
-        trailing_text_hidden = tts_pad_embed;
+        if (text_rows > ref_codec_rows) {
+            const int32_t trailing_rows = text_rows - ref_codec_rows;
+            trailing_text_hidden.assign(
+                text_embed.begin() + (size_t) ref_codec_rows * hidden_size,
+                text_embed.begin() + (size_t) (ref_codec_rows + trailing_rows) * hidden_size);
+        } else {
+            trailing_text_hidden = tts_pad_embed;
+        }
 
         prefill_embd = std::move(prompt);
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+        }
+#endif
         return true;
     }
 
+#ifdef QWEN3_TTS_TIMING
+    t_part = now();
+#endif
     const bool has_speaker = (speaker_embd != nullptr);
     const int32_t codec_input_len = (int32_t) codec_prefill_tokens.size() + (has_speaker ? 1 : 0) + 2;
     std::vector<float> codec_input_embedding((size_t) codec_input_len * hidden_size);
@@ -472,6 +615,11 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
             out_row[h] = overlay[h] + codec_row[h];
         }
     }
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+    }
+#endif
 
     const int32_t suffix_len = 5;
     const int32_t text_body_count = n_tokens - 3 - suffix_len;
@@ -482,11 +630,22 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
 
     std::vector<float> text_body_proj;
     if (text_body_count > 0) {
+#ifdef QWEN3_TTS_TIMING
+        t_part = now();
+#endif
         if (!project_text_tokens(self, text_tokens + 3, text_body_count, text_body_proj)) {
             return false;
         }
+#ifdef QWEN3_TTS_TIMING
+        if (impl->timing) {
+            add_elapsed(impl->timing->t_prefill_body_text_proj_ms, t_part);
+        }
+#endif
     }
 
+#ifdef QWEN3_TTS_TIMING
+    t_part = now();
+#endif
     const float * codec_pad_embed = codec_tail_embed.data();
     const float * codec_bos_embed = codec_tail_embed.data() + (size_t) hidden_size;
 
@@ -534,6 +693,12 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
     }
 
     trailing_text_hidden = tts_pad_embed;
+
+#ifdef QWEN3_TTS_TIMING
+    if (impl->timing) {
+        add_elapsed(impl->timing->t_prefill_compose_ms, t_part);
+    }
+#endif
 
     return true;
 }

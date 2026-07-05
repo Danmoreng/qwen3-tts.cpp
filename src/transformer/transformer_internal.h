@@ -51,7 +51,8 @@ struct ops {
 
     static struct ggml_cgraph * build_prefill_forward_graph(TTSTransformer & self, int32_t n_tokens, int32_t n_past);
     static struct ggml_cgraph * build_step_graph(TTSTransformer & self, int32_t n_past,
-                                                 bool use_frame_codes = false);
+                                                 bool use_frame_codes = false,
+                                                 std::vector<uint8_t> * meta_override = nullptr);
     static bool project_text_tokens(TTSTransformer & self,
                                     const int32_t * text_tokens,
                                     int32_t n_tokens,

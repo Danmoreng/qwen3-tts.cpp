@@ -34,6 +34,11 @@ void free_hidden_bridge(tts_transformer_state & state) {
     state.hidden_bridge = nullptr;
 }
 
+bool env_flag_disabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value && value[0] == '0';
+}
+
 } // namespace
 
 void TTSTransformer::unload_model() {
@@ -47,6 +52,31 @@ void TTSTransformer::unload_model() {
     impl_->coreml_code_predictor_path.clear();
     impl_->skip_ggml_code_pred_layers = false;
 
+    if (impl_->state.code_pred_prefill_sched) {
+        ggml_backend_sched_free(impl_->state.code_pred_prefill_sched);
+        impl_->state.code_pred_prefill_sched = nullptr;
+    }
+    if (impl_->state.code_pred_step_sched) {
+        ggml_backend_sched_free(impl_->state.code_pred_step_sched);
+        impl_->state.code_pred_step_sched = nullptr;
+    }
+    if (impl_->state.talker_replay_sched) {
+        ggml_backend_sched_free(impl_->state.talker_replay_sched);
+        impl_->state.talker_replay_sched = nullptr;
+    }
+    impl_->state.talker_replay_graph = nullptr;
+    impl_->state.talker_replay_ready = false;
+    impl_->state.talker_replay_failed = false;
+    impl_->state.talker_replay_n_kv_pad = 0;
+    for (ggml_backend_sched_t replay_sched : impl_->state.code_pred_replay_scheds) {
+        if (replay_sched) {
+            ggml_backend_sched_free(replay_sched);
+        }
+    }
+    impl_->state.code_pred_replay_scheds.clear();
+    impl_->state.code_pred_replay_graphs.clear();
+    impl_->state.code_pred_replay_ready = false;
+    impl_->state.code_pred_replay_failed = false;
     if (impl_->state.sched) {
         ggml_backend_sched_free(impl_->state.sched);
         impl_->state.sched = nullptr;
@@ -55,6 +85,10 @@ void TTSTransformer::unload_model() {
     impl_->state.sched_reserve_failed = false;
     impl_->state.sched_reserved_ctx = 0;
     impl_->state.sched_reserved_prefill_len = 0;
+    impl_->state.code_pred_sched_reserved = false;
+    impl_->state.code_pred_sched_reserve_failed = false;
+    impl_->state.code_pred_replay_ready = false;
+    impl_->state.code_pred_replay_failed = false;
     if (impl_->state.backend) {
         release_preferred_backend(impl_->state.backend);
         impl_->state.backend = nullptr;
@@ -65,11 +99,24 @@ void TTSTransformer::unload_model() {
     }
 
     impl_->state.compute_meta.clear();
+    impl_->state.talker_replay_compute_meta.clear();
     impl_->state.code_pred_compute_meta.clear();
     impl_->state.talker_mask.clear();
-    impl_->state.code_pred_mask.clear();
+    impl_->state.code_pred_prefill_mask.clear();
+    impl_->state.code_pred_step_masks.clear();
+    impl_->state.code_pred_static_mask_n_ctx = 0;
+    impl_->state.code_pred_prefill_pos = nullptr;
+    impl_->state.code_pred_prefill_mask_tensor = nullptr;
+    impl_->state.code_pred_step_pos.clear();
+    impl_->state.code_pred_step_mask_tensors.clear();
+    impl_->state.code_pred_graph_stats_logged.clear();
     last_hidden_.clear();
     impl_->embd_row_fp16_scratch.clear();
+    impl_->cached_special_text_proj.clear();
+    impl_->cached_reference_code_key.clear();
+    impl_->cached_reference_codec_embed.clear();
+    impl_->cached_reference_frames = 0;
+    impl_->cached_reference_codebooks = 0;
 }
 
 bool TTSTransformer::load_model(const std::string & model_path) {
@@ -195,6 +242,19 @@ bool TTSTransformer::load_model(const std::string & model_path) {
         error_msg_ = "Failed to create backend scheduler";
         return false;
     }
+    if (!env_flag_disabled("QWEN3_TTS_CODE_PRED_DEDICATED_SCHED")) {
+        impl_->state.code_pred_prefill_sched = ggml_backend_sched_new(
+            backends.data(), nullptr, (int) backends.size(), QWEN3_TTS_CODE_PRED_MAX_NODES, false, true);
+        impl_->state.code_pred_step_sched = ggml_backend_sched_new(
+            backends.data(), nullptr, (int) backends.size(), QWEN3_TTS_CODE_PRED_MAX_NODES, false, true);
+        if (!impl_->state.code_pred_prefill_sched || !impl_->state.code_pred_step_sched) {
+            error_msg_ = "Failed to create dedicated code predictor schedulers";
+            return false;
+        }
+        fprintf(stderr, "  CodePred dedicated schedulers: enabled (default)\n");
+    } else {
+        fprintf(stderr, "  CodePred dedicated schedulers: disabled by QWEN3_TTS_CODE_PRED_DEDICATED_SCHED=0\n");
+    }
 
     {
         struct ggml_init_params bridge_params = {
@@ -221,10 +281,16 @@ bool TTSTransformer::load_model(const std::string & model_path) {
         ggml_backend_buffer_clear(impl_->state.hidden_bridge_buffer, 0);
     }
 
-    impl_->state.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
+    impl_->state.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES +
+                                     ggml_graph_overhead_custom(QWEN3_TTS_MAX_NODES, false));
+    impl_->state.talker_replay_compute_meta.resize(
+        ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES +
+        ggml_graph_overhead_custom(QWEN3_TTS_MAX_NODES, false));
     impl_->state.code_pred_compute_meta.resize(15);
     for (int i = 0; i < 15; ++i) {
-        impl_->state.code_pred_compute_meta[i].resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
+        impl_->state.code_pred_compute_meta[i].resize(
+            ggml_tensor_overhead() * QWEN3_TTS_CODE_PRED_MAX_NODES +
+            ggml_graph_overhead_custom(QWEN3_TTS_CODE_PRED_MAX_NODES, false));
     }
 
     if (!transformer_internal::ops::try_init_coreml_code_predictor(*this, model_path)) {
