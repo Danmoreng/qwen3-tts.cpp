@@ -4,6 +4,7 @@
 #include "qwen3_tts.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <thread>
 #include <vector>
 
 namespace qwen3_tts {
@@ -50,7 +52,9 @@ struct speech_tokenizer_encoder_model {
     struct ggml_tensor * vq_semantic_codebook = nullptr;
     struct ggml_tensor * vq_acoustic_codebook[31] = {nullptr};
     std::vector<float> vq_semantic_codebook_f32;
+    std::vector<float> vq_semantic_codebook_norms;
     std::vector<std::vector<float>> vq_acoustic_codebook_f32;
+    std::vector<std::vector<float>> vq_acoustic_codebook_norms;
 
     struct ggml_context * ctx = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
@@ -72,9 +76,15 @@ struct speech_tokenizer_encoder_state {
 struct speech_tokenizer_encoder_private {
     speech_tokenizer_encoder_model model;
     speech_tokenizer_encoder_state state;
+    speech_tokenizer_encoder_timing last_timing;
 };
 
 namespace {
+
+double elapsed_ms(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+}
 
 bool tensor_to_f32(struct ggml_tensor * tensor, std::vector<float> & out) {
     if (!tensor) {
@@ -95,6 +105,21 @@ bool tensor_to_f32(struct ggml_tensor * tensor, std::vector<float> & out) {
         return true;
     }
     return false;
+}
+
+std::vector<float> compute_codebook_norms(const std::vector<float> & codebook,
+                                          int32_t codebook_size,
+                                          int32_t codebook_dim) {
+    std::vector<float> norms((size_t) codebook_size, 0.0f);
+    for (int32_t code = 0; code < codebook_size; ++code) {
+        const float * cb = codebook.data() + (size_t) code * (size_t) codebook_dim;
+        float sum = 0.0f;
+        for (int32_t d = 0; d < codebook_dim; ++d) {
+            sum += cb[d] * cb[d];
+        }
+        norms[(size_t) code] = sum;
+    }
+    return norms;
 }
 
 bool debug_enabled() {
@@ -464,6 +489,10 @@ const std::string & SpeechTokenizerEncoder::get_error() const {
     return error_msg_;
 }
 
+const speech_tokenizer_encoder_timing & SpeechTokenizerEncoder::get_last_timing() const {
+    return impl_->last_timing;
+}
+
 void SpeechTokenizerEncoder::unload_model() {
     auto & model = impl_->model;
     auto & state = impl_->state;
@@ -639,11 +668,14 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
         error_msg_ = "Failed to materialize semantic codebook";
         return false;
     }
+    model.vq_semantic_codebook_norms = compute_codebook_norms(
+        model.vq_semantic_codebook_f32, cfg.codebook_size, cfg.codebook_dim);
     if (cfg.n_valid_quantizers < 1 || cfg.n_valid_quantizers > 16) {
         error_msg_ = "Unsupported speech tokenizer valid quantizer count";
         return false;
     }
     model.vq_acoustic_codebook_f32.assign(31, {});
+    model.vq_acoustic_codebook_norms.assign(31, {});
     const int32_t acoustic_codebooks_needed = cfg.n_valid_quantizers - 1;
     for (int i = 0; i < acoustic_codebooks_needed; ++i) {
         if (!model.vq_acoustic_codebook[i]) {
@@ -654,6 +686,8 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
             error_msg_ = "Failed to materialize acoustic VQ codebook " + std::to_string(i);
             return false;
         }
+        model.vq_acoustic_codebook_norms[i] = compute_codebook_norms(
+            model.vq_acoustic_codebook_f32[i], cfg.codebook_size, cfg.codebook_dim);
     }
 
     fprintf(stderr, "  Speech tokenizer encoder loaded: tensors=%d, hidden=%d, quantizers=%d valid=%d\n",
@@ -702,13 +736,19 @@ bool SpeechTokenizerEncoder::load_model(const std::string & tokenizer_model_path
 }
 
 bool SpeechTokenizerEncoder::encode(const float * samples, int32_t n_samples, speech_codes & codes) {
+    auto & timing = impl_->last_timing;
+    timing = speech_tokenizer_encoder_timing{};
+    const auto t_total_start = std::chrono::steady_clock::now();
+
     std::vector<float> semantic_features;
     std::vector<float> acoustic_features;
     int32_t n_frames = 0;
     if (!project(samples, n_samples, semantic_features, acoustic_features, n_frames)) {
         return false;
     }
-    return quantize_projected(semantic_features.data(), acoustic_features.data(), n_frames, codes);
+    const bool ok = quantize_projected(semantic_features.data(), acoustic_features.data(), n_frames, codes);
+    timing.total_ms = elapsed_ms(t_total_start);
+    return ok;
 }
 
 bool SpeechTokenizerEncoder::project(const float * samples,
@@ -728,11 +768,16 @@ bool SpeechTokenizerEncoder::project(const float * samples,
         return false;
     }
 
+    auto & timing = impl_->last_timing;
+    const auto t_project_start = std::chrono::steady_clock::now();
+
     int32_t n_encoder_frames = 0;
     int32_t n_projected_frames = 0;
     struct ggml_context * graph_ctx = nullptr;
+    const auto t_graph_build_start = std::chrono::steady_clock::now();
     struct ggml_cgraph * gf = build_project_graph(*impl_, n_samples, n_encoder_frames,
                                                   n_projected_frames, &graph_ctx);
+    timing.project_graph_build_ms += elapsed_ms(t_graph_build_start);
     if (!gf || !graph_ctx) {
         error_msg_ = "Failed to build speech tokenizer encoder graph";
         if (graph_ctx) ggml_free(graph_ctx);
@@ -743,12 +788,15 @@ bool SpeechTokenizerEncoder::project(const float * samples,
                 n_encoder_frames, n_projected_frames);
     }
 
+    const auto t_alloc_start = std::chrono::steady_clock::now();
     if (!ggml_backend_sched_alloc_graph(state.sched, gf)) {
+        timing.project_graph_alloc_ms += elapsed_ms(t_alloc_start);
         error_msg_ = "Failed to allocate speech tokenizer encoder graph";
         ggml_free(graph_ctx);
         ggml_backend_sched_reset(state.sched);
         return false;
     }
+    timing.project_graph_alloc_ms += elapsed_ms(t_alloc_start);
 
     struct ggml_tensor * input = ggml_graph_get_tensor(gf, "input_values");
     struct ggml_tensor * positions = ggml_graph_get_tensor(gf, "positions");
@@ -762,6 +810,7 @@ bool SpeechTokenizerEncoder::project(const float * samples,
         return false;
     }
 
+    const auto t_upload_start = std::chrono::steady_clock::now();
     ggml_backend_tensor_set(input, samples, 0, (size_t) n_samples * sizeof(float));
 
     state.positions.resize((size_t) n_encoder_frames);
@@ -770,7 +819,9 @@ bool SpeechTokenizerEncoder::project(const float * samples,
     }
     ggml_backend_tensor_set(positions, state.positions.data(), 0,
                             state.positions.size() * sizeof(int32_t));
+    timing.project_input_upload_ms += elapsed_ms(t_upload_start);
 
+    const auto t_mask_start = std::chrono::steady_clock::now();
     state.attention_mask.assign((size_t) n_encoder_frames * (size_t) n_encoder_frames, 0.0f);
     for (int32_t q = 0; q < n_encoder_frames; ++q) {
         for (int32_t k = 0; k < n_encoder_frames; ++k) {
@@ -779,15 +830,22 @@ bool SpeechTokenizerEncoder::project(const float * samples,
             }
         }
     }
+    timing.project_mask_prepare_ms += elapsed_ms(t_mask_start);
+
+    const auto t_mask_upload_start = std::chrono::steady_clock::now();
     ggml_backend_tensor_set(attention_mask, state.attention_mask.data(), 0,
                             state.attention_mask.size() * sizeof(float));
+    timing.project_input_upload_ms += elapsed_ms(t_mask_upload_start);
 
+    const auto t_compute_start = std::chrono::steady_clock::now();
     if (ggml_backend_sched_graph_compute(state.sched, gf) != GGML_STATUS_SUCCESS) {
+        timing.project_compute_ms += elapsed_ms(t_compute_start);
         error_msg_ = "Failed to compute speech tokenizer encoder graph";
         ggml_free(graph_ctx);
         ggml_backend_sched_reset(state.sched);
         return false;
     }
+    timing.project_compute_ms += elapsed_ms(t_compute_start);
 
     const char * tensor_dump_dir = dump_dir();
     if (tensor_dump_dir) {
@@ -806,15 +864,20 @@ bool SpeechTokenizerEncoder::project(const float * samples,
 
     semantic_features.resize((size_t) n_projected_frames * (size_t) cfg.codebook_dim);
     acoustic_features.resize((size_t) n_projected_frames * (size_t) cfg.codebook_dim);
+    const auto t_read_start = std::chrono::steady_clock::now();
     ggml_backend_tensor_get(semantic, semantic_features.data(), 0,
                             semantic_features.size() * sizeof(float));
     ggml_backend_tensor_get(acoustic, acoustic_features.data(), 0,
                             acoustic_features.size() * sizeof(float));
+    timing.project_output_read_ms += elapsed_ms(t_read_start);
 
     ggml_free(graph_ctx);
+    const auto t_reset_start = std::chrono::steady_clock::now();
     ggml_backend_sched_reset(state.sched);
+    timing.project_reset_ms += elapsed_ms(t_reset_start);
 
     n_frames = n_projected_frames;
+    timing.project_ms += elapsed_ms(t_project_start);
     return true;
 }
 
@@ -838,13 +901,16 @@ bool SpeechTokenizerEncoder::quantize_projected(const float * semantic_features,
     const int32_t codebook_size = cfg.codebook_size;
     const int32_t valid_quantizers = cfg.n_valid_quantizers;
     const size_t expected_codebook_values = (size_t) codebook_dim * (size_t) codebook_size;
-    if (model.vq_semantic_codebook_f32.size() != expected_codebook_values) {
+    if (model.vq_semantic_codebook_f32.size() != expected_codebook_values ||
+        model.vq_semantic_codebook_norms.size() != (size_t) codebook_size) {
         error_msg_ = "Semantic VQ codebook has unexpected size";
         return false;
     }
     for (int32_t q = 0; q < valid_quantizers - 1; ++q) {
         if (q >= (int32_t) model.vq_acoustic_codebook_f32.size() ||
-            model.vq_acoustic_codebook_f32[(size_t) q].size() != expected_codebook_values) {
+            model.vq_acoustic_codebook_f32[(size_t) q].size() != expected_codebook_values ||
+            q >= (int32_t) model.vq_acoustic_codebook_norms.size() ||
+            model.vq_acoustic_codebook_norms[(size_t) q].size() != (size_t) codebook_size) {
             const size_t actual = q < (int32_t) model.vq_acoustic_codebook_f32.size()
                 ? model.vq_acoustic_codebook_f32[(size_t) q].size()
                 : 0;
@@ -859,51 +925,99 @@ bool SpeechTokenizerEncoder::quantize_projected(const float * semantic_features,
     }
 
     auto find_nearest = [&](const std::vector<float> & codebook,
+                            const std::vector<float> & codebook_norms,
                             const std::vector<float> & residual) -> int32_t {
         int32_t best_idx = 0;
-        float best_dist = std::numeric_limits<float>::infinity();
+        float best_score = std::numeric_limits<float>::infinity();
         for (int32_t code = 0; code < codebook_size; ++code) {
             const float * cb = codebook.data() + (size_t) code * (size_t) codebook_dim;
-            float dist = 0.0f;
+            float dot = 0.0f;
             for (int32_t d = 0; d < codebook_dim; ++d) {
-                const float diff = residual[(size_t) d] - cb[d];
-                dist += diff * diff;
+                dot += residual[(size_t) d] * cb[d];
             }
-            if (dist < best_dist) {
-                best_dist = dist;
+            const float score = codebook_norms[(size_t) code] - 2.0f * dot;
+            if (score < best_score) {
+                best_score = score;
                 best_idx = code;
             }
         }
         return best_idx;
     };
 
+    auto & timing = impl_->last_timing;
+    const auto t_quantize_start = std::chrono::steady_clock::now();
+
     codes.n_frames = n_frames;
     codes.n_codebooks = valid_quantizers;
     codes.codes.assign((size_t) n_frames * (size_t) valid_quantizers, 0);
 
-    std::vector<float> residual((size_t) codebook_dim);
-    for (int32_t frame = 0; frame < n_frames; ++frame) {
-        for (int32_t d = 0; d < codebook_dim; ++d) {
-            residual[(size_t) d] = semantic_features[(size_t) d * (size_t) n_frames + (size_t) frame];
+    const int32_t configured_threads = get_cpu_thread_count();
+    const int32_t rvq_threads = cpu_thread_count_is_explicit()
+        ? configured_threads
+        : std::max(configured_threads, default_parallel_thread_count());
+    const int32_t n_workers = std::max<int32_t>(1, std::min<int32_t>(n_frames, rvq_threads));
+    auto run_parallel = [&](auto && fn) {
+        if (n_workers <= 1 || n_frames < 2) {
+            fn(0, n_frames);
+            return;
         }
-        const int32_t semantic_code = find_nearest(model.vq_semantic_codebook_f32, residual);
-        codes.codes[(size_t) frame * (size_t) valid_quantizers] = semantic_code;
-
-        for (int32_t d = 0; d < codebook_dim; ++d) {
-            residual[(size_t) d] = acoustic_features[(size_t) d * (size_t) n_frames + (size_t) frame];
+        std::vector<std::thread> workers;
+        workers.reserve((size_t) n_workers);
+        const int32_t chunk = (n_frames + n_workers - 1) / n_workers;
+        for (int32_t worker = 0; worker < n_workers; ++worker) {
+            const int32_t begin = worker * chunk;
+            const int32_t end = std::min<int32_t>(n_frames, begin + chunk);
+            if (begin >= end) {
+                break;
+            }
+            workers.emplace_back([&, begin, end]() {
+                fn(begin, end);
+            });
         }
-        for (int32_t q = 0; q < valid_quantizers - 1; ++q) {
-            const int32_t acoustic_code = find_nearest(model.vq_acoustic_codebook_f32[(size_t) q], residual);
-            codes.codes[(size_t) frame * (size_t) valid_quantizers + (size_t) q + 1] = acoustic_code;
+        for (std::thread & worker : workers) {
+            worker.join();
+        }
+    };
 
-            const float * cb = model.vq_acoustic_codebook_f32[(size_t) q].data() +
-                               (size_t) acoustic_code * (size_t) codebook_dim;
+    const auto t_semantic_start = std::chrono::steady_clock::now();
+    run_parallel([&](int32_t begin, int32_t end) {
+        std::vector<float> residual((size_t) codebook_dim);
+        for (int32_t frame = begin; frame < end; ++frame) {
             for (int32_t d = 0; d < codebook_dim; ++d) {
-                residual[(size_t) d] -= cb[d];
+                residual[(size_t) d] = semantic_features[(size_t) d * (size_t) n_frames + (size_t) frame];
+            }
+            const int32_t semantic_code = find_nearest(model.vq_semantic_codebook_f32,
+                                                       model.vq_semantic_codebook_norms,
+                                                       residual);
+            codes.codes[(size_t) frame * (size_t) valid_quantizers] = semantic_code;
+        }
+    });
+    timing.quantize_semantic_ms += elapsed_ms(t_semantic_start);
+
+    const auto t_acoustic_start = std::chrono::steady_clock::now();
+    run_parallel([&](int32_t begin, int32_t end) {
+        std::vector<float> residual((size_t) codebook_dim);
+        for (int32_t frame = begin; frame < end; ++frame) {
+            for (int32_t d = 0; d < codebook_dim; ++d) {
+                residual[(size_t) d] = acoustic_features[(size_t) d * (size_t) n_frames + (size_t) frame];
+            }
+            for (int32_t q = 0; q < valid_quantizers - 1; ++q) {
+                const int32_t acoustic_code = find_nearest(model.vq_acoustic_codebook_f32[(size_t) q],
+                                                           model.vq_acoustic_codebook_norms[(size_t) q],
+                                                           residual);
+                codes.codes[(size_t) frame * (size_t) valid_quantizers + (size_t) q + 1] = acoustic_code;
+
+                const float * cb = model.vq_acoustic_codebook_f32[(size_t) q].data() +
+                                   (size_t) acoustic_code * (size_t) codebook_dim;
+                for (int32_t d = 0; d < codebook_dim; ++d) {
+                    residual[(size_t) d] -= cb[d];
+                }
             }
         }
-    }
+    });
+    timing.quantize_acoustic_ms += elapsed_ms(t_acoustic_start);
 
+    timing.quantize_ms += elapsed_ms(t_quantize_start);
     return true;
 }
 

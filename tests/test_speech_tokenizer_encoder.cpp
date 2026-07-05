@@ -1,5 +1,6 @@
 #include "speech_tokenizer_encoder.h"
 #include "qwen3_tts.h"
+#include "gguf_loader.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -164,6 +165,48 @@ projection_error report_projection_error(const char * name,
     return err;
 }
 
+void run_quantize_thread_parity_check(qwen3_tts::SpeechTokenizerEncoder & encoder) {
+    const auto & cfg = encoder.get_config();
+    const int32_t n_frames = 7;
+    std::vector<float> semantic((size_t) cfg.codebook_dim * (size_t) n_frames);
+    std::vector<float> acoustic((size_t) cfg.codebook_dim * (size_t) n_frames);
+
+    for (int32_t d = 0; d < cfg.codebook_dim; ++d) {
+        for (int32_t frame = 0; frame < n_frames; ++frame) {
+            const size_t idx = (size_t) d * (size_t) n_frames + (size_t) frame;
+            semantic[idx] = 0.35f * std::sin((float) (d + 1) * 0.013f) +
+                            0.21f * std::cos((float) (frame + 3) * 0.37f);
+            acoustic[idx] = 0.27f * std::cos((float) (d + 5) * 0.017f) -
+                            0.18f * std::sin((float) (frame + 1) * 0.29f);
+        }
+    }
+
+    qwen3_tts::speech_codes serial_codes;
+    if (!qwen3_tts::set_cpu_thread_count(1, true)) {
+        throw std::runtime_error("failed to set serial CPU thread count");
+    }
+    if (!encoder.quantize_projected(semantic.data(), acoustic.data(), n_frames, serial_codes)) {
+        throw std::runtime_error("serial quantize_projected failed: " + encoder.get_error());
+    }
+
+    qwen3_tts::speech_codes auto_codes;
+    if (!qwen3_tts::set_cpu_thread_count(qwen3_tts::default_cpu_thread_count(), false)) {
+        throw std::runtime_error("failed to set automatic CPU thread count");
+    }
+    if (!encoder.quantize_projected(semantic.data(), acoustic.data(), n_frames, auto_codes)) {
+        throw std::runtime_error("parallel quantize_projected failed: " + encoder.get_error());
+    }
+
+    if (serial_codes.n_frames != auto_codes.n_frames ||
+        serial_codes.n_codebooks != auto_codes.n_codebooks ||
+        serial_codes.codes != auto_codes.codes) {
+        throw std::runtime_error("serial and automatic RVQ codes differ");
+    }
+
+    printf("VQ thread parity ok: frames=%d codebooks=%d values=%zu\n",
+           auto_codes.n_frames, auto_codes.n_codebooks, auto_codes.codes.size());
+}
+
 } // namespace
 
 int main(int argc, char ** argv) {
@@ -201,6 +244,13 @@ int main(int argc, char ** argv) {
     printf("speech tokenizer encoder ok: sample_rate=%d frame_rate=%.2f hidden=%d layers=%d heads=%d valid_quantizers=%d\n",
            cfg.sample_rate, cfg.frame_rate, cfg.hidden_size, cfg.n_layers,
            cfg.n_heads, cfg.n_valid_quantizers);
+
+    try {
+        run_quantize_thread_parity_check(encoder);
+    } catch (const std::exception & ex) {
+        fprintf(stderr, "VQ thread parity check failed: %s\n", ex.what());
+        return 1;
+    }
 
     if (!golden_dir.empty()) {
         try {

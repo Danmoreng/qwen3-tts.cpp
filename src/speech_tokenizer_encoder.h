@@ -26,6 +26,21 @@ struct speech_tokenizer_encoder_config {
     float rope_theta = 10000.0f;
 };
 
+struct speech_tokenizer_encoder_timing {
+    double total_ms = 0.0;
+    double project_ms = 0.0;
+    double project_graph_build_ms = 0.0;
+    double project_graph_alloc_ms = 0.0;
+    double project_input_upload_ms = 0.0;
+    double project_mask_prepare_ms = 0.0;
+    double project_compute_ms = 0.0;
+    double project_output_read_ms = 0.0;
+    double project_reset_ms = 0.0;
+    double quantize_ms = 0.0;
+    double quantize_semantic_ms = 0.0;
+    double quantize_acoustic_ms = 0.0;
+};
+
 class SpeechTokenizerEncoder {
 public:
     SpeechTokenizerEncoder();
@@ -47,6 +62,7 @@ public:
 
     const speech_tokenizer_encoder_config & get_config() const;
     const std::string & get_error() const;
+    const speech_tokenizer_encoder_timing & get_last_timing() const;
 
 private:
     std::unique_ptr<speech_tokenizer_encoder_private> impl_;

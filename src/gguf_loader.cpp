@@ -13,6 +13,7 @@ struct shared_backend_state {
     int32_t ref_count = 0;
     backend_preference preference = backend_preference::auto_select;
     int32_t cpu_n_threads = 0;
+    bool cpu_n_threads_explicit = false;
     std::string active_backend_name;
 };
 
@@ -169,9 +170,15 @@ int32_t default_cpu_thread_count() {
     return n_threads > 0 ? n_threads : 1;
 }
 
-bool set_cpu_thread_count(int32_t n_threads) {
+int32_t default_parallel_thread_count() {
+    int32_t n_threads = (int32_t) std::thread::hardware_concurrency();
+    return n_threads > 0 ? n_threads : default_cpu_thread_count();
+}
+
+bool set_cpu_thread_count(int32_t n_threads, bool explicit_value) {
     auto & shared = get_shared_backend_state();
     shared.cpu_n_threads = sanitize_thread_count(n_threads);
+    shared.cpu_n_threads_explicit = explicit_value;
     if (shared.backend) {
         configure_cpu_backend_threads(shared.backend);
     }
@@ -184,6 +191,10 @@ int32_t get_cpu_thread_count() {
         shared.cpu_n_threads = default_cpu_thread_count();
     }
     return shared.cpu_n_threads;
+}
+
+bool cpu_thread_count_is_explicit() {
+    return get_shared_backend_state().cpu_n_threads_explicit;
 }
 
 backend_preference get_backend_preference() {
