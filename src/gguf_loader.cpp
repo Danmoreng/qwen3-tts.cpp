@@ -345,6 +345,7 @@ bool load_tensor_data_from_file(
         ggml_backend_free(backend);
         return false;
     }
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     
     // Open file for reading tensor data
     FILE * f = fopen(path.c_str(), "rb");
