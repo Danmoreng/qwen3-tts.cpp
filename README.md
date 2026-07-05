@@ -65,8 +65,8 @@ generate from that embedding without prepending reference speech codes.
 
 | Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
 |--------|----------------------|---------|----------------------|---------|
-| `qwen3-tts.cpp` GGUF Q8_0 | 0.965 s | 6.973 | 1.077 s | 6.251 |
-| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 3.095 s | 2.192 | 2.864 s | 2.459 |
+| `qwen3-tts.cpp` GGUF Q8_0 | 0.817 s | 8.585 | 1.194 s | 5.718 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 3.184 s | 2.513 | 3.047 s | 2.132 |
 | `faster-qwen3-tts` HF BF16, warm CUDA graphs | 2.775 s | 2.797 | 2.835 s | 2.342 |
 | `audio.cpp` | - | - | - | - |
 
@@ -78,8 +78,8 @@ only warm `Generate+Decode` time, not reference prompt construction.
 
 | Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
 |--------|----------------------|---------|----------------------|---------|
-| `qwen3-tts.cpp` GGUF Q8_0 | 1.416 s | 7.235 | 1.809 s | 5.662 |
-| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 4.541 s | 2.281 | 4.349 s | 2.355 |
+| `qwen3-tts.cpp` GGUF Q8_0 | 1.195 s | 8.589 | 1.488 s | 6.893 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 4.254 s | 2.412 | 4.261 s | 2.404 |
 | `faster-qwen3-tts` HF BF16, warm CUDA graphs | 3.825 s | 2.678 | 4.448 s | 2.302 |
 | `audio.cpp` HF BF16, warm session | 5.217 s | 1.949 | 5.962 s | 1.704 |
 
