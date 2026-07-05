@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <vector>
 
@@ -22,6 +23,12 @@ namespace {
 
 constexpr int32_t qwen3_tts_codec_hop_length = 1920;
 constexpr const char * qwen3_tts_speech_encoder_cuda_env = "QWEN3_TTS_SPEECH_ENCODER_CUDA";
+
+bool speech_encoder_cuda_enabled() {
+    const char * value = std::getenv(qwen3_tts_speech_encoder_cuda_env);
+    return !value || value[0] == '\0' ||
+           env_flag_enabled(qwen3_tts_speech_encoder_cuda_env);
+}
 
 bool write_codes_file(const std::string & path,
                       const std::vector<int32_t> & codes,
@@ -536,6 +543,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         !effective_params.reference_codes.has_value() &&
         (!effective_params.reference_text.empty() ||
          !effective_params.reference_token_ids.empty());
+    const bool speech_encoder_cuda = speech_encoder_cuda_enabled();
     const uint64_t sample_hash = hash_reference_samples(ref_samples, n_ref_samples);
     const bool cache_hit =
         voice_prompt_cache_.valid &&
@@ -544,6 +552,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         voice_prompt_cache_.reference_text == effective_params.reference_text &&
         voice_prompt_cache_.reference_token_ids == effective_params.reference_token_ids &&
         voice_prompt_cache_.has_auto_reference_codes == needs_reference_codes &&
+        (!needs_reference_codes || voice_prompt_cache_.reference_codes_cuda == speech_encoder_cuda) &&
         (!needs_reference_codes || voice_prompt_cache_.reference_codes.has_value());
 
     if (cache_hit) {
@@ -583,14 +592,19 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
                 result.error_msg = "Internal error: missing tokenizer model path for speech tokenizer encoder";
                 return result;
             }
+            if (speech_encoder_loaded_ && speech_encoder_cuda_enabled_ != speech_encoder_cuda) {
+                speech_encoder_.unload_model();
+                speech_encoder_loaded_ = false;
+                speech_encoder_cuda_enabled_ = false;
+            }
             if (!speech_encoder_loaded_) {
                 const int64_t t_speech_encoder_load_start = get_time_ms();
-                const bool speech_encoder_cuda = env_flag_enabled(qwen3_tts_speech_encoder_cuda_env);
                 if (!speech_encoder_.load_model(tokenizer_model_path_, !speech_encoder_cuda)) {
                     result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
                     return result;
                 }
                 speech_encoder_loaded_ = true;
+                speech_encoder_cuda_enabled_ = speech_encoder_cuda;
                 if (params.print_timing) {
                     fprintf(stderr, "  Speech tokenizer encoder lazy-loaded in %lld ms\n",
                             (long long) (get_time_ms() - t_speech_encoder_load_start));
@@ -615,6 +629,7 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
         voice_prompt_cache_.reference_text = effective_params.reference_text;
         voice_prompt_cache_.reference_token_ids = effective_params.reference_token_ids;
         voice_prompt_cache_.has_auto_reference_codes = needs_reference_codes;
+        voice_prompt_cache_.reference_codes_cuda = needs_reference_codes && speech_encoder_cuda;
         voice_prompt_cache_.speaker_embedding = speaker_embedding;
         voice_prompt_cache_.reference_codes = needs_reference_codes
             ? effective_params.reference_codes
@@ -753,6 +768,7 @@ tts_result Qwen3TTS::synthesize_with_voice_streaming(
         !effective_params.reference_codes.has_value() &&
         (!effective_params.reference_text.empty() ||
          !effective_params.reference_token_ids.empty());
+    const bool speech_encoder_cuda = speech_encoder_cuda_enabled();
     const uint64_t sample_hash = hash_reference_samples(ref_samples, n_ref_samples);
     const bool cache_hit =
         voice_prompt_cache_.valid &&
@@ -761,6 +777,7 @@ tts_result Qwen3TTS::synthesize_with_voice_streaming(
         voice_prompt_cache_.reference_text == effective_params.reference_text &&
         voice_prompt_cache_.reference_token_ids == effective_params.reference_token_ids &&
         voice_prompt_cache_.has_auto_reference_codes == needs_reference_codes &&
+        (!needs_reference_codes || voice_prompt_cache_.reference_codes_cuda == speech_encoder_cuda) &&
         (!needs_reference_codes || voice_prompt_cache_.reference_codes.has_value());
 
     if (cache_hit) {
@@ -790,13 +807,18 @@ tts_result Qwen3TTS::synthesize_with_voice_streaming(
                 result.error_msg = "Internal error: missing tokenizer model path for speech tokenizer encoder";
                 return result;
             }
+            if (speech_encoder_loaded_ && speech_encoder_cuda_enabled_ != speech_encoder_cuda) {
+                speech_encoder_.unload_model();
+                speech_encoder_loaded_ = false;
+                speech_encoder_cuda_enabled_ = false;
+            }
             if (!speech_encoder_loaded_) {
-                const bool speech_encoder_cuda = env_flag_enabled(qwen3_tts_speech_encoder_cuda_env);
                 if (!speech_encoder_.load_model(tokenizer_model_path_, !speech_encoder_cuda)) {
                     result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
                     return result;
                 }
                 speech_encoder_loaded_ = true;
+                speech_encoder_cuda_enabled_ = speech_encoder_cuda;
             }
             speech_codes reference_codes;
             if (!speech_encoder_.encode(ref_samples, n_ref_samples, reference_codes)) {
@@ -812,6 +834,7 @@ tts_result Qwen3TTS::synthesize_with_voice_streaming(
         voice_prompt_cache_.reference_text = effective_params.reference_text;
         voice_prompt_cache_.reference_token_ids = effective_params.reference_token_ids;
         voice_prompt_cache_.has_auto_reference_codes = needs_reference_codes;
+        voice_prompt_cache_.reference_codes_cuda = needs_reference_codes && speech_encoder_cuda;
         voice_prompt_cache_.speaker_embedding = speaker_embedding;
         voice_prompt_cache_.reference_codes = needs_reference_codes
             ? effective_params.reference_codes
@@ -1001,13 +1024,20 @@ bool Qwen3TTS::extract_icl_prompt(const std::string & reference_audio,
         error_msg_ = "Internal error: missing tokenizer model path for speech tokenizer encoder";
         return false;
     }
+    const bool speech_encoder_cuda = speech_encoder_cuda_enabled();
+    if (speech_encoder_loaded_ && speech_encoder_cuda_enabled_ != speech_encoder_cuda) {
+        speech_encoder_.unload_model();
+        speech_encoder_loaded_ = false;
+        speech_encoder_cuda_enabled_ = false;
+    }
     if (!speech_encoder_loaded_) {
         const int64_t t_speech_encoder_load_start = get_time_ms();
-        if (!speech_encoder_.load_model(tokenizer_model_path_, !models_loaded_)) {
+        if (!speech_encoder_.load_model(tokenizer_model_path_, !speech_encoder_cuda)) {
             error_msg_ = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
             return false;
         }
         speech_encoder_loaded_ = true;
+        speech_encoder_cuda_enabled_ = speech_encoder_cuda;
         fprintf(stderr, "  Speech tokenizer encoder lazy-loaded in %lld ms\n",
                 (long long) (get_time_ms() - t_speech_encoder_load_start));
         log_memory_usage("icl/after-speech-encoder-load");
@@ -1021,6 +1051,7 @@ bool Qwen3TTS::extract_icl_prompt(const std::string & reference_audio,
     if (!models_loaded_) {
         speech_encoder_.unload_model();
         speech_encoder_loaded_ = false;
+        speech_encoder_cuda_enabled_ = false;
     }
 
     if (!text_tokenizer_loaded_) {

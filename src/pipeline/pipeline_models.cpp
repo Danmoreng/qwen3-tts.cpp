@@ -109,9 +109,10 @@ std::string choose_tokenizer_model_path(const std::string & model_dir,
     }
 
     const std::vector<std::string> preferred_exact = {
-        "qwen-tokenizer-12hz-q8_0.gguf",
-        "qwen-tokenizer-12hz-bf16.gguf",
         "qwen-tokenizer-12hz-f32.gguf",
+        "qwen-tokenizer-12hz-f16.gguf",
+        "qwen-tokenizer-12hz-bf16.gguf",
+        "qwen-tokenizer-12hz-q8_0.gguf",
     };
     for (const auto & preferred : preferred_exact) {
         for (const auto & path : tokenizer_candidates) {
@@ -193,6 +194,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
+    speech_encoder_cuda_enabled_ = false;
     decoder_loaded_ = false;
     streaming_decoder_loaded_ = false;
 
@@ -244,6 +246,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     decoder_model_path_ = tokenizer_model_path;
     encoder_loaded_ = false;
     speech_encoder_loaded_ = false;
+    speech_encoder_cuda_enabled_ = false;
     transformer_loaded_ = false;
     decoder_loaded_ = false;
     streaming_decoder_loaded_ = false;
@@ -334,6 +337,7 @@ bool Qwen3TTS::load_speaker_encoder_only(const std::string & model_dir, const st
     encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
+    speech_encoder_cuda_enabled_ = false;
     decoder_loaded_ = false;
     streaming_decoder_loaded_ = false;
 
@@ -384,6 +388,7 @@ bool Qwen3TTS::load_icl_prompt_encoder_only(const std::string & model_dir, const
     encoder_loaded_ = false;
     transformer_loaded_ = false;
     speech_encoder_loaded_ = false;
+    speech_encoder_cuda_enabled_ = false;
     decoder_loaded_ = false;
     streaming_decoder_loaded_ = false;
 

@@ -282,6 +282,7 @@ private:
         std::string reference_text;
         std::vector<int32_t> reference_token_ids;
         bool has_auto_reference_codes = false;
+        bool reference_codes_cuda = false;
         std::vector<float> speaker_embedding;
         std::optional<speech_codes> reference_codes;
     };
@@ -298,6 +299,7 @@ private:
     bool text_tokenizer_loaded_ = false;
     bool encoder_loaded_ = false;
     bool speech_encoder_loaded_ = false;
+    bool speech_encoder_cuda_enabled_ = false;
     bool transformer_loaded_ = false;
     bool decoder_loaded_ = false;
     bool streaming_decoder_loaded_ = false;
