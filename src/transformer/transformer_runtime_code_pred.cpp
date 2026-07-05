@@ -213,7 +213,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
     auto t0 = clk::now(), t1 = t0;
 #endif
 
-    if (impl_->use_coreml_code_predictor && impl_->coreml_code_predictor.is_loaded()) {
+    if (hidden && impl_->use_coreml_code_predictor && impl_->coreml_code_predictor.is_loaded()) {
         if (transformer_internal::ops::predict_codes_autoregressive_coreml(*this, hidden, codebook_0_token, output, temperature, top_k, top_p, seed, sampling_subseq, trace_frame)) {
             return true;
         }
@@ -230,6 +230,11 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
     }
     clear_code_pred_kv_cache();
+    const bool use_hidden_bridge = hidden == nullptr && impl_->state.hidden_bridge != nullptr;
+    if (!use_hidden_bridge && hidden == nullptr) {
+        error_msg_ = "Code predictor requires hidden input or a device hidden bridge";
+        return false;
+    }
 
     output.resize(15);
     std::vector<float> logits_data(cfg.code_pred_vocab_size);
@@ -242,11 +247,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                           1.0f, nullptr, 0, sampling);
     };
 
-    std::vector<float> cb0_embd(cfg.hidden_size);
-    if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.codec_embd, codebook_0_token, cb0_embd.data())) {
-        return false;
-    }
-    if (trace_frame_enabled) {
+    if (trace_frame_enabled && hidden) {
         char hidden_name[128];
         snprintf(hidden_name, sizeof(hidden_name),
                  "frame%03d_codepred_input_hidden.f32.bin", trace_frame);
@@ -254,6 +255,11 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                                     (size_t) cfg.hidden_size, "f32",
                                                     {(int64_t) cfg.hidden_size});
 
+        std::vector<float> cb0_embd(cfg.hidden_size);
+        if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.codec_embd,
+                                                                    codebook_0_token, cb0_embd.data())) {
+            return false;
+        }
         char embd_name[128];
         snprintf(embd_name, sizeof(embd_name),
                  "frame%03d_codepred_input_cb0_embd.f32.bin", trace_frame);
@@ -274,7 +280,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        struct ggml_cgraph * gf = transformer_internal::ops::build_code_pred_prefill_graph(*this);
+        struct ggml_cgraph * gf = transformer_internal::ops::build_code_pred_prefill_graph(*this, use_hidden_bridge);
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
         if (impl_->timing) impl_->timing->t_code_pred_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -296,13 +302,13 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         t0 = clk::now();
 #endif
         struct ggml_tensor * inp_hidden = ggml_graph_get_tensor(gf, "inp_hidden");
-        if (inp_hidden) {
+        if (inp_hidden && hidden) {
             ggml_backend_tensor_set(inp_hidden, hidden, 0, cfg.hidden_size * sizeof(float));
         }
 
-        struct ggml_tensor * inp_cb0_embd = ggml_graph_get_tensor(gf, "inp_cb0_embd");
-        if (inp_cb0_embd) {
-            ggml_backend_tensor_set(inp_cb0_embd, cb0_embd.data(), 0, cfg.hidden_size * sizeof(float));
+        struct ggml_tensor * inp_cb0_code = ggml_graph_get_tensor(gf, "inp_cb0_code");
+        if (inp_cb0_code) {
+            ggml_backend_tensor_set(inp_cb0_code, &codebook_0_token, 0, sizeof(int32_t));
         }
 
         struct ggml_tensor * inp_pos = ggml_graph_get_tensor(gf, "inp_pos");
@@ -319,13 +325,13 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 
         struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
         if (inp_mask) {
-            ggml_fp16_t mask[4];
-            std::fill(mask, mask + 4, ggml_fp32_to_fp16(-INFINITY));
+            const size_t n_ctx = (size_t) impl_->state.code_pred_cache.n_ctx;
+            std::vector<ggml_fp16_t> mask(n_ctx * 2, ggml_fp32_to_fp16(-INFINITY));
             const ggml_fp16_t zero = ggml_fp32_to_fp16(0.0f);
             mask[0] = zero;
-            mask[2] = zero;
-            mask[3] = zero;
-            ggml_backend_tensor_set(inp_mask, mask, 0, sizeof(mask));
+            mask[n_ctx] = zero;
+            mask[n_ctx + 1] = zero;
+            ggml_backend_tensor_set(inp_mask, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
         }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
@@ -420,7 +426,7 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         t0 = clk::now();
 #endif
         struct ggml_tensor * inp_hidden = ggml_graph_get_tensor(gf, "inp_hidden");
-        if (inp_hidden) {
+        if (inp_hidden && hidden) {
             ggml_backend_tensor_set(inp_hidden, hidden, 0, cfg.hidden_size * sizeof(float));
         }
 
@@ -444,9 +450,8 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 
         struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
         if (inp_mask) {
-            const size_t mask_size = (size_t) n_past + 1;
             ggml_backend_tensor_set(inp_mask, impl_->state.code_pred_mask.data(), 0,
-                                    mask_size * sizeof(ggml_fp16_t));
+                                    impl_->state.code_pred_mask.size() * sizeof(ggml_fp16_t));
         }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();

@@ -22,11 +22,24 @@ std::string filename_lower(const std::string & path) {
     return name;
 }
 
+void free_hidden_bridge(tts_transformer_state & state) {
+    if (state.hidden_bridge_buffer) {
+        ggml_backend_buffer_free(state.hidden_bridge_buffer);
+        state.hidden_bridge_buffer = nullptr;
+    }
+    if (state.hidden_bridge_ctx) {
+        ggml_free(state.hidden_bridge_ctx);
+        state.hidden_bridge_ctx = nullptr;
+    }
+    state.hidden_bridge = nullptr;
+}
+
 } // namespace
 
 void TTSTransformer::unload_model() {
     free_tts_kv_cache(impl_->state.cache);
     free_tts_kv_cache(impl_->state.code_pred_cache);
+    free_hidden_bridge(impl_->state);
     free_transformer_model(impl_->model);
 
     impl_->coreml_code_predictor.unload();
@@ -179,6 +192,31 @@ bool TTSTransformer::load_model(const std::string & model_path) {
     if (!impl_->state.sched) {
         error_msg_ = "Failed to create backend scheduler";
         return false;
+    }
+
+    {
+        struct ggml_init_params bridge_params = {
+            /*.mem_size   =*/ ggml_tensor_overhead() * 2,
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        impl_->state.hidden_bridge_ctx = ggml_init(bridge_params);
+        if (!impl_->state.hidden_bridge_ctx) {
+            error_msg_ = "Failed to create hidden bridge context";
+            return false;
+        }
+        impl_->state.hidden_bridge =
+            ggml_new_tensor_1d(impl_->state.hidden_bridge_ctx, GGML_TYPE_F32,
+                               impl_->model.config.hidden_size);
+        ggml_set_name(impl_->state.hidden_bridge, "talker_hidden_bridge");
+        impl_->state.hidden_bridge_buffer =
+            ggml_backend_alloc_ctx_tensors(impl_->state.hidden_bridge_ctx, impl_->state.backend);
+        if (!impl_->state.hidden_bridge_buffer) {
+            error_msg_ = "Failed to allocate hidden bridge tensor";
+            free_hidden_bridge(impl_->state);
+            return false;
+        }
+        ggml_backend_buffer_clear(impl_->state.hidden_bridge_buffer, 0);
     }
 
     impl_->state.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());

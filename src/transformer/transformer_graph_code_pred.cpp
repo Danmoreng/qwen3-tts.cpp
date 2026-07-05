@@ -130,7 +130,8 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
     return gf;
 }
 
-struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TTSTransformer & self) {
+struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TTSTransformer & self,
+                                                                              bool use_hidden_bridge) {
     auto & impl = self.impl_;
     const auto & cfg = impl->model.config;
     const int n_head = cfg.code_pred_n_attention_heads;
@@ -142,6 +143,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
     const float rope_theta = cfg.code_pred_rope_theta;
     const int n_layer = cfg.code_pred_layers;
     const int n_tokens = 2;
+    const int n_kv_ctx = impl->state.code_pred_cache.n_ctx;
     const bool use_code_pred_mrope = false;
 
     struct ggml_init_params params = {
@@ -153,19 +155,23 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
     struct ggml_context * ctx0 = ggml_init(params);
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, QWEN3_TTS_MAX_NODES, false);
 
-    struct ggml_tensor * inp_hidden = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, in_hidden_size);
-    ggml_set_name(inp_hidden, "inp_hidden");
-    ggml_set_input(inp_hidden);
+    const bool bridge_available = use_hidden_bridge && impl->state.hidden_bridge;
+    struct ggml_tensor * inp_hidden = nullptr;
+    if (!bridge_available) {
+        inp_hidden = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, in_hidden_size);
+        ggml_set_name(inp_hidden, "inp_hidden");
+        ggml_set_input(inp_hidden);
+    }
 
-    struct ggml_tensor * inp_cb0_embd = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, in_hidden_size);
-    ggml_set_name(inp_cb0_embd, "inp_cb0_embd");
-    ggml_set_input(inp_cb0_embd);
+    struct ggml_tensor * inp_cb0_code = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    ggml_set_name(inp_cb0_code, "inp_cb0_code");
+    ggml_set_input(inp_cb0_code);
 
     struct ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
 
-    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_tokens, n_tokens);
+    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv_ctx, n_tokens);
     ggml_set_name(inp_mask, "inp_mask");
     ggml_set_input(inp_mask);
 
@@ -176,8 +182,10 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
         ggml_set_input(inp_mrope_pos);
     }
 
-    struct ggml_tensor * hidden_2d = ggml_reshape_2d(ctx0, inp_hidden, in_hidden_size, 1);
-    struct ggml_tensor * cb0_2d = ggml_reshape_2d(ctx0, inp_cb0_embd, in_hidden_size, 1);
+    struct ggml_tensor * hidden_src = bridge_available ? impl->state.hidden_bridge : inp_hidden;
+    struct ggml_tensor * hidden_2d = ggml_reshape_2d(ctx0, hidden_src, in_hidden_size, 1);
+    struct ggml_tensor * cb0_2d = ggml_get_rows(ctx0, impl->model.codec_embd, inp_cb0_code);
+    cb0_2d = ggml_reshape_2d(ctx0, cb0_2d, in_hidden_size, 1);
     struct ggml_tensor * cur = ggml_concat(ctx0, hidden_2d, cb0_2d, 1);
 
     if (impl->model.code_pred_small_to_mtp_weight) {
@@ -241,23 +249,15 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
         struct ggml_tensor * Kcache = ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 0, 2, 1, 3));
         struct ggml_tensor * Vcache = ggml_cont(ctx0, ggml_permute(ctx0, Vcur, 0, 2, 1, 3));
 
-        struct ggml_tensor * k_cache_view = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_tokens, n_kv_head,
-            k_cache->nb[1], k_cache->nb[2], 0);
-
-        struct ggml_tensor * v_cache_view = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_tokens, n_kv_head,
-            v_cache->nb[1], v_cache->nb[2], 0);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcache, k_cache_view));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcache, v_cache_view));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, k_cache, Kcache, inp_pos));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, v_cache, Vcache, inp_pos));
 
         struct ggml_tensor * Kfull = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_tokens, n_kv_head,
+            head_dim, n_kv_ctx, n_kv_head,
             k_cache->nb[1], k_cache->nb[2], 0);
 
         struct ggml_tensor * Vfull = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_tokens, n_kv_head,
+            head_dim, n_kv_ctx, n_kv_head,
             v_cache->nb[1], v_cache->nb[2], 0);
 
         struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
@@ -311,6 +311,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
     const float rope_theta = cfg.code_pred_rope_theta;
     const int n_layer = cfg.code_pred_layers;
     const int n_tokens = 1;
+    const int n_kv_ctx = impl->state.code_pred_cache.n_ctx;
     const bool use_code_pred_mrope = false;
 
     struct ggml_init_params params = {
@@ -341,7 +342,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
         ggml_set_input(inp_mrope_pos);
     }
 
-    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_past + n_tokens, n_tokens);
+    struct ggml_tensor * inp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv_ctx, n_tokens);
     ggml_set_name(inp_mask, "inp_mask");
     ggml_set_input(inp_mask);
 
@@ -414,26 +415,15 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
         struct ggml_tensor * Kcache = ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 0, 2, 1, 3));
         struct ggml_tensor * Vcache = ggml_cont(ctx0, ggml_permute(ctx0, Vcur, 0, 2, 1, 3));
 
-        const size_t k_off = (size_t) n_past * k_cache->nb[1];
-        const size_t v_off = (size_t) n_past * v_cache->nb[1];
-
-        struct ggml_tensor * k_dst = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_tokens, n_kv_head,
-            k_cache->nb[1], k_cache->nb[2], k_off);
-
-        struct ggml_tensor * v_dst = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_tokens, n_kv_head,
-            v_cache->nb[1], v_cache->nb[2], v_off);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcache, k_dst));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcache, v_dst));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, k_cache, Kcache, inp_pos));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, v_cache, Vcache, inp_pos));
 
         struct ggml_tensor * K = ggml_view_3d(ctx0, k_cache,
-            head_dim, n_past + n_tokens, n_kv_head,
+            head_dim, n_kv_ctx, n_kv_head,
             k_cache->nb[1], k_cache->nb[2], 0);
 
         struct ggml_tensor * V = ggml_view_3d(ctx0, v_cache,
-            head_dim, n_past + n_tokens, n_kv_head,
+            head_dim, n_kv_ctx, n_kv_head,
             v_cache->nb[1], v_cache->nb[2], 0);
 
         struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);

@@ -195,6 +195,14 @@ public:
 private:
     friend struct transformer_internal::ops;
 
+    bool forward_step_internal(const float * step_embd,
+                               const int32_t * frame_codes,
+                               const float * overlay_embd,
+                               int32_t n_past,
+                               std::vector<float> & output,
+                               std::vector<float> * hidden_out,
+                               bool read_hidden);
+
     std::unique_ptr<tts_transformer_private> impl_;
     std::string error_msg_;
     

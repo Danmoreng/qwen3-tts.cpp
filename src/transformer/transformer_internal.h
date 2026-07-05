@@ -50,7 +50,8 @@ struct ops {
                                     int32_t n_reference_codebooks = 0);
 
     static struct ggml_cgraph * build_prefill_forward_graph(TTSTransformer & self, int32_t n_tokens, int32_t n_past);
-    static struct ggml_cgraph * build_step_graph(TTSTransformer & self, int32_t n_past);
+    static struct ggml_cgraph * build_step_graph(TTSTransformer & self, int32_t n_past,
+                                                 bool use_frame_codes = false);
     static bool project_text_tokens(TTSTransformer & self,
                                     const int32_t * text_tokens,
                                     int32_t n_tokens,
@@ -68,7 +69,8 @@ struct ops {
                                             float * out_row);
     static struct ggml_cgraph * build_code_pred_graph(TTSTransformer & self, int32_t n_prev_codes);
     static struct ggml_cgraph * build_code_pred_step_graph(TTSTransformer & self, int32_t n_past, int32_t generation_step);
-    static struct ggml_cgraph * build_code_pred_prefill_graph(TTSTransformer & self);
+    static struct ggml_cgraph * build_code_pred_prefill_graph(TTSTransformer & self,
+                                                              bool use_hidden_bridge = false);
     static void maybe_reserve_scheduler_graphs(TTSTransformer & self, int32_t prefill_len, int32_t required_ctx);
     static bool parse_config(TTSTransformer & self, struct gguf_context * ctx);
     static bool create_tensors(TTSTransformer & self, struct gguf_context * ctx);

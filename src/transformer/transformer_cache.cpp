@@ -190,8 +190,8 @@ void transformer_internal::ops::maybe_reserve_scheduler_graphs(TTSTransformer & 
 
     bool ok = true;
     ok &= reserve_graph(build_prefill_forward_graph(self, prefill_len, 0), "talker prefill");
-    ok &= reserve_graph(build_step_graph(self, std::max<int32_t>(0, required_ctx - 1)), "talker step");
-    ok &= reserve_graph(build_code_pred_prefill_graph(self), "code predictor prefill");
+    ok &= reserve_graph(build_step_graph(self, std::max<int32_t>(0, required_ctx - 1), true), "talker step");
+    ok &= reserve_graph(build_code_pred_prefill_graph(self, impl->state.hidden_bridge != nullptr), "code predictor prefill");
 
     for (int step = 1; step < 15; ++step) {
         char name[32];

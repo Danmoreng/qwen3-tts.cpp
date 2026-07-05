@@ -192,14 +192,19 @@ bool TTSTransformer::forward_text(const int32_t * text_tokens, int32_t n_tokens,
     return forward_prefill(projected.data(), n_tokens, n_past, output, nullptr);
 }
 
-bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
-                                  std::vector<float> & output,
-                                  std::vector<float> * hidden_out) {
+bool TTSTransformer::forward_step_internal(const float * step_embd,
+                                           const int32_t * frame_codes,
+                                           const float * overlay_embd,
+                                           int32_t n_past,
+                                           std::vector<float> & output,
+                                           std::vector<float> * hidden_out,
+                                           bool read_hidden) {
     if (!impl_->model.ctx) {
         error_msg_ = "Model not loaded";
         return false;
     }
-    if (!step_embd) {
+    const bool use_frame_codes = frame_codes != nullptr && overlay_embd != nullptr;
+    if (!step_embd && !use_frame_codes) {
         error_msg_ = "step_embd is null";
         return false;
     }
@@ -224,7 +229,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    struct ggml_cgraph * gf = transformer_internal::ops::build_step_graph(*this, n_past);
+    struct ggml_cgraph * gf = transformer_internal::ops::build_step_graph(*this, n_past, use_frame_codes);
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
     if (impl_->timing) impl_->timing->t_talker_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -245,8 +250,23 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    struct ggml_tensor * inp_step = ggml_graph_get_tensor(gf, "inp_step_embd");
-    if (inp_step) {
+    if (use_frame_codes) {
+        struct ggml_tensor * inp_frame_codes = ggml_graph_get_tensor(gf, "inp_frame_codes");
+        if (inp_frame_codes) {
+            ggml_backend_tensor_set(inp_frame_codes, frame_codes, 0,
+                                    impl_->model.config.n_codebooks * sizeof(int32_t));
+        }
+        struct ggml_tensor * inp_overlay = ggml_graph_get_tensor(gf, "inp_overlay_embd");
+        if (inp_overlay) {
+            ggml_backend_tensor_set(inp_overlay, overlay_embd, 0,
+                                    impl_->model.config.hidden_size * sizeof(float));
+        }
+    } else {
+        struct ggml_tensor * inp_step = ggml_graph_get_tensor(gf, "inp_step_embd");
+        if (!inp_step) {
+            error_msg_ = "Failed to find inp_step_embd tensor";
+            return false;
+        }
         ggml_backend_tensor_set(inp_step, step_embd, 0,
                                 impl_->model.config.hidden_size * sizeof(float));
     }
@@ -301,13 +321,15 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    last_hidden_.resize(impl_->model.config.hidden_size);
+    if (read_hidden || hidden_out) {
+        last_hidden_.resize(impl_->model.config.hidden_size);
+    }
     if (hidden_out) {
         hidden_out->resize(impl_->model.config.hidden_size);
         ggml_backend_tensor_get(hidden, hidden_out->data(), 0,
                                 impl_->model.config.hidden_size * sizeof(float));
         last_hidden_ = *hidden_out;
-    } else {
+    } else if (read_hidden) {
         ggml_backend_tensor_get(hidden, last_hidden_.data(), 0,
                                 impl_->model.config.hidden_size * sizeof(float));
     }
@@ -331,6 +353,12 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #endif
 
     return true;
+}
+
+bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
+                                  std::vector<float> & output,
+                                  std::vector<float> * hidden_out) {
+    return forward_step_internal(step_embd, nullptr, nullptr, n_past, output, hidden_out, true);
 }
 
 bool TTSTransformer::forward_codec(int32_t codec_token, int32_t n_past,

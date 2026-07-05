@@ -141,9 +141,6 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
     transformer_sampling_state sampling{resolve_sampling_seed(seed), 0};
     const int32_t suppress_start = std::min(cfg.code_pred_vocab_size, cfg.codec_vocab_size);
 
-    std::vector<float> step_embd(cfg.hidden_size, 0.0f);
-    std::vector<float> embd_row(cfg.hidden_size);
-
     for (int frame = 0; frame < max_len; ++frame) {
         const bool trace_frame = transformer_internal::debug_trace_should_dump_frame(trace_cfg, frame);
         if (trace_frame) {
@@ -204,18 +201,24 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             snprintf(token_name, sizeof(token_name), "frame%03d_cb0_token.i32.bin", frame);
             transformer_internal::debug_trace_write_bin(trace_cfg, token_name, &frame_codes[0], 1, "i32", {1});
 
-            char hidden_name[128];
-            snprintf(hidden_name, sizeof(hidden_name), "frame%03d_talker_hidden.f32.bin", frame);
-            transformer_internal::debug_trace_write_bin(trace_cfg, hidden_name, last_hidden_.data(),
-                                                        last_hidden_.size(), "f32",
-                                                        {(int64_t) last_hidden_.size()});
+            if (!last_hidden_.empty()) {
+                char hidden_name[128];
+                snprintf(hidden_name, sizeof(hidden_name), "frame%03d_talker_hidden.f32.bin", frame);
+                transformer_internal::debug_trace_write_bin(trace_cfg, hidden_name, last_hidden_.data(),
+                                                            last_hidden_.size(), "f32",
+                                                            {(int64_t) last_hidden_.size()});
+            }
         }
 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
         std::vector<int32_t> codes_1_15;
-        if (!predict_codes_autoregressive(last_hidden_.data(), frame_codes[0], codes_1_15,
+        const bool need_host_hidden_for_predictor =
+            impl_->use_coreml_code_predictor || trace_cfg.enabled;
+        const float * predictor_hidden =
+            (need_host_hidden_for_predictor && !last_hidden_.empty()) ? last_hidden_.data() : nullptr;
+        if (!predict_codes_autoregressive(predictor_hidden, frame_codes[0], codes_1_15,
                                           temperature, top_k, top_p,
                                           sampling.seed, &sampling.subseq, frame)) {
             return false;
@@ -256,43 +259,17 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             break;
         }
 
-        std::fill(step_embd.begin(), step_embd.end(), 0.0f);
-
-#ifdef QWEN3_TTS_TIMING
-        t0 = clk::now();
-#endif
-        if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.codec_embd, frame_codes[0], embd_row.data())) {
-            return false;
-        }
-        for (int32_t h = 0; h < cfg.hidden_size; ++h) {
-            step_embd[h] = embd_row[h];
-        }
-
-        for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
-            int32_t code_token = frame_codes[cb];
-            if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.code_pred_embd[cb - 1], code_token, embd_row.data())) {
-                return false;
-            }
-            for (int32_t h = 0; h < cfg.hidden_size; ++h) {
-                step_embd[h] += embd_row[h];
-            }
-        }
-#ifdef QWEN3_TTS_TIMING
-        t1 = clk::now();
-        timing.t_embed_lookup_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-#endif
-
         const float * trailing_row = (frame < trailing_len)
             ? trailing_text_hidden.data() + (size_t) frame * cfg.hidden_size
             : tts_pad_embed.data();
-        for (int32_t h = 0; h < cfg.hidden_size; ++h) {
-            step_embd[h] += trailing_row[h];
-        }
 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        if (!forward_step(step_embd.data(), n_past, logits)) {
+        const bool read_hidden_after_step =
+            impl_->use_coreml_code_predictor || trace_cfg.enabled;
+        if (!forward_step_internal(nullptr, frame_codes.data(), trailing_row,
+                                   n_past, logits, nullptr, read_hidden_after_step)) {
             return false;
         }
 #ifdef QWEN3_TTS_TIMING

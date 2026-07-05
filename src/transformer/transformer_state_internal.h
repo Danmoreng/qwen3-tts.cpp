@@ -124,6 +124,10 @@ struct tts_transformer_state {
     std::vector<std::vector<uint8_t>> code_pred_compute_meta;
     std::vector<ggml_fp16_t> code_pred_mask;
 
+    struct ggml_context * hidden_bridge_ctx = nullptr;
+    ggml_backend_buffer_t hidden_bridge_buffer = nullptr;
+    struct ggml_tensor * hidden_bridge = nullptr;
+
     tts_kv_cache cache;
     tts_kv_cache code_pred_cache;
 };

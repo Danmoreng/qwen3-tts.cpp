@@ -163,12 +163,19 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
     ggml_set_output(logits);
 
     ggml_build_forward_expand(gf, logits);
+    if (impl->state.hidden_bridge) {
+        struct ggml_tensor * last_hidden = ggml_view_1d(
+            ctx0, cur, hidden_size,
+            (size_t) (n_tokens - 1) * (size_t) hidden_size * sizeof(float));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_hidden, impl->state.hidden_bridge));
+    }
 
     ggml_free(ctx0);
     return gf;
 }
 
-struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer & self, int32_t n_past) {
+struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer & self, int32_t n_past,
+                                                                 bool use_frame_codes) {
     auto & impl = self.impl_;
     const auto & cfg = impl->model.config;
     const int n_head = cfg.n_attention_heads;
@@ -189,9 +196,32 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
     struct ggml_context * ctx0 = ggml_init(params);
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, QWEN3_TTS_MAX_NODES, false);
 
-    struct ggml_tensor * inp_step_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hidden_size, 1);
-    ggml_set_name(inp_step_embd, "inp_step_embd");
-    ggml_set_input(inp_step_embd);
+    struct ggml_tensor * cur = nullptr;
+    if (use_frame_codes) {
+        struct ggml_tensor * inp_frame_codes = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, cfg.n_codebooks);
+        ggml_set_name(inp_frame_codes, "inp_frame_codes");
+        ggml_set_input(inp_frame_codes);
+
+        struct ggml_tensor * inp_overlay = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hidden_size, 1);
+        ggml_set_name(inp_overlay, "inp_overlay_embd");
+        ggml_set_input(inp_overlay);
+
+        struct ggml_tensor * code_idx = ggml_view_1d(ctx0, inp_frame_codes, 1, 0);
+        cur = ggml_get_rows(ctx0, impl->model.codec_embd, code_idx);
+        cur = ggml_reshape_2d(ctx0, cur, hidden_size, 1);
+
+        for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
+            code_idx = ggml_view_1d(ctx0, inp_frame_codes, 1, (size_t) cb * sizeof(int32_t));
+            struct ggml_tensor * code_embd = ggml_get_rows(ctx0, impl->model.code_pred_embd[cb - 1], code_idx);
+            code_embd = ggml_reshape_2d(ctx0, code_embd, hidden_size, 1);
+            cur = ggml_add(ctx0, cur, code_embd);
+        }
+        cur = ggml_add(ctx0, cur, inp_overlay);
+    } else {
+        cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hidden_size, 1);
+        ggml_set_name(cur, "inp_step_embd");
+        ggml_set_input(cur);
+    }
 
     struct ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
     ggml_set_name(inp_pos, "inp_pos");
@@ -208,7 +238,6 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
     ggml_set_name(inp_mask, "inp_mask");
     ggml_set_input(inp_mask);
 
-    struct ggml_tensor * cur = inp_step_embd;
     struct ggml_tensor * inpL = cur;
 
     const float KQscale = 1.0f / sqrtf((float) head_dim);
@@ -330,6 +359,10 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
     ggml_set_output(logits);
 
     ggml_build_forward_expand(gf, logits);
+    if (impl->state.hidden_bridge) {
+        struct ggml_tensor * last_hidden = ggml_view_1d(ctx0, cur, hidden_size, 0);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_hidden, impl->state.hidden_bridge));
+    }
 
     ggml_free(ctx0);
     return gf;
