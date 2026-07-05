@@ -69,12 +69,25 @@ def _save_array(out_dir: Path, name: str, tensor: torch.Tensor, summary: dict[st
     }
 
 
+def _resolve_dtype(name: str, device: str) -> torch.dtype:
+    if name == "auto":
+        return torch.bfloat16 if device.startswith("cuda") else torch.float32
+    if name == "float32":
+        return torch.float32
+    if name == "float16":
+        return torch.float16
+    if name == "bfloat16":
+        return torch.bfloat16
+    raise ValueError(f"unsupported dtype: {name}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tokenizer", required=True, help="Path to the speech_tokenizer directory")
     parser.add_argument("--audio", required=True, help="Reference WAV path")
     parser.add_argument("--out-dir", required=True, help="Directory for .npy tensors and summary.json")
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--dtype", default="auto", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--python-repo", default=str(_default_python_repo()))
     parser.add_argument("--hook", action="append", default=[], help="Additional module name to hook")
     args = parser.parse_args()
@@ -86,7 +99,7 @@ def main() -> int:
     import librosa
     from qwen_tts import Qwen3TTSTokenizer
 
-    dtype = torch.bfloat16 if str(args.device).startswith("cuda") else torch.float32
+    dtype = _resolve_dtype(args.dtype, str(args.device))
     tokenizer = Qwen3TTSTokenizer.from_pretrained(
         args.tokenizer,
         device_map=args.device,
@@ -103,7 +116,7 @@ def main() -> int:
         return_tensors="pt",
         padding=True,
     )
-    input_values = features["input_values"].to(args.device)
+    input_values = features["input_values"].to(device=args.device, dtype=dtype)
     model_input_values = input_values
     if model_input_values.ndim == 3 and model_input_values.shape[1] == 1:
         model_input_values = model_input_values[:, 0, :]
@@ -120,6 +133,7 @@ def main() -> int:
         "feature_sample_rate": sample_rate,
         "num_samples": int(audio.shape[0]),
         "device": str(args.device),
+        "dtype": str(dtype).replace("torch.", ""),
         "hooks": {},
         "tensors": {},
     }

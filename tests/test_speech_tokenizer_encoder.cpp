@@ -168,12 +168,31 @@ projection_error report_projection_error(const char * name,
 
 int main(int argc, char ** argv) {
     std::string tokenizer_path = "models/qwen-tokenizer-12hz-Q8_0.gguf";
-    if (argc > 1) {
-        tokenizer_path = argv[1];
+    std::string golden_dir;
+    bool force_cpu = true;
+    bool report_only = false;
+    bool tokenizer_path_set = false;
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--cuda") == 0) {
+            force_cpu = false;
+        } else if (std::strcmp(argv[i], "--cpu") == 0) {
+            force_cpu = true;
+        } else if (std::strcmp(argv[i], "--report-only") == 0) {
+            report_only = true;
+        } else if (!tokenizer_path_set) {
+            tokenizer_path = argv[i];
+            tokenizer_path_set = true;
+        } else if (golden_dir.empty()) {
+            golden_dir = argv[i];
+        } else {
+            fprintf(stderr, "unexpected argument: %s\n", argv[i]);
+            return 1;
+        }
     }
 
     qwen3_tts::SpeechTokenizerEncoder encoder;
-    if (!encoder.load_model(tokenizer_path, true)) {
+    if (!encoder.load_model(tokenizer_path, force_cpu)) {
         fprintf(stderr, "failed to load speech tokenizer encoder: %s\n", encoder.get_error().c_str());
         return 1;
     }
@@ -183,9 +202,8 @@ int main(int argc, char ** argv) {
            cfg.sample_rate, cfg.frame_rate, cfg.hidden_size, cfg.n_layers,
            cfg.n_heads, cfg.n_valid_quantizers);
 
-    if (argc > 2) {
+    if (!golden_dir.empty()) {
         try {
-        const std::string golden_dir = argv[2];
         const npy_array semantic = load_npy(golden_dir + "/hook_encoder_quantizer_semantic_residual_vector_quantizer_input_proj.npy");
         const npy_array acoustic = load_npy(golden_dir + "/hook_encoder_quantizer_acoustic_residual_vector_quantizer_input_proj.npy");
         const npy_array expected = load_npy(golden_dir + "/api_audio_codes.npy");
@@ -234,9 +252,12 @@ int main(int argc, char ** argv) {
         if (mismatches != 0) {
             fprintf(stderr, "VQ golden comparison failed: mismatches=%zu / %zu\n",
                     mismatches, codes.codes.size());
-            return 1;
+            if (!report_only) {
+                return 1;
+            }
+        } else {
+            printf("VQ golden comparison ok: frames=%d codebooks=%d\n", codes.n_frames, codes.n_codebooks);
         }
-        printf("VQ golden comparison ok: frames=%d codebooks=%d\n", codes.n_frames, codes.n_codebooks);
 
         const npy_array input_values = load_npy(golden_dir + "/model_input_values.npy");
         if (input_values.shape.size() != 2 || input_values.shape[0] != 1) {
@@ -264,7 +285,9 @@ int main(int argc, char ** argv) {
         if (semantic_err.rmse > 0.10 || semantic_err.max_abs > 1.0 ||
             acoustic_err.rmse > 0.05 || acoustic_err.max_abs > 0.5) {
             fprintf(stderr, "full projection golden comparison failed tolerance\n");
-            return 1;
+            if (!report_only) {
+                return 1;
+            }
         }
         if (!encoder.encode(as_f32(input_values), (int32_t) input_values.shape[1], encoded_codes)) {
             fprintf(stderr, "full encode failed: %s\n", encoder.get_error().c_str());
