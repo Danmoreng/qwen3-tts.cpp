@@ -30,6 +30,7 @@ struct process_memory_snapshot {
 };
 
 void configure_ggml_logging_once();
+bool env_flag_enabled(const char * name);
 int64_t get_time_ms();
 bool get_process_memory_snapshot(process_memory_snapshot & out);
 std::string format_bytes(uint64_t bytes);

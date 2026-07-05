@@ -76,21 +76,21 @@ struct speech_tokenizer_encoder_private {
 
 namespace {
 
-bool tensor_to_f32(const struct ggml_tensor * tensor, std::vector<float> & out) {
-    if (!tensor || !tensor->data) {
+bool tensor_to_f32(struct ggml_tensor * tensor, std::vector<float> & out) {
+    if (!tensor) {
         return false;
     }
     const int64_t n = ggml_nelements(tensor);
     out.resize((size_t) n);
     if (tensor->type == GGML_TYPE_F32) {
-        const float * src = (const float *) tensor->data;
-        std::copy(src, src + n, out.begin());
+        ggml_backend_tensor_get(tensor, out.data(), 0, out.size() * sizeof(float));
         return true;
     }
     if (tensor->type == GGML_TYPE_F16) {
-        const ggml_fp16_t * src = (const ggml_fp16_t *) tensor->data;
+        std::vector<ggml_fp16_t> tmp((size_t) n);
+        ggml_backend_tensor_get(tensor, tmp.data(), 0, tmp.size() * sizeof(ggml_fp16_t));
         for (int64_t i = 0; i < n; ++i) {
-            out[(size_t) i] = ggml_fp16_to_fp32(src[i]);
+            out[(size_t) i] = ggml_fp16_to_fp32(tmp[(size_t) i]);
         }
         return true;
     }

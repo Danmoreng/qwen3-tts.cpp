@@ -12,6 +12,7 @@ namespace qwen3_tts {
 using pipeline_internal::format_bytes;
 using pipeline_internal::get_process_memory_snapshot;
 using pipeline_internal::get_time_ms;
+using pipeline_internal::env_flag_enabled;
 using pipeline_internal::log_memory_usage;
 using pipeline_internal::ops;
 using pipeline_internal::process_memory_snapshot;
@@ -20,6 +21,7 @@ using pipeline_internal::resample_linear;
 namespace {
 
 constexpr int32_t qwen3_tts_codec_hop_length = 1920;
+constexpr const char * qwen3_tts_speech_encoder_cuda_env = "QWEN3_TTS_SPEECH_ENCODER_CUDA";
 
 bool write_codes_file(const std::string & path,
                       const std::vector<int32_t> & codes,
@@ -583,7 +585,8 @@ tts_result Qwen3TTS::synthesize_with_voice(const std::string & text,
             }
             if (!speech_encoder_loaded_) {
                 const int64_t t_speech_encoder_load_start = get_time_ms();
-                if (!speech_encoder_.load_model(tokenizer_model_path_, true)) {
+                const bool speech_encoder_cuda = env_flag_enabled(qwen3_tts_speech_encoder_cuda_env);
+                if (!speech_encoder_.load_model(tokenizer_model_path_, !speech_encoder_cuda)) {
                     result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
                     return result;
                 }
@@ -788,7 +791,8 @@ tts_result Qwen3TTS::synthesize_with_voice_streaming(
                 return result;
             }
             if (!speech_encoder_loaded_) {
-                if (!speech_encoder_.load_model(tokenizer_model_path_, true)) {
+                const bool speech_encoder_cuda = env_flag_enabled(qwen3_tts_speech_encoder_cuda_env);
+                if (!speech_encoder_.load_model(tokenizer_model_path_, !speech_encoder_cuda)) {
                     result.error_msg = "Failed to load speech tokenizer encoder: " + speech_encoder_.get_error();
                     return result;
                 }

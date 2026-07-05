@@ -21,7 +21,6 @@
 
 namespace qwen3_tts {
 namespace pipeline_internal {
-namespace {
 
 bool env_flag_enabled(const char * name) {
     const char * v = std::getenv(name);
@@ -51,6 +50,8 @@ bool env_flag_enabled(const char * name) {
     }
     return true;
 }
+
+namespace {
 
 void ggml_log_callback_filtered(enum ggml_log_level level, const char * text, void * user_data) {
     (void) user_data;

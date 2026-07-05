@@ -65,6 +65,8 @@ void TTSTransformer::unload_model() {
     }
 
     impl_->state.compute_meta.clear();
+    impl_->state.code_pred_compute_meta.clear();
+    impl_->state.talker_mask.clear();
     impl_->state.code_pred_mask.clear();
     last_hidden_.clear();
     impl_->embd_row_fp16_scratch.clear();

@@ -122,6 +122,7 @@ struct tts_transformer_state {
 
     std::vector<uint8_t> compute_meta;
     std::vector<std::vector<uint8_t>> code_pred_compute_meta;
+    std::vector<ggml_fp16_t> talker_mask;
     std::vector<ggml_fp16_t> code_pred_mask;
 
     struct ggml_context * hidden_bridge_ctx = nullptr;
