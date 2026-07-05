@@ -132,8 +132,12 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
     ggml_set_name(positions, "positions");
     ggml_set_input(positions);
 
+    struct ggml_tensor * mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_frames, n_frames);
+    ggml_set_name(mask, "mask");
+    ggml_set_input(mask);
+
     for (int i = 0; i < cfg.n_pre_tfm_layers; ++i) {
-        cur = apply_pre_tfm_layer(ctx0, self, cur, model.pre_tfm_layers[i], n_frames, positions);
+        cur = apply_pre_tfm_layer(ctx0, self, cur, model.pre_tfm_layers[i], n_frames, positions, mask);
     }
 
     if (model.pre_tfm_norm_w) {

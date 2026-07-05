@@ -2,6 +2,7 @@
 #include "decoder/decoder_state_internal.h"
 
 #include <chrono>
+#include <cmath>
 
 namespace qwen3_tts {
 
@@ -27,6 +28,7 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
     auto & error_msg = impl_->error_msg;
     auto & codebook_input_bufs = impl_->codebook_input_bufs;
     auto & positions_buf = impl_->positions_buf;
+    auto & mask_buf = impl_->mask_buf;
     auto & timing = impl_->last_timing;
 
     timing = {};
@@ -82,6 +84,23 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
     if (state.decode_positions_tensor) {
         ggml_backend_tensor_set(state.decode_positions_tensor, positions_buf.data(), 0,
                                 (size_t) n_frames * sizeof(int32_t));
+    }
+    if ((int32_t) mask_buf.size() != n_frames * n_frames) {
+        mask_buf.assign((size_t) n_frames * (size_t) n_frames, -INFINITY);
+        const int32_t window = cfg.sliding_window > 0 ? cfg.sliding_window : n_frames;
+        for (int32_t q = 0; q < n_frames; ++q) {
+            int32_t k_min = q - window + 1;
+            if (k_min < 0) {
+                k_min = 0;
+            }
+            for (int32_t k = k_min; k <= q; ++k) {
+                mask_buf[(size_t) q * (size_t) n_frames + (size_t) k] = 0.0f;
+            }
+        }
+    }
+    if (state.decode_mask_tensor) {
+        ggml_backend_tensor_set(state.decode_mask_tensor, mask_buf.data(), 0,
+                                (size_t) n_frames * (size_t) n_frames * sizeof(float));
     }
     timing.input_upload_ms = now_ms() - t_upload_start;
 

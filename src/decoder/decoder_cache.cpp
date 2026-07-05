@@ -21,6 +21,7 @@ void decoder_internal::ops::release_cached_decode_graph(AudioTokenizerDecoder & 
 
     state.decode_graph = nullptr;
     state.decode_positions_tensor = nullptr;
+    state.decode_mask_tensor = nullptr;
     state.decode_audio_tensor = nullptr;
     state.decode_graph_n_frames = 0;
     for (int i = 0; i < 16; ++i) {
@@ -64,7 +65,13 @@ bool decoder_internal::ops::ensure_cached_decode_graph(AudioTokenizerDecoder & s
     }
 
     state.decode_positions_tensor = ggml_graph_get_tensor(state.decode_graph, "positions");
+    state.decode_mask_tensor = ggml_graph_get_tensor(state.decode_graph, "mask");
     state.decode_audio_tensor = ggml_graph_get_tensor(state.decode_graph, "audio");
+    if (!state.decode_positions_tensor || !state.decode_mask_tensor) {
+        error_msg = "Failed to find cached decoder position/mask input tensor";
+        release_cached_decode_graph(self);
+        return false;
+    }
     if (!state.decode_audio_tensor) {
         error_msg = "Failed to find cached decoder output tensor";
         release_cached_decode_graph(self);

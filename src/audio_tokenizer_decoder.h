@@ -39,6 +39,7 @@ struct audio_decoder_config {
     int32_t n_pre_tfm_layers = 8;       // Pre-transformer layers
     int32_t n_heads = 16;               // Attention heads in pre-transformer
     int32_t ffn_dim = 1024;             // FFN intermediate dimension
+    int32_t sliding_window = 72;         // Causal attention window in codec frames
     int32_t decoder_dim = 1536;         // Initial decoder dimension
     int32_t upsample_rates[4] = {8, 5, 4, 3};  // Total: 480x upsampling
     float rms_norm_eps = 1e-5f;

@@ -57,6 +57,7 @@ void AudioTokenizerDecoder::unload_model() {
     auto & codes_buf = impl_->codes_buf;
     auto & codebook_input_bufs = impl_->codebook_input_bufs;
     auto & positions_buf = impl_->positions_buf;
+    auto & mask_buf = impl_->mask_buf;
 
     decoder_internal::ops::release_cached_decode_graph(*this);
     free_audio_decoder_model(model);
@@ -83,6 +84,7 @@ void AudioTokenizerDecoder::unload_model() {
     codes_buf.clear();
     codebook_input_bufs.clear();
     positions_buf.clear();
+    mask_buf.clear();
 }
 
 void decoder_internal::ops::normalize_codebooks(AudioTokenizerDecoder & self) {
@@ -150,6 +152,9 @@ bool AudioTokenizerDecoder::load_model_impl(const std::string & model_path,
         "qwen3-tts-tokenizer.codebook_size",
         loader.get_u32("qwen3-tts-tokenizer.decoder.codebook_size",
                        loader.get_u32("qwen3-tts.tokenizer.codebook_size", 2048)));
+    model.config.sliding_window = loader.get_u32(
+        "qwen3-tts-tokenizer.decoder.sliding_window",
+        loader.get_u32("qwen3-tts.tokenizer.decoder.sliding_window", 72));
 
     const int64_t n_tensors = loader.get_n_tensors();
     int dec_tensor_count = 0;

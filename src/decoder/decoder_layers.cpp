@@ -92,7 +92,8 @@ struct ggml_tensor * decoder_internal::ops::apply_pre_tfm_layer(struct ggml_cont
                                                                 struct ggml_tensor * x,
                                                                 const pre_tfm_layer & layer,
                                                                 int32_t n_frames,
-                                                                struct ggml_tensor * positions) {
+                                                                struct ggml_tensor * positions,
+                                                                struct ggml_tensor * mask) {
     const auto & cfg = self.impl_->model.config;
     const int n_heads = cfg.n_heads;
     const int qkv_dim = cfg.latent_dim;
@@ -129,9 +130,7 @@ struct ggml_tensor * decoder_internal::ops::apply_pre_tfm_layer(struct ggml_cont
     struct ggml_tensor * V = ggml_permute(ctx, Vcur, 0, 2, 1, 3);
 
     struct ggml_tensor * KQ = ggml_mul_mat(ctx, K, Q);
-    KQ = ggml_scale(ctx, KQ, 1.0f / sqrtf((float) head_dim));
-    KQ = ggml_diag_mask_inf(ctx, KQ, 0);
-    KQ = ggml_soft_max(ctx, KQ);
+    KQ = ggml_soft_max_ext(ctx, KQ, mask, 1.0f / sqrtf((float) head_dim), 0.0f);
 
     V = ggml_cont(ctx, ggml_transpose(ctx, V));
 
