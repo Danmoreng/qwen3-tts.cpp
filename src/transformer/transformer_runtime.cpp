@@ -285,13 +285,14 @@ bool TTSTransformer::forward_step_internal(const float * step_embd,
 
     struct ggml_tensor * inp_mask = ggml_graph_get_tensor(gf, "inp_mask");
     if (inp_mask) {
-        std::vector<ggml_fp16_t> mask(impl_->state.cache.n_ctx);
+        const int32_t n_kv_pad = std::min<int32_t>(impl_->state.cache.n_ctx, GGML_PAD(n_past + 1, 256));
+        std::vector<ggml_fp16_t> mask((size_t) n_kv_pad);
         const ggml_fp16_t zero_fp16 = ggml_fp32_to_fp16(0.0f);
         const ggml_fp16_t neg_inf_fp16 = ggml_fp32_to_fp16(-INFINITY);
-        for (int i = 0; i < impl_->state.cache.n_ctx; ++i) {
+        for (int i = 0; i < n_kv_pad; ++i) {
             mask[(size_t) i] = (i <= n_past) ? zero_fp16 : neg_inf_fp16;
         }
-        ggml_backend_tensor_set(inp_mask, mask.data(), 0, impl_->state.cache.n_ctx * sizeof(ggml_fp16_t));
+        ggml_backend_tensor_set(inp_mask, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
