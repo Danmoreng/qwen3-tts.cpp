@@ -148,20 +148,60 @@ void log_memory_usage(const char * label) {
 
 void resample_linear(const float * input, int input_len, int input_rate,
                      std::vector<float> & output, int output_rate) {
-    double ratio = (double) input_rate / output_rate;
-    int output_len = (int) ((double) input_len / ratio);
+    if (!input || input_len <= 0 || input_rate <= 0 || output_rate <= 0) {
+        output.clear();
+        return;
+    }
+    if (input_rate == output_rate) {
+        output.assign(input, input + input_len);
+        return;
+    }
+
+    const double src_per_dst = (double) input_rate / (double) output_rate;
+    const int output_len = (int) ceil((double) input_len * (double) output_rate /
+                                      (double) input_rate);
     output.resize(output_len);
 
-    for (int i = 0; i < output_len; ++i) {
-        double src_idx = i * ratio;
-        int idx0 = (int) src_idx;
-        int idx1 = idx0 + 1;
-        double frac = src_idx - idx0;
+    constexpr double pi = 3.14159265358979323846264338327950288;
+    constexpr int zero_crossings = 24;
+    const double cutoff = std::min(1.0, (double) output_rate / (double) input_rate);
+    const double radius = (double) zero_crossings / cutoff;
 
-        if (idx1 >= input_len) {
-            output[i] = input[input_len - 1];
+    auto sinc = [](double x) -> double {
+        if (fabs(x) < 1.0e-8) {
+            return 1.0;
+        }
+        return sin(x) / x;
+    };
+
+    for (int i = 0; i < output_len; ++i) {
+        const double center = (double) i * src_per_dst;
+        const int left = (int) ceil(center - radius);
+        const int right = (int) floor(center + radius);
+
+        double sum = 0.0;
+        double weight_sum = 0.0;
+        for (int j = left; j <= right; ++j) {
+            if (j < 0 || j >= input_len) {
+                continue;
+            }
+            const double distance = center - (double) j;
+            const double window_pos = fabs(distance) / radius;
+            if (window_pos > 1.0) {
+                continue;
+            }
+
+            const double window = 0.5 + 0.5 * cos(pi * window_pos);
+            const double weight = cutoff * sinc(pi * cutoff * distance) * window;
+            sum += (double) input[j] * weight;
+            weight_sum += weight;
+        }
+
+        if (fabs(weight_sum) > 1.0e-12) {
+            output[i] = (float) (sum / weight_sum);
         } else {
-            output[i] = (float) ((1.0 - frac) * input[idx0] + frac * input[idx1]);
+            const int nearest = std::max(0, std::min(input_len - 1, (int) llround(center)));
+            output[i] = input[nearest];
         }
     }
 }
