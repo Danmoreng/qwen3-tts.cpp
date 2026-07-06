@@ -407,6 +407,21 @@ with wave.open(wav, "wb") as w:
 PY
 }
 
+extract_qwentts_last_ttfa_ms() {
+    local log_path="$1"
+    python3 - "$log_path" <<'PY'
+import re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    sys.exit(0)
+matches = re.findall(r"\[Perf\]\s+TTFA\s+([0-9]+(?:\.[0-9]+)?)\s+ms", path.read_text(errors="replace"))
+if matches:
+    print(matches[-1])
+PY
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --runs) RUNS="$2"; shift 2 ;;
@@ -701,7 +716,8 @@ PY
         out="$OUT_DIR/qwentts_server_buffered_run${iter}.wav"
         time_total="$(curl -fsS -w '%{time_total}' -o "$out" -X POST "http://127.0.0.1:$port/v1/audio/speech" -H "Content-Type: application/json" -d "$payload")"
         if [[ "$warm" -eq 0 ]]; then
-            append_row "qwentts.cpp" "http_server_preencoded" "$iter" "$out" "$time_total" "0" "$LOG_DIR/qwentts_server_stderr.log" "POST /v1/audio/speech response_format=wav"
+            ttfa_ms="$(extract_qwentts_last_ttfa_ms "$LOG_DIR/qwentts_server_stderr.log")"
+            append_row "qwentts.cpp" "http_server_preencoded" "$iter" "$out" "$time_total" "0" "$LOG_DIR/qwentts_server_stderr.log" "POST /v1/audio/speech response_format=wav" "$ttfa_ms"
         fi
     done
 
@@ -725,13 +741,10 @@ PY
 )"
         pcm="$OUT_DIR/qwentts_server_stream_run${iter}.pcm"
         wav="$OUT_DIR/qwentts_server_stream_run${iter}.wav"
-        read -r start_transfer time_total < <(curl -fsS -w '%{time_starttransfer} %{time_total}\n' -o "$pcm" -X POST "http://127.0.0.1:$port/v1/audio/speech" -H "Content-Type: application/json" -d "$payload")
+        read -r _start_transfer time_total < <(curl -fsS -w '%{time_starttransfer} %{time_total}\n' -o "$pcm" -X POST "http://127.0.0.1:$port/v1/audio/speech" -H "Content-Type: application/json" -d "$payload")
         convert_pcm16_to_wav "$pcm" "$wav"
         if [[ "$warm" -eq 0 ]]; then
-            ttfa_ms="$(python3 - <<PY
-print(round(float("$start_transfer") * 1000.0, 1))
-PY
-)"
+            ttfa_ms="$(extract_qwentts_last_ttfa_ms "$LOG_DIR/qwentts_server_stderr.log")"
             append_row "qwentts.cpp" "http_server_streaming_preencoded" "$iter" "$wav" "$time_total" "0" "$LOG_DIR/qwentts_server_stderr.log" "POST /v1/audio/speech response_format=pcm" "$ttfa_ms"
         fi
     done
