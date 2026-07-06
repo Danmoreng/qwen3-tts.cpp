@@ -646,10 +646,14 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
 #ifdef QWEN3_TTS_TIMING
     t_part = now();
 #endif
-    const float * codec_pad_embed = codec_tail_embed.data();
     const float * codec_bos_embed = codec_tail_embed.data() + (size_t) hidden_size;
 
-    const int32_t prefill_len = n_instruct_tokens + 3 + codec_plus_overlay_len + text_body_count + 2;
+    if (text_body_count <= 0) {
+        error_msg = "Text token layout is missing the first body token";
+        return false;
+    }
+
+    const int32_t prefill_len = n_instruct_tokens + 3 + codec_plus_overlay_len + 1;
     prefill_embd.resize((size_t) prefill_len * hidden_size);
 
     int32_t offset = 0;
@@ -666,24 +670,10 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
            codec_plus_overlay.data(), codec_plus_overlay.size() * sizeof(float));
     offset += codec_plus_overlay_len;
 
-    for (int32_t t = 0; t < text_body_count; ++t) {
-        float * dst = prefill_embd.data() + (size_t) offset * hidden_size;
-        const float * text_row = text_body_proj.data() + (size_t) t * hidden_size;
-        for (int32_t h = 0; h < hidden_size; ++h) {
-            dst[h] = text_row[h] + codec_pad_embed[h];
-        }
-        ++offset;
-    }
-
-    float * eos_row = prefill_embd.data() + (size_t) offset * hidden_size;
+    float * first_text_row = prefill_embd.data() + (size_t) offset * hidden_size;
+    const float * first_text_proj = text_body_proj.data();
     for (int32_t h = 0; h < hidden_size; ++h) {
-        eos_row[h] = tts_eos_embed[h] + codec_pad_embed[h];
-    }
-    ++offset;
-
-    float * bos_row = prefill_embd.data() + (size_t) offset * hidden_size;
-    for (int32_t h = 0; h < hidden_size; ++h) {
-        bos_row[h] = tts_pad_embed[h] + codec_bos_embed[h];
+        first_text_row[h] = first_text_proj[h] + codec_bos_embed[h];
     }
     ++offset;
 
@@ -692,7 +682,15 @@ bool transformer_internal::ops::build_prefill_graph(TTSTransformer & self,
         return false;
     }
 
-    trailing_text_hidden = tts_pad_embed;
+    const int32_t trailing_len = text_body_count;
+    trailing_text_hidden.resize((size_t) trailing_len * hidden_size);
+    for (int32_t t = 1; t < text_body_count; ++t) {
+        memcpy(trailing_text_hidden.data() + (size_t) (t - 1) * hidden_size,
+               text_body_proj.data() + (size_t) t * hidden_size,
+               (size_t) hidden_size * sizeof(float));
+    }
+    memcpy(trailing_text_hidden.data() + (size_t) (trailing_len - 1) * hidden_size,
+           tts_eos_embed.data(), (size_t) hidden_size * sizeof(float));
 
 #ifdef QWEN3_TTS_TIMING
     if (impl->timing) {
