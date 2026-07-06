@@ -276,8 +276,8 @@ if bench:
 else:
     text = Path(log_path).read_text(errors="replace") if log_path and Path(log_path).exists() else ""
     def metric(pattern):
-        m = re.search(pattern, text, re.M)
-        return float(m.group(1)) if m else None
+        matches = re.findall(pattern, text, re.M)
+        return float(matches[-1]) if matches else None
     if engine == "qwen3-tts.cpp":
         internal_total = metric(r"^\s*Total:\s+([0-9]+(?:\.[0-9]+)?)\s+ms")
         generate_ms = metric(r"^\s*Generate:\s+([0-9]+(?:\.[0-9]+)?)\s+ms")
