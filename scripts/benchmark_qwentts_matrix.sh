@@ -286,6 +286,7 @@ else:
         decode_ms = metric(r"^\s*Decode:\s+([0-9]+(?:\.[0-9]+)?)\s+ms")
         if decode_ms is None:
             decode_ms = metric(r"^\s*Streaming decode:\s*([0-9]+(?:\.[0-9]+)?)\s+ms")
+        parsed_ttfa = metric(r"^\s*TTFA:\s+([0-9]+(?:\.[0-9]+)?)\s+ms")
     elif engine == "qwentts.cpp":
         internal_total = metric(r"\[Perf\]\s+Total\s+([0-9]+(?:\.[0-9]+)?)\s+ms")
         talker = metric(r"\[Perf\]\s+TalkerDecode\s+([0-9]+(?:\.[0-9]+)?)\s+ms")
@@ -724,7 +725,7 @@ PY
 )"
         pcm="$OUT_DIR/qwentts_server_stream_run${iter}.pcm"
         wav="$OUT_DIR/qwentts_server_stream_run${iter}.wav"
-        read -r start_transfer time_total < <(curl -fsS -w '%{time_starttransfer} %{time_total}' -o "$pcm" -X POST "http://127.0.0.1:$port/v1/audio/speech" -H "Content-Type: application/json" -d "$payload")
+        read -r start_transfer time_total < <(curl -fsS -w '%{time_starttransfer} %{time_total}\n' -o "$pcm" -X POST "http://127.0.0.1:$port/v1/audio/speech" -H "Content-Type: application/json" -d "$payload")
         convert_pcm16_to_wav "$pcm" "$wav"
         if [[ "$warm" -eq 0 ]]; then
             ttfa_ms="$(python3 - <<PY

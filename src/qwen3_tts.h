@@ -106,6 +106,9 @@ struct tts_result {
     int64_t t_generate_ms = 0;
     int64_t t_decode_ms = 0;
     int64_t t_total_ms = 0;
+    // Time from code-generation start to the first complete generated audio
+    // code frame. This matches qwentts.cpp's "first frame codes" TTFA metric.
+    int64_t t_ttfa_ms = -1;
 
     // Reference preparation timing breakdown (milliseconds)
     int64_t t_reference_speaker_load_ms = 0;

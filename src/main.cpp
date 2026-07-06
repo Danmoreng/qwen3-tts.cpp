@@ -158,6 +158,7 @@ static void print_bench_json(const char * engine,
     const double wall_sec = (double) wall_ms / 1000.0;
     const double rtf = audio_sec > 0.0 ? wall_sec / audio_sec : 0.0;
     const double x_realtime = wall_sec > 0.0 ? audio_sec / wall_sec : 0.0;
+    const int64_t effective_ttfa_ms = result.t_ttfa_ms >= 0 ? result.t_ttfa_ms : ttfa_ms;
 
     fprintf(stdout,
             "BENCH_JSON {"
@@ -196,7 +197,7 @@ static void print_bench_json(const char * engine,
             audio_sec,
             rtf,
             x_realtime,
-            (long long) ttfa_ms,
+            (long long) effective_ttfa_ms,
             (long long) result.t_load_ms,
             (long long) result.t_tokenize_ms,
             (long long) result.t_encode_ms,
@@ -255,6 +256,10 @@ static void print_result_timing(const qwen3_tts::tts_result & result) {
         }
     }
     fprintf(stderr, "  Generate:  %6lld ms\n", (long long) result.t_generate_ms);
+    if (result.t_ttfa_ms >= 0) {
+        fprintf(stderr, "  TTFA:      %6lld ms (first frame codes)\n",
+                (long long) result.t_ttfa_ms);
+    }
     fprintf(stderr, "  Decode:    %6lld ms\n", (long long) result.t_decode_ms);
     fprintf(stderr, "    graph build:   %6lld ms %s\n",
             (long long) result.t_decode_graph_build_ms,

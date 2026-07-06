@@ -1420,22 +1420,22 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
 
     std::vector<int32_t> generated_codes;
     tts_code_frame_callback_t frame_callback;
-    const bool wants_progress = (bool) self.progress_callback_;
-    if (streaming || wants_progress) {
-        frame_callback = [&](const int32_t * frame_codes, int32_t frame_codebooks, int32_t frame_index) {
-            if (self.progress_callback_) {
-                self.progress_callback_(frame_index + 1, params.max_audio_tokens);
-            }
-            if (!streaming) {
-                return true;
-            }
-            if (frame_codebooks != self.transformer_.get_config().n_codebooks) {
-                stream_error = "Streaming frame codebook count mismatch";
-                return false;
-            }
-            return stream.push_frame(frame_codes);
-        };
-    }
+    frame_callback = [&](const int32_t * frame_codes, int32_t frame_codebooks, int32_t frame_index) {
+        if (result.t_ttfa_ms < 0) {
+            result.t_ttfa_ms = get_time_ms() - t_generate_start;
+        }
+        if (self.progress_callback_) {
+            self.progress_callback_(frame_index + 1, params.max_audio_tokens);
+        }
+        if (!streaming) {
+            return true;
+        }
+        if (frame_codebooks != self.transformer_.get_config().n_codebooks) {
+            stream_error = "Streaming frame codebook count mismatch";
+            return false;
+        }
+        return stream.push_frame(frame_codes);
+    };
     if (!self.transformer_.generate(text_tokens.data(), (int32_t) text_tokens.size(),
                                     speaker_embedding, params.max_audio_tokens, generated_codes,
                                     params.language_id, params.repetition_penalty,
@@ -1447,7 +1447,7 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
                                     reference_codes_ptr ? reference_codes_ptr->codes.data() : nullptr,
                                     reference_codes_ptr ? reference_codes_ptr->n_frames : 0,
                                     reference_codes_ptr ? reference_codes_ptr->n_codebooks : 0,
-                                    (streaming || wants_progress) ? &frame_callback : nullptr)) {
+                                    &frame_callback)) {
         result.error_msg = stream_error.empty()
             ? "Failed to generate speech codes: " + self.transformer_.get_error()
             : stream_error;
@@ -1536,6 +1536,10 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
             fprintf(stderr, "\nTiming:\n");
             fprintf(stderr, "  Tokenization:    %lld ms\n", (long long) result.t_tokenize_ms);
             fprintf(stderr, "  Speaker encode:  %lld ms\n", (long long) result.t_encode_ms);
+            if (result.t_ttfa_ms >= 0) {
+                fprintf(stderr, "  TTFA:            %lld ms (first frame codes)\n",
+                        (long long) result.t_ttfa_ms);
+            }
             if (result.t_reference_speech_project_ms != 0 ||
                 result.t_reference_speech_quantize_ms != 0) {
                 fprintf(stderr,
@@ -1667,6 +1671,10 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
         fprintf(stderr, "\nTiming:\n");
         fprintf(stderr, "  Tokenization:    %lld ms\n", (long long) result.t_tokenize_ms);
         fprintf(stderr, "  Speaker encode:  %lld ms\n", (long long) result.t_encode_ms);
+        if (result.t_ttfa_ms >= 0) {
+            fprintf(stderr, "  TTFA:            %lld ms (first frame codes)\n",
+                    (long long) result.t_ttfa_ms);
+        }
         if (result.t_reference_speech_project_ms != 0 ||
             result.t_reference_speech_quantize_ms != 0) {
             fprintf(stderr,
