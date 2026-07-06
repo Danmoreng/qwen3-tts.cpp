@@ -2,6 +2,7 @@
 #include "gguf_loader.h"
 
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -109,6 +110,107 @@ static std::string output_file_for_repeat(const std::string & path, int iteratio
     std::ostringstream out;
     out << path.substr(0, dot) << "." << (iteration + 1) << path.substr(dot);
     return out.str();
+}
+
+static int64_t monotonic_time_ms() {
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        clock::now().time_since_epoch()).count();
+}
+
+static std::string json_escape(const std::string & value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned) ch);
+                    out += buf;
+                } else {
+                    out.push_back((char) ch);
+                }
+                break;
+        }
+    }
+    return out;
+}
+
+static void print_bench_json(const char * engine,
+                             const char * scope,
+                             int iteration,
+                             bool warmup,
+                             int exit_code,
+                             const qwen3_tts::tts_result & result,
+                             int64_t wall_ms,
+                             int64_t ttfa_ms,
+                             const std::string & output_path) {
+    const double audio_sec = result.sample_rate > 0
+        ? (double) result.audio.size() / (double) result.sample_rate : 0.0;
+    const double wall_sec = (double) wall_ms / 1000.0;
+    const double rtf = audio_sec > 0.0 ? wall_sec / audio_sec : 0.0;
+    const double x_realtime = wall_sec > 0.0 ? audio_sec / wall_sec : 0.0;
+
+    fprintf(stdout,
+            "BENCH_JSON {"
+            "\"engine\":\"%s\","
+            "\"scope\":\"%s\","
+            "\"iteration\":%d,"
+            "\"warmup\":%s,"
+            "\"exit_code\":%d,"
+            "\"success\":%s,"
+            "\"wall_ms\":%lld,"
+            "\"audio_sec\":%.6f,"
+            "\"rtf\":%.6f,"
+            "\"x_realtime\":%.6f,"
+            "\"ttfa_ms\":%lld,"
+            "\"load_ms\":%lld,"
+            "\"tokenize_ms\":%lld,"
+            "\"encode_ms\":%lld,"
+            "\"generate_ms\":%lld,"
+            "\"decode_ms\":%lld,"
+            "\"internal_total_ms\":%lld,"
+            "\"decode_frames\":%d,"
+            "\"decode_samples\":%lld,"
+            "\"stream_chunks\":%d,"
+            "\"stream_input_frames\":%d,"
+            "\"stream_emitted_frames\":%d,"
+            "\"stream_context_frames\":%d,"
+            "\"output\":\"%s\""
+            "}\n",
+            engine,
+            scope,
+            iteration,
+            warmup ? "true" : "false",
+            exit_code,
+            result.success ? "true" : "false",
+            (long long) wall_ms,
+            audio_sec,
+            rtf,
+            x_realtime,
+            (long long) ttfa_ms,
+            (long long) result.t_load_ms,
+            (long long) result.t_tokenize_ms,
+            (long long) result.t_encode_ms,
+            (long long) result.t_generate_ms,
+            (long long) result.t_decode_ms,
+            (long long) result.t_total_ms,
+            result.decode_frames,
+            (long long) result.decode_samples,
+            result.streaming_decode_chunks,
+            result.streaming_decode_input_frames,
+            result.streaming_decode_emitted_frames,
+            result.streaming_decode_context_frames,
+            json_escape(output_path).c_str());
+    fflush(stdout);
 }
 
 static void print_result_timing(const qwen3_tts::tts_result & result) {
@@ -314,6 +416,8 @@ void print_usage(const char * program) {
     fprintf(stderr, "  --seed <n>             RNG seed for sampling (default: -1=random)\n");
     fprintf(stderr, "  --max-tokens <n>       Maximum audio tokens (default: 4096)\n");
     fprintf(stderr, "  --repeat <n>           Run synthesis n times in one process (default: 1)\n");
+    fprintf(stderr, "  --bench-server <n>     Resident benchmark loop after loading models/voice artifacts\n");
+    fprintf(stderr, "  --bench-warmup <n>     Warmup requests for --bench-server (default: 0)\n");
     fprintf(stderr, "  --stream               Use streaming synthesis API and collect chunks for WAV output\n");
     fprintf(stderr, "  --stream-chunk-sec <s> Streaming codec chunk duration (default: 1.0)\n");
     fprintf(stderr, "  --stream-left-context-sec <s> Streaming decoder left context (default: 2.0)\n");
@@ -363,6 +467,8 @@ int main(int argc, char ** argv) {
     std::string extract_speaker_embedding_file;
     std::string extract_icl_prompt_file;
     int repeat_count = 1;
+    int bench_server_count = 0;
+    int bench_warmup_count = 0;
     bool use_streaming = false;
     bool threads_set = false;
     
@@ -521,6 +627,18 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             repeat_count = std::stoi(args[i]);
+        } else if (arg == "--bench-server") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing bench-server value\n");
+                return 1;
+            }
+            bench_server_count = std::stoi(args[i]);
+        } else if (arg == "--bench-warmup") {
+            if (++i >= (int) args.size()) {
+                fprintf(stderr, "Error: missing bench-warmup value\n");
+                return 1;
+            }
+            bench_warmup_count = std::stoi(args[i]);
         } else if (arg == "--stream") {
             use_streaming = true;
         } else if (arg == "--stream-chunk-sec") {
@@ -611,6 +729,14 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: --repeat must be >= 1\n");
         return 1;
     }
+    if (bench_server_count < 0 || bench_warmup_count < 0) {
+        fprintf(stderr, "Error: --bench-server and --bench-warmup must be >= 0\n");
+        return 1;
+    }
+    if (bench_server_count > 0 && repeat_count != 1) {
+        fprintf(stderr, "Error: --bench-server and --repeat cannot be combined\n");
+        return 1;
+    }
 
     if (!reference_audio.empty() && !speaker_embedding_file.empty()) {
         fprintf(stderr, "Error: --reference and --speaker-embedding are mutually exclusive\n");
@@ -697,6 +823,12 @@ int main(int argc, char ** argv) {
         stream_params.generation = params;
         stream_params.collect_audio = true;
     }
+    if (bench_server_count > 0) {
+        params.print_progress = false;
+        params.print_timing = false;
+        stream_params.generation.print_progress = false;
+        stream_params.generation.print_timing = false;
+    }
     
     // Initialize TTS
     qwen3_tts::Qwen3TTS tts;
@@ -757,9 +889,11 @@ int main(int argc, char ** argv) {
     }
     
     // Set progress callback
-    tts.set_progress_callback([](int tokens, int max_tokens) {
-        fprintf(stderr, "\rGenerating: %d/%d tokens", tokens, max_tokens);
-    });
+    if (bench_server_count == 0) {
+        tts.set_progress_callback([](int tokens, int max_tokens) {
+            fprintf(stderr, "\rGenerating: %d/%d tokens", tokens, max_tokens);
+        });
+    }
 
     std::vector<float> speaker_embedding_from_file;
     qwen3_tts::icl_prompt icl_prompt_from_file;
@@ -787,28 +921,35 @@ int main(int argc, char ** argv) {
         }
     }
 
-    for (int repeat = 0; repeat < repeat_count; ++repeat) {
-        if (repeat_count > 1) {
-            fprintf(stderr, "\nRepeat %d/%d\n", repeat + 1, repeat_count);
+    auto run_synthesis_once = [&](int request_index,
+                                  bool quiet,
+                                  int64_t * ttfa_ms_out) -> qwen3_tts::tts_result {
+        if (ttfa_ms_out) {
+            *ttfa_ms_out = -1;
         }
 
-        qwen3_tts::tts_result result;
+        const int64_t request_start_ms = monotonic_time_ms();
         qwen3_tts::tts_audio_chunk_callback_t stream_callback =
-            [](const qwen3_tts::tts_audio_chunk & chunk) {
-                (void) chunk.samples;
-                fprintf(stderr,
-                        "\rStreaming chunk: samples %lld-%lld (%d) frames %d-%d text %d-%d @ %d Hz",
-                        (long long) chunk.start_sample,
-                        (long long) chunk.end_sample,
-                        chunk.n_samples,
-                        chunk.start_frame,
-                        chunk.end_frame,
-                        chunk.start_text_byte,
-                        chunk.end_text_byte,
-                        chunk.sample_rate);
+            [&, request_start_ms](const qwen3_tts::tts_audio_chunk & chunk) {
+                if (ttfa_ms_out && *ttfa_ms_out < 0) {
+                    *ttfa_ms_out = monotonic_time_ms() - request_start_ms;
+                }
+                if (!quiet) {
+                    fprintf(stderr,
+                            "\rStreaming chunk: samples %lld-%lld (%d) frames %d-%d text %d-%d @ %d Hz",
+                            (long long) chunk.start_sample,
+                            (long long) chunk.end_sample,
+                            chunk.n_samples,
+                            chunk.start_frame,
+                            chunk.end_frame,
+                            chunk.start_text_byte,
+                            chunk.end_text_byte,
+                            chunk.sample_rate);
+                }
                 return true;
             };
 
+        qwen3_tts::tts_result result;
         if (!icl_prompt_file.empty()) {
             qwen3_tts::tts_params icl_params = params;
             icl_params.reference_text = icl_prompt_from_file.reference_text;
@@ -816,67 +957,77 @@ int main(int argc, char ** argv) {
             icl_params.reference_codes = icl_prompt_from_file.reference_codes;
             qwen3_tts::tts_streaming_params icl_stream_params = stream_params;
             icl_stream_params.generation = icl_params;
-            fprintf(stderr, "Synthesizing with provided ICL prompt: \"%s\"\n", text.c_str());
-            fprintf(stderr, "ICL prompt: %s (speaker=%zu floats, ref=%d frames x %d codebooks)\n",
-                    icl_prompt_file.c_str(),
-                    icl_prompt_from_file.speaker_embedding.size(),
-                    icl_prompt_from_file.reference_codes.n_frames,
-                    icl_prompt_from_file.reference_codes.n_codebooks);
+            if (!quiet) {
+                fprintf(stderr, "Synthesizing with provided ICL prompt: \"%s\"\n", text.c_str());
+                fprintf(stderr, "ICL prompt: %s (speaker=%zu floats, ref=%d frames x %d codebooks)\n",
+                        icl_prompt_file.c_str(),
+                        icl_prompt_from_file.speaker_embedding.size(),
+                        icl_prompt_from_file.reference_codes.n_frames,
+                        icl_prompt_from_file.reference_codes.n_codebooks);
+            }
             result = use_streaming
                 ? tts.synthesize_with_speaker_embedding_streaming(text, icl_prompt_from_file.speaker_embedding,
                                                                   stream_callback, icl_stream_params)
                 : tts.synthesize_with_speaker_embedding(text, icl_prompt_from_file.speaker_embedding, icl_params);
         } else if (!speaker_embedding_file.empty()) {
-            fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
-            fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
-                    speaker_embedding_file.c_str(), speaker_embedding_from_file.size());
+            if (!quiet) {
+                fprintf(stderr, "Synthesizing with provided speaker embedding: \"%s\"\n", text.c_str());
+                fprintf(stderr, "Speaker embedding: %s (%zu floats)\n",
+                        speaker_embedding_file.c_str(), speaker_embedding_from_file.size());
+            }
             result = use_streaming
                 ? tts.synthesize_with_speaker_embedding_streaming(text, speaker_embedding_from_file,
                                                                   stream_callback, stream_params)
                 : tts.synthesize_with_speaker_embedding(text, speaker_embedding_from_file, params);
         } else if (reference_audio.empty()) {
-            fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
+            if (!quiet) {
+                fprintf(stderr, "Synthesizing: \"%s\"\n", text.c_str());
+            }
             result = use_streaming
                 ? tts.synthesize_streaming(text, stream_callback, stream_params)
                 : tts.synthesize(text, params);
         } else {
             std::vector<float> speaker_embedding;
             int64_t encode_ms = 0;
-            fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
-            fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
+            if (!quiet) {
+                fprintf(stderr, "Synthesizing with voice cloning: \"%s\"\n", text.c_str());
+                fprintf(stderr, "Reference audio: %s\n", reference_audio.c_str());
+            }
             if (auto_reference_codes) {
-                if (!dump_speaker_embedding_file.empty() && repeat == 0) {
+                if (!dump_speaker_embedding_file.empty() && request_index == 0) {
                     if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
-                        fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
-                        return 1;
+                        result.error_msg = "failed to extract speaker embedding: " + tts.get_error();
+                        return result;
                     }
                     if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                        fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                                dump_speaker_embedding_file.c_str());
-                        return 1;
+                        result.error_msg = "failed to save speaker embedding: " + dump_speaker_embedding_file;
+                        return result;
                     }
-                    fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
-                    fprintf(stderr, "Speaker embedding will be extracted again for ICL synthesis.\n");
+                    if (!quiet) {
+                        fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+                        fprintf(stderr, "Speaker embedding will be extracted again for ICL synthesis.\n");
+                    }
                 }
                 result = use_streaming
                     ? tts.synthesize_with_voice_streaming(text, reference_audio, stream_callback, stream_params)
                     : tts.synthesize_with_voice(text, reference_audio, params);
             } else {
                 if (!tts.extract_speaker_embedding(reference_audio, speaker_embedding, &encode_ms)) {
-                    fprintf(stderr, "\nError: failed to extract speaker embedding: %s\n", tts.get_error().c_str());
-                    return 1;
+                    result.error_msg = "failed to extract speaker embedding: " + tts.get_error();
+                    return result;
                 }
-                if (params.print_timing) {
+                if (!quiet && params.print_timing) {
                     fprintf(stderr, "  Speaker embedding extracted in %lld ms (%zu floats)\n",
                             (long long) encode_ms, speaker_embedding.size());
                 }
-                if (!dump_speaker_embedding_file.empty() && repeat == 0) {
+                if (!dump_speaker_embedding_file.empty() && request_index == 0) {
                     if (!qwen3_tts::save_speaker_embedding_file(dump_speaker_embedding_file, speaker_embedding)) {
-                        fprintf(stderr, "\nError: failed to save speaker embedding: %s\n",
-                                dump_speaker_embedding_file.c_str());
-                        return 1;
+                        result.error_msg = "failed to save speaker embedding: " + dump_speaker_embedding_file;
+                        return result;
                     }
-                    fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+                    if (!quiet) {
+                        fprintf(stderr, "Speaker embedding saved to: %s\n", dump_speaker_embedding_file.c_str());
+                    }
                 }
                 result = use_streaming
                     ? tts.synthesize_with_speaker_embedding_streaming(text, speaker_embedding,
@@ -888,6 +1039,49 @@ int main(int argc, char ** argv) {
                 }
             }
         }
+
+        return result;
+    };
+
+    if (bench_server_count > 0) {
+        const int total_requests = bench_warmup_count + bench_server_count;
+        for (int request = 0; request < total_requests; ++request) {
+            const bool warmup = request < bench_warmup_count;
+            int64_t ttfa_ms = -1;
+            const int64_t t0 = monotonic_time_ms();
+            qwen3_tts::tts_result result = run_synthesis_once(request, true, &ttfa_ms);
+            const int64_t wall_ms = monotonic_time_ms() - t0;
+            const int bench_iteration = warmup ? request + 1 : request - bench_warmup_count + 1;
+            if (!result.success) {
+                fprintf(stderr, "\nError: %s\n", result.error_msg.c_str());
+                print_bench_json("qwen3-tts.cpp", use_streaming ? "resident_streaming" : "resident",
+                                 bench_iteration, warmup, 1, result, wall_ms, ttfa_ms, "");
+                return 1;
+            }
+
+            std::string request_output_file;
+            if (!warmup) {
+                request_output_file = output_file_for_repeat(output_file,
+                                                             request - bench_warmup_count,
+                                                             bench_server_count);
+                if (!qwen3_tts::save_audio_file(request_output_file, result.audio, result.sample_rate)) {
+                    fprintf(stderr, "Error: failed to save output file: %s\n", request_output_file.c_str());
+                    return 1;
+                }
+            }
+            print_bench_json("qwen3-tts.cpp", use_streaming ? "resident_streaming" : "resident",
+                             bench_iteration, warmup, 0, result, wall_ms, ttfa_ms,
+                             request_output_file);
+        }
+        return 0;
+    }
+
+    for (int repeat = 0; repeat < repeat_count; ++repeat) {
+        if (repeat_count > 1) {
+            fprintf(stderr, "\nRepeat %d/%d\n", repeat + 1, repeat_count);
+        }
+
+        qwen3_tts::tts_result result = run_synthesis_once(repeat, false, nullptr);
 
         if (!result.success) {
             fprintf(stderr, "\nError: %s\n", result.error_msg.c_str());
