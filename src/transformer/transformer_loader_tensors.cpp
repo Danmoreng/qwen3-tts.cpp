@@ -17,15 +17,19 @@ bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct ggu
 
 #ifdef QWEN3_TTS_CUDA_ENABLED
     const bool create_packed_qkv = true;
+    const bool create_packed_frame_embd = true;
 #else
     const bool create_packed_qkv = false;
+    const bool create_packed_frame_embd = false;
 #endif
     const int32_t packed_code_pred_layers =
         create_packed_qkv && !impl->skip_ggml_code_pred_layers ? cfg.code_pred_layers : 0;
     const int32_t packed_talker_layers =
         create_packed_qkv && cfg.hidden_size > 1024 ? cfg.n_layers : 0;
+    const int32_t packed_frame_embd_tensors = create_packed_frame_embd ? 1 : 0;
     const size_t ctx_size =
-        (n_tensors + packed_code_pred_layers + packed_talker_layers) * ggml_tensor_overhead();
+        (n_tensors + packed_code_pred_layers + packed_talker_layers + packed_frame_embd_tensors) *
+        ggml_tensor_overhead();
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx_size,
         /*.mem_buffer =*/ nullptr,
@@ -43,12 +47,32 @@ bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct ggu
     impl->model.code_pred_embd.resize(cfg.n_codebooks - 1);
     impl->model.code_pred_head.resize(cfg.n_codebooks - 1);
 
+    if (create_packed_frame_embd) {
+        const int64_t first_embd_id = gguf_find_tensor(ctx, "code_pred.codec_embd.0.weight");
+        if (first_embd_id < 0) {
+            error_msg = "Missing code_pred.codec_embd.0.weight for packed frame embeddings";
+            return false;
+        }
+        impl->model.code_pred_embd_packed = ggml_new_tensor_3d(
+            impl->model.ctx,
+            gguf_get_tensor_type(ctx, first_embd_id),
+            cfg.hidden_size,
+            cfg.code_pred_vocab_size,
+            cfg.n_codebooks - 1);
+        if (!impl->model.code_pred_embd_packed) {
+            error_msg = "Failed to create packed frame embedding tensor";
+            return false;
+        }
+        ggml_set_name(impl->model.code_pred_embd_packed, "code_pred.codec_embd.packed");
+    }
+
     for (int64_t i = 0; i < n_tensors; ++i) {
         const char * name = gguf_get_tensor_name(ctx, i);
         enum ggml_type type = gguf_get_tensor_type(ctx, i);
 
         int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
         int n_dims = 0;
+        int code_pred_embd_idx = -1;
 
         if (strstr(name, "spk_enc.") || strstr(name, "tok_")) {
             continue;
@@ -200,6 +224,7 @@ bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct ggu
                 ne[0] = cfg.hidden_size;
                 ne[1] = cfg.code_pred_vocab_size;
                 n_dims = 2;
+                code_pred_embd_idx = cb_idx;
             } else {
                 continue;
             }
@@ -226,7 +251,22 @@ bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct ggu
             continue;
         }
 
-        struct ggml_tensor * tensor = ggml_new_tensor(impl->model.ctx, type, n_dims, ne);
+        struct ggml_tensor * tensor = nullptr;
+        if (code_pred_embd_idx >= 0 && impl->model.code_pred_embd_packed) {
+            if (type != impl->model.code_pred_embd_packed->type) {
+                error_msg = "Incompatible packed frame embedding type for codebook " +
+                    std::to_string(code_pred_embd_idx);
+                return false;
+            }
+            tensor = ggml_view_2d(
+                impl->model.ctx,
+                impl->model.code_pred_embd_packed,
+                ne[0], ne[1],
+                impl->model.code_pred_embd_packed->nb[1],
+                (size_t) code_pred_embd_idx * impl->model.code_pred_embd_packed->nb[2]);
+        } else {
+            tensor = ggml_new_tensor(impl->model.ctx, type, n_dims, ne);
+        }
         if (!tensor) {
             error_msg = "Failed to create tensor: " + std::string(name);
             return false;

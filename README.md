@@ -494,6 +494,7 @@ Runtime performance toggles:
 | `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Restore legacy per-frame physical Code Predictor KV zeroing for parity diagnostics; by default each live row is overwritten before reuse |
 | `QWEN3_TTS_CODE_PRED_PACKED_QKV=0` | Disable the CUDA packed Code Predictor step QKV projection and restore separate Q, K, and V matmuls |
 | `QWEN3_TTS_TALKER_PACKED_QKV=0` | Disable the CUDA packed Talker step QKV projection used by models wider than 1024 and restore separate Q, K, and V matmuls |
+| `QWEN3_TTS_TALKER_PACKED_FRAME_EMBD=0` | Disable the CUDA packed Talker frame-embedding gather/reduction and restore the 16 separate gathers and sequential adds |
 | `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0/1` | Force the legacy/summed decoder rest-codebook projection; automatic mode uses the summed CUDA path only for inputs up to 63 frames |
 
 ## Testing and Debugging

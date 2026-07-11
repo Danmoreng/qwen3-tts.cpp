@@ -53,6 +53,7 @@ Primary test hardware for the measurements below:
 | Reuse physical Code Predictor KV storage instead of synchronously zeroing it every frame | `99ebc44` | Removes ten small synchronous clears per frame; legacy clear remains behind `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Sampled, greedy, ICL, multi-request, and full regression gates passed |
 | Pack Code Predictor recurrent Q/K/V projections on CUDA | `93867a5` | Positive on both 0.6B and 1.7B | Generated codes and WAVs were byte-identical in final A/B cases |
 | Pack Talker recurrent Q/K/V projections on CUDA for models wider than 1024 | `93867a5` | Retained for 1.7B; disabled for 0.6B after a small regression | Generated codes and WAVs were byte-identical |
+| Pack and reduce recurrent Talker frame embeddings on CUDA | Working tree on `babc054` | Positive generation medians on both 0.6B and 1.7B with no added weight allocation | Generated codes, decoder codes, and WAVs were byte-identical in all five A/B cases |
 | Correct resident framework benchmark path and publish current README numbers | `93867a5` and preceding timing commits | Current README tables use warm generation metrics and fixed sampling parameters | All benchmark WAV sanity checks passed |
 | Use qwentts `examples/freeman.wav` plus its sidecar transcript as the default qwentts matrix reference | `a9534cd` | Prevents accidental comparison with the unrelated local README reference | Default preflight and corrected 8-run matrix passed |
 
@@ -79,7 +80,39 @@ Runtime fallbacks:
 
 - `QWEN3_TTS_CODE_PRED_PACKED_QKV=0`
 - `QWEN3_TTS_TALKER_PACKED_QKV=0`
+- `QWEN3_TTS_TALKER_PACKED_FRAME_EMBD=0`
 - `QWEN3_TTS_CODE_PRED_ZERO_KV=1`
+
+### Packed Talker Frame Embedding Final A/B Result
+
+The 15 Code Predictor embedding tables are now views into one contiguous 3D
+tensor. The recurrent Talker step performs one 3D `get_rows`, reorders the
+result, and reduces the 15 embeddings before adding codebook 0 and the overlay.
+This reduces the frame-embedding block from approximately 32 compute nodes to
+six. The packed tensor replaces the original allocations rather than
+duplicating them, so transformer RSS and physical allocation were unchanged.
+
+The final CUDA comparison used eight interleaved process pairs per model. Each
+process used two warm-ups and three resident measured requests with greedy
+decoding, seed 42, and at most 64 frames. The raw generation median pools the
+24 measured requests; paired gains use the median request within each process.
+
+| Model | Legacy generation median | Packed-reduce median | Raw gain | Paired median gain | Positive pairs | Raw wall gain | Paired wall gain |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.6B Q8_0 | 333.5 ms | 326.5 ms | 2.10% | 4.70% | 6/8 | -0.43% | 2.57% |
+| 1.7B Q8_0 | 555.0 ms | 550.5 ms | 0.81% | 4.26% | 5/8 | 2.43% | 2.24% |
+
+The five correctness cases were `0.6B` sampled/greedy, `1.7B`
+sampled/greedy/ICL. Generated-code JSON, decoder-code JSON, and WAV SHA-256
+hashes matched the saved `babc054` binary and the runtime legacy path in every
+case. The CUDA regression suite passed with 11 passes and no failures, and a
+separate non-CUDA Release build completed successfully. A CUDA-graphs-disabled
+legacy/candidate diagnostic was also byte-identical. Raw artifacts are under
+the ignored `benchmark_output/talker_frame_gather_sum` directory.
+
+The first packed-table prototype retained the 15 sequential adds. Its four-pair
+median was `+1.53%` on 0.6B and `-0.63%` on 1.7B, so it was superseded by the
+packed reduction rather than retained unchanged.
 
 ## Partial Optimizations
 
@@ -156,23 +189,6 @@ hardware, or the surrounding graph architecture changes materially.
 | Packed Talker QKV on 0.6B | Rejected | Small paired regression; packed Talker QKV remains limited to models with `hidden_size > 1024` |
 
 ## Open Work Queue
-
-### P1: Fuse Talker Frame Embedding Gather-and-Sum
-
-Status: Open
-
-The recurrent Talker input currently uses 16 `get_rows` operations, 15 adds,
-and an overlay add per audio frame in
-`src/transformer/transformer_graph_talker.cpp`.
-
-Candidate implementation:
-
-- Add a small CUDA gather-sum operator that consumes the 16 token IDs, their
-  embedding tables, and the overlay.
-- Keep the existing GGML graph path as a non-CUDA fallback and A/B switch.
-
-Expected impact is modest, likely below 1-1.5% of total generation, but the work
-is independent of sampling and applies to sampled and greedy generation.
 
 ### P1: Decoder Flash Attention
 
@@ -393,8 +409,7 @@ Copy this section for each future experiment:
 
 ## Recommended Execution Order
 
-1. Evaluate Talker frame gather-sum fusion.
-2. Evaluate decoder Flash Attention and Snake fusion independently.
-3. Design a true device-chained greedy Code Predictor supergraph.
-4. Design stateful streaming decoder overlap.
-5. Treat continuous batching and mixed quantization as separate milestones.
+1. Evaluate decoder Flash Attention and Snake fusion independently.
+2. Design a true device-chained greedy Code Predictor supergraph.
+3. Design stateful streaming decoder overlap.
+4. Treat continuous batching and mixed quantization as separate milestones.

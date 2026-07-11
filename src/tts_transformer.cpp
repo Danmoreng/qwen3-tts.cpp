@@ -45,6 +45,7 @@ void free_transformer_model(tts_transformer_model & model) {
     model.code_pred_small_to_mtp_weight = nullptr;
     model.code_pred_small_to_mtp_bias = nullptr;
     model.code_pred_output_norm = nullptr;
+    model.code_pred_embd_packed = nullptr;
     model.code_pred_embd.clear();
     model.code_pred_head.clear();
 }
