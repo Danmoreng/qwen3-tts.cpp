@@ -24,6 +24,19 @@ bool is_cuda_backend(ggml_backend_t backend) {
     return name && std::strstr(name, "CUDA") != nullptr;
 }
 
+struct ggml_tensor * ffn_down_matmul(struct ggml_context * ctx,
+                                     struct ggml_tensor * weight,
+                                     struct ggml_tensor * input) {
+    // GGML's F16 down-projection path can overflow on these activations. The
+    // original float32 reference and the established F16 parity path require
+    // an explicit weight cast; quantized and F32 weights keep their native
+    // kernels.
+    if (weight->type == GGML_TYPE_F16) {
+        weight = ggml_cast(ctx, weight, GGML_TYPE_F32);
+    }
+    return ggml_mul_mat(ctx, weight, input);
+}
+
 } // namespace
 
 struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransformer & self, int32_t n_prev_codes) {
@@ -123,7 +136,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_graph(TTSTransfo
 
         cur = ggml_swiglu_split(ctx0, gate, up);
 
-        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        cur = ffn_down_matmul(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
         inpL = ggml_clamp(ctx0, inpL, -65504.0f, 65504.0f);
@@ -302,7 +315,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
 
         cur = ggml_swiglu_split(ctx0, gate, up);
 
-        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        cur = ffn_down_matmul(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }
@@ -530,7 +543,7 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
 
         cur = ggml_swiglu_split(ctx0, gate, up);
 
-        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        cur = ffn_down_matmul(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }

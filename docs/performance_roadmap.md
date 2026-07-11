@@ -53,7 +53,6 @@ Primary test hardware for the measurements below:
 | Reuse physical Code Predictor KV storage instead of synchronously zeroing it every frame | `99ebc44` | Removes ten small synchronous clears per frame; legacy clear remains behind `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Sampled, greedy, ICL, multi-request, and full regression gates passed |
 | Pack Code Predictor recurrent Q/K/V projections on CUDA | `93867a5` | Positive on both 0.6B and 1.7B | Generated codes and WAVs were byte-identical in final A/B cases |
 | Pack Talker recurrent Q/K/V projections on CUDA for models wider than 1024 | `93867a5` | Retained for 1.7B; disabled for 0.6B after a small regression | Generated codes and WAVs were byte-identical |
-| Pack and reduce recurrent Talker frame embeddings on CUDA | `fb9a9e0` | Positive generation medians on both 0.6B and 1.7B with no added weight allocation | Generated codes, decoder codes, and WAVs were byte-identical in all five A/B cases |
 | Correct resident framework benchmark path and publish current README numbers | `93867a5` and preceding timing commits | Current README tables use warm generation metrics and fixed sampling parameters | All benchmark WAV sanity checks passed |
 | Use qwentts `examples/freeman.wav` plus its sidecar transcript as the default qwentts matrix reference | `a9534cd` | Prevents accidental comparison with the unrelated local README reference | Default preflight and corrected 8-run matrix passed |
 
@@ -80,17 +79,18 @@ Runtime fallbacks:
 
 - `QWEN3_TTS_CODE_PRED_PACKED_QKV=0`
 - `QWEN3_TTS_TALKER_PACKED_QKV=0`
-- `QWEN3_TTS_TALKER_PACKED_FRAME_EMBD=0`
 - `QWEN3_TTS_CODE_PRED_ZERO_KV=1`
 
-### Packed Talker Frame Embedding Final A/B Result
+## Rejected Optimizations
 
-The 15 Code Predictor embedding tables are now views into one contiguous 3D
-tensor. The recurrent Talker step performs one 3D `get_rows`, reorders the
-result, and reduces the 15 embeddings before adding codebook 0 and the overlay.
-This reduces the frame-embedding block from approximately 32 compute nodes to
-six. The packed tensor replaces the original allocations rather than
-duplicating them, so transformer RSS and physical allocation were unchanged.
+### Packed Talker Frame Embedding Reduction
+
+Status: Rejected and removed.
+
+Commit `fb9a9e0` made the 15 Code Predictor embedding tables views into one
+contiguous tensor and replaced the sequential recurrent Talker additions with
+one reduction. The original Q8 A/B checks were byte-identical, but they only
+compared the candidate to the immediately preceding C++ trajectory.
 
 The final CUDA comparison used eight interleaved process pairs per model. Each
 process used two warm-ups and three resident measured requests with greedy
@@ -113,6 +113,49 @@ the ignored `benchmark_output/talker_frame_gather_sum` directory.
 The first packed-table prototype retained the 15 sequential adds. Its four-pair
 median was `+1.53%` on 0.6B and `-0.63%` on 1.7B, so it was superseded by the
 packed reduction rather than retained unchanged.
+
+A later independent 1.7B F32 ICL check against the official Python trajectory
+found the missed numerical regression. With the same Python speaker embedding,
+reference codes, text, and top-k-1 decode:
+
+| C++ revision/path | Matching codes | Exact prefix | First difference |
+|---|---:|---:|---|
+| Historical `f06a0ba` | `1008/1008` (100%) | 63 frames | none |
+| `e9c4a21`, `99ebc44`, `93867a5` | `1008/1008` (100%) | 63 frames | none |
+| `fb9a9e0` packed reduction | `521/1008` (51.69%) | 24 frames | frame 24, codebook 13 |
+| `fb9a9e0` with packed reduction disabled | `1008/1008` (100%) | 63 frames | none |
+| Current restored sequential sum | `1008/1008` (100%) | 63 frames | none |
+
+The packed reduction changed floating-point addition order. Its modest Q8
+generation gain (raw `0.81-2.10%`, paired `4.26-4.70%`) does not justify an
+autoregressive trajectory regression, so the packed tensor, graph path, and
+runtime switch were removed rather than retained as an opt-in alternative.
+
+The same controlled prompt was also checked outside the original 64-token
+window. At 32 max tokens both historical and current behavior match Python for
+all 31 common frames. At 96 max tokens both the exact historical `f06a0ba`
+binary and the restored current binary produce the same `81.84%` match, with
+73 exact prefix frames and the first difference at frame 73/codebook 6. The
+long-run divergence therefore predates the performance commits; the historical
+100% claim was correct for its documented 63-frame comparison, but must not be
+generalized to arbitrary generation length.
+
+A final five-request resident smoke after the removal measured `494 ms`
+generation median for the restored path versus `503 ms` for the saved packed
+binary on 1.7B Q8_0 (two warm-ups, 64-frame greedy request). This short probe
+is informational, but it shows no measurable performance penalty that would
+argue for keeping the incorrect reduction.
+
+The broader restored-path 1.7B speaker-only matrix covered Q8_0, BF16, and F32
+at maximum lengths 32, 64, and 96. Automatic and forced-legacy C++ outputs were
+byte-identical in all nine cases, all first frames matched Python exactly, and
+eight cases passed the token/audio/duration gates. The F32 96-frame case was
+reported separately because Python stopped at 58 frames while C++ continued to
+96 (`duration_ratio=1.66`); its common-prefix token match was `31.57%`. This is
+an autoregressive stopping-trajectory difference, not a difference between the
+optimized and legacy C++ paths. Raw reports are under the ignored
+`benchmark_output/python_device_chain_validation/1p7_precision_matrix_restored`
+directory.
 
 ## Partial Optimizations
 
@@ -287,6 +330,37 @@ produced byte-identical generated-code JSON, decoder-code JSON, and WAV SHA-256
 hashes. The sampled fallback and the CUDA-graphs-off diagnostic also matched
 the legacy path byte-for-byte. Raw artifacts are under the ignored
 `benchmark_output/code_pred_device_chain` directory.
+
+Official-Python parity is now part of the reusable validation workflow via
+`scripts/validate_device_chain_python.ps1`. It loads the official 0.6B model in
+float32, passes its speaker embedding to both C++ modes, and checks automatic
+dispatch, byte identity between automatic and legacy generated codes/decoder
+codes/WAVs, early and aggregate Python token agreement, sample rate, RMS, and
+duration. Optional resident warm-up/run counts add generation medians to the
+same JSON report; those single-process numbers remain informational and do not
+replace interleaved process-pair acceptance benchmarks.
+
+The first precision matrix covered Q8_0, F16, and F32 GGUF talkers at 32, 64,
+and 96 requested frames. All nine automatic-versus-legacy comparisons were
+byte-identical. Against official float32 Python, first-frame codebook agreement
+was `68.75%` for Q8_0, `100%` for F16, and `87.5%` for F32. Aggregate agreement
+over the tested lengths ranged from `7.60-10.69%`, `18.07-29.03%`, and
+`9.71-11.90%` respectively; autoregressive divergence after near-tied logits is
+therefore still expected even for F32. Every audio validity and duration gate
+passed (`1.014-1.297` C++/Python duration ratio).
+
+This matrix also caught a latent F16 correctness failure: removing the explicit
+F32 cast of F16 FFN-down weights caused mostly-zero predictor codes and made
+device argmax propagate an invalid token into a CUDA illegal-memory access.
+The cast is now conditional on F16 weights, so Q8_0 and F32 keep their existing
+native kernels while F16 restores finite logits, Python parity, and safe device
+chaining.
+
+The workflow's resident benchmark mode was smoke-tested on Q8_0 at 64 frames
+with two warm-ups and five measurements per mode. Automatic generation median
+was `671 ms` versus `681 ms` legacy (`+1.47%`); wall median was noisy and slower
+(`748 ms` versus `733 ms`), so the result remains informational and the earlier
+interleaved process-pair acceptance result remains authoritative.
 
 ### P2: Asynchronous Code Predictor I/O
 

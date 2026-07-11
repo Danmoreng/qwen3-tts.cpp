@@ -19,18 +19,19 @@ bool packed_talker_qkv_enabled() {
     return enabled;
 }
 
-bool packed_talker_frame_embd_enabled() {
-    static const bool enabled = []() {
-        const char * value = std::getenv("QWEN3_TTS_TALKER_PACKED_FRAME_EMBD");
-        return !(value && value[0] == '0');
-    }();
-    return enabled;
-}
-
 bool is_cuda_backend(ggml_backend_t backend) {
     ggml_backend_dev_t device = backend ? ggml_backend_get_device(backend) : nullptr;
     const char * name = device ? ggml_backend_dev_name(device) : nullptr;
     return name && std::strstr(name, "CUDA") != nullptr;
+}
+
+struct ggml_tensor * ffn_down_matmul(struct ggml_context * ctx,
+                                     struct ggml_tensor * weight,
+                                     struct ggml_tensor * input) {
+    if (weight->type == GGML_TYPE_F16) {
+        weight = ggml_cast(ctx, weight, GGML_TYPE_F32);
+    }
+    return ggml_mul_mat(ctx, weight, input);
 }
 
 } // namespace
@@ -166,7 +167,7 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
 
         cur = ggml_swiglu_split(ctx0, gate, up);
 
-        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        cur = ffn_down_matmul(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }
@@ -232,28 +233,11 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
         cur = ggml_get_rows(ctx0, impl->model.codec_embd, code_idx);
         cur = ggml_reshape_2d(ctx0, cur, hidden_size, 1);
 
-        if (packed_talker_frame_embd_enabled() &&
-            is_cuda_backend(impl->state.backend) && impl->model.code_pred_embd_packed) {
-            struct ggml_tensor * rest_code_indices = ggml_view_2d(
-                ctx0, inp_frame_codes, 1, cfg.n_codebooks - 1,
-                sizeof(int32_t), sizeof(int32_t));
-            struct ggml_tensor * packed_rows = ggml_get_rows(
-                ctx0, impl->model.code_pred_embd_packed, rest_code_indices);
-            ggml_set_name(packed_rows, "talker_packed_frame_rows");
-
-            struct ggml_tensor * rows_by_hidden = ggml_permute(ctx0, packed_rows, 1, 2, 0, 3);
-            rows_by_hidden = ggml_cont(ctx0, rows_by_hidden);
-            struct ggml_tensor * rest_embd_sum = ggml_sum_rows(ctx0, rows_by_hidden);
-            rest_embd_sum = ggml_reshape_2d(ctx0, rest_embd_sum, hidden_size, 1);
-            ggml_set_name(rest_embd_sum, "talker_packed_frame_sum");
-            cur = ggml_add(ctx0, cur, rest_embd_sum);
-        } else {
-            for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
-                code_idx = ggml_view_1d(ctx0, inp_frame_codes, 1, (size_t) cb * sizeof(int32_t));
-                struct ggml_tensor * code_embd = ggml_get_rows(ctx0, impl->model.code_pred_embd[cb - 1], code_idx);
-                code_embd = ggml_reshape_2d(ctx0, code_embd, hidden_size, 1);
-                cur = ggml_add(ctx0, cur, code_embd);
-            }
+        for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
+            code_idx = ggml_view_1d(ctx0, inp_frame_codes, 1, (size_t) cb * sizeof(int32_t));
+            struct ggml_tensor * code_embd = ggml_get_rows(ctx0, impl->model.code_pred_embd[cb - 1], code_idx);
+            code_embd = ggml_reshape_2d(ctx0, code_embd, hidden_size, 1);
+            cur = ggml_add(ctx0, cur, code_embd);
         }
         cur = ggml_add(ctx0, cur, inp_overlay);
     } else {
@@ -399,7 +383,7 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
 
         cur = ggml_swiglu_split(ctx0, gate, up);
 
-        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
+        cur = ffn_down_matmul(ctx0, layer.ffn_down, cur);
 
         inpL = ggml_add(ctx0, cur, inpFF);
     }

@@ -103,8 +103,6 @@ struct tts_transformer_model {
     struct ggml_tensor * text_proj_fc2_bias = nullptr;
 
     struct ggml_tensor * codec_embd = nullptr;
-    struct ggml_tensor * code_pred_embd_packed = nullptr;
-
     std::vector<transformer_layer> layers;
 
     struct ggml_tensor * output_norm = nullptr;

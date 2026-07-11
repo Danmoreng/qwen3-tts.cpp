@@ -495,7 +495,6 @@ Runtime performance toggles:
 | `QWEN3_TTS_CODE_PRED_PACKED_QKV=0` | Disable the CUDA packed Code Predictor step QKV projection and restore separate Q, K, and V matmuls |
 | `QWEN3_TTS_CODE_PRED_DEVICE_CHAIN=0` | Force the legacy host-token bridge for diagnostics; by default 0.6B CUDA greedy requests with at least 64 max frames select the device bridge automatically |
 | `QWEN3_TTS_TALKER_PACKED_QKV=0` | Disable the CUDA packed Talker step QKV projection used by models wider than 1024 and restore separate Q, K, and V matmuls |
-| `QWEN3_TTS_TALKER_PACKED_FRAME_EMBD=0` | Disable the CUDA packed Talker frame-embedding gather/reduction and restore the 16 separate gathers and sequential adds |
 | `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0/1` | Force the legacy/summed decoder rest-codebook projection; automatic mode uses the summed CUDA path only for inputs up to 63 frames |
 
 ## Testing and Debugging
@@ -518,6 +517,7 @@ Useful debugging tools:
 |------|---------|
 | `scripts/prepare_test_assets.ps1` | Generate or refresh deterministic reference assets |
 | `scripts/compare_e2e.py` | End-to-end Python vs C++ comparison |
+| `scripts/validate_device_chain_python.ps1` | Gate automatic vs legacy C++ byte identity and compare 0.6B/1.7B Q8, F16/BF16, and F32 against official float32 Python |
 | `scripts/dump_python_trace.py` | Dump Python logits/tokens for frame-level debugging |
 | `scripts/debug_trace_report.py` | Compare trace directories |
 | `scripts/wav_stats.ps1` | Validate WAV duration, peak, RMS, and silence checks |
@@ -525,6 +525,34 @@ Useful debugging tools:
 | `QWEN3_TTS_DEBUG_DUMP_DIR` | Enable C++ frame/code trace dumps |
 | `QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES` | Limit dumped generation frames |
 | `QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS` | Limit dumped code-predictor steps |
+
+The device-chain parity workflow reuses one official Python model load, feeds
+the resulting Python speaker embedding to C++, and reports token, audio,
+dispatch, and optional resident performance metrics:
+
+```powershell
+.\scripts\validate_device_chain_python.ps1 -IncludePrecisionModels `
+  -Lengths 32,64,96 `
+  -BenchmarkWarmups 2 -BenchmarkRuns 5
+```
+
+Precision models are local test assets and are not committed. Generate missing
+0.6B F16/F32 GGUF files with `scripts/convert_tts_to_gguf.py --type f16` or
+`--type f32` before using `-IncludePrecisionModels`.
+
+The historical 1.7B exact-parity gate uses the saved Python ICL prompt
+artifacts, F32 GGUF files, and deterministic top-k-1 decoding:
+
+```powershell
+.\scripts\validate_device_chain_python.ps1 -ModelSize 1.7B `
+  -CppModels qwen-talker-1.7b-base-F32.gguf `
+  -CodecModel "$env:USERPROFILE\.qwen-tts-studio\models\qwen-tokenizer-12hz-F32.gguf" `
+  -PromptMode icl -DecodeMode topk1 -RequireExactPythonCodes `
+  -PythonSpeakerEmbedding benchmark_output\python_parity\python_speaker_embedding.json `
+  -PythonReferenceCodes benchmark_output\python_parity\python_reference_codes.json `
+  -ReferenceTextFile benchmark_output\parity_serveurperso_seed\ref.txt `
+  -Text "This is a short parity check for ICL voice cloning." -Lengths 64
+```
 
 Example trace run:
 
