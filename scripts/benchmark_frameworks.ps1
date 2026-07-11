@@ -844,7 +844,7 @@ for ($run = 1; $run -le $Runs; $run++) {
         if ($runFull) {
             $outWav = Join-Path $OutDir ("qwen_cpp_{0}_run{1}.wav" -f $Variant, $run)
             $logPath = Join-Path $logDir ("qwen_cpp_{0}_run{1}.log" -f $Variant, $run)
-            $args = @("-m", $models, "--model-name", $QwenCppModelName, "-t", $Text, "-o", $outWav, "--max-tokens", "$MaxTokens", "--temperature", "$temperatureArg", "--top-k", "$topKArg", "--top-p", "$topPArg", "--repetition-penalty", "$RepetitionPenalty", "-l", $Language, "-j", "$Threads")
+            $args = @("-m", $models, "--model-name", $QwenCppModelName, "-t", $Text, "-o", $outWav, "--max-tokens", "$MaxTokens", "--seed", "$Seed", "--temperature", "$temperatureArg", "--top-k", "$topKArg", "--top-p", "$topPArg", "--repetition-penalty", "$RepetitionPenalty", "-l", $Language, "-j", "$Threads")
             if ($QwenCppSessionRepeats -gt 1) {
                 $args += @("--repeat", "$QwenCppSessionRepeats")
             }
@@ -871,7 +871,7 @@ for ($run = 1; $run -le $Runs; $run++) {
             if ($encodeCmd.ExitCode -eq 0 -and (Test-Path -LiteralPath $speakerEmbedding)) {
                 $outWav = Join-Path $OutDir ("qwen_cpp_{0}_synth_preencoded_run{1}.wav" -f $Variant, $run)
                 $logPath = Join-Path $logDir ("qwen_cpp_{0}_synth_preencoded_run{1}.log" -f $Variant, $run)
-                $args = @("-m", $models, "--model-name", $QwenCppModelName, "-t", $Text, "-o", $outWav, "--speaker-embedding", $speakerEmbedding, "--max-tokens", "$MaxTokens", "--temperature", "$temperatureArg", "--top-k", "$topKArg", "--top-p", "$topPArg", "--repetition-penalty", "$RepetitionPenalty", "-l", $Language, "-j", "$Threads")
+                $args = @("-m", $models, "--model-name", $QwenCppModelName, "-t", $Text, "-o", $outWav, "--speaker-embedding", $speakerEmbedding, "--max-tokens", "$MaxTokens", "--seed", "$Seed", "--temperature", "$temperatureArg", "--top-k", "$topKArg", "--top-p", "$topPArg", "--repetition-penalty", "$RepetitionPenalty", "-l", $Language, "-j", "$Threads")
                 if ($QwenCppSessionRepeats -gt 1) {
                     $args += @("--repeat", "$QwenCppSessionRepeats")
                 }
