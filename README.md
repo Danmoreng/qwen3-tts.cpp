@@ -494,6 +494,7 @@ Runtime performance toggles:
 | `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Restore legacy per-frame physical Code Predictor KV zeroing for parity diagnostics; by default each live row is overwritten before reuse |
 | `QWEN3_TTS_CODE_PRED_PACKED_QKV=0` | Disable the CUDA packed Code Predictor step QKV projection and restore separate Q, K, and V matmuls |
 | `QWEN3_TTS_TALKER_PACKED_QKV=0` | Disable the CUDA packed Talker step QKV projection used by models wider than 1024 and restore separate Q, K, and V matmuls |
+| `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0/1` | Force the legacy/summed decoder rest-codebook projection; automatic mode uses the summed CUDA path only for inputs up to 63 frames |
 
 ## Testing and Debugging
 
@@ -518,6 +519,7 @@ Useful debugging tools:
 | `scripts/dump_python_trace.py` | Dump Python logits/tokens for frame-level debugging |
 | `scripts/debug_trace_report.py` | Compare trace directories |
 | `scripts/wav_stats.ps1` | Validate WAV duration, peak, RMS, and silence checks |
+| `test_decoder --bench-warmup 2 --bench-runs 10` | Run resident, fixed-code decoder measurements with machine-readable timing output |
 | `QWEN3_TTS_DEBUG_DUMP_DIR` | Enable C++ frame/code trace dumps |
 | `QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES` | Limit dumped generation frames |
 | `QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS` | Limit dumped code-predictor steps |

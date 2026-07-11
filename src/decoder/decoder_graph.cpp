@@ -2,6 +2,8 @@
 #include "decoder/decoder_state_internal.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace qwen3_tts {
 
@@ -12,6 +14,57 @@ struct ggml_tensor * as_f16_conv_weight(struct ggml_context * ctx, struct ggml_t
         return w;
     }
     return ggml_cont(ctx, ggml_cast(ctx, w, GGML_TYPE_F16));
+}
+
+enum class rest_codebook_projection_mode {
+    automatic,
+    legacy,
+    summed,
+};
+
+rest_codebook_projection_mode get_rest_codebook_projection_mode() {
+    static const rest_codebook_projection_mode mode = []() {
+#if defined(_MSC_VER)
+        char * value = nullptr;
+        size_t value_len = 0;
+        if (_dupenv_s(&value, &value_len, "QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS") != 0 || !value) {
+            return rest_codebook_projection_mode::automatic;
+        }
+        const char first = value[0];
+        std::free(value);
+#else
+        const char * value = std::getenv("QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS");
+        const char first = value ? value[0] : '\0';
+#endif
+        if (first == '0') {
+            return rest_codebook_projection_mode::legacy;
+        }
+        if (first == '1') {
+            return rest_codebook_projection_mode::summed;
+        }
+        return rest_codebook_projection_mode::automatic;
+    }();
+    return mode;
+}
+
+bool is_cuda_backend(ggml_backend_t backend) {
+    ggml_backend_dev_t device = backend ? ggml_backend_get_device(backend) : nullptr;
+    const char * name = device ? ggml_backend_dev_name(device) : nullptr;
+    return name && std::strstr(name, "CUDA") != nullptr;
+}
+
+bool summed_rest_codebook_projection_enabled(ggml_backend_t backend, int32_t n_frames) {
+    const rest_codebook_projection_mode mode = get_rest_codebook_projection_mode();
+    if (mode == rest_codebook_projection_mode::legacy) {
+        return false;
+    }
+    if (mode == rest_codebook_projection_mode::summed) {
+        return true;
+    }
+
+    // CUDA A/B testing retained the summed path only for short inputs. Longer
+    // inputs and unmeasured backends keep the established graph by default.
+    return is_cuda_backend(backend) && n_frames < 64;
 }
 
 } // namespace
@@ -76,20 +129,32 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
     struct ggml_tensor * rest_proj_weight_2d = ggml_reshape_2d(ctx0, model.vq_rest_output_proj,
                                                                cfg.codebook_dim, cfg.hidden_dim);
 
-    struct ggml_tensor * rest_proj_2d = nullptr;
+    struct ggml_tensor * rest_emb_2d[15];
     for (int cb = 0; cb < 15; ++cb) {
-        struct ggml_tensor * cb_emb_2d = ggml_reshape_2d(ctx0, rest_emb[cb], cfg.codebook_dim, n_frames);
+        rest_emb_2d[cb] = ggml_reshape_2d(ctx0, rest_emb[cb], cfg.codebook_dim, n_frames);
 
         if (cb == 0) {
-            ggml_set_name(cb_emb_2d, "rest_cb0_emb_2d");
+            ggml_set_name(rest_emb_2d[cb], "rest_cb0_emb_2d");
         }
+    }
 
-        struct ggml_tensor * cb_proj_2d = ggml_mul_mat(ctx0, rest_proj_weight_2d, cb_emb_2d);
+    struct ggml_tensor * rest_proj_2d = nullptr;
+    if (summed_rest_codebook_projection_enabled(state.backend, n_frames)) {
+        struct ggml_tensor * rest_emb_sum_2d = rest_emb_2d[0];
+        for (int cb = 1; cb < 15; ++cb) {
+            rest_emb_sum_2d = ggml_add(ctx0, rest_emb_sum_2d, rest_emb_2d[cb]);
+        }
+        ggml_set_name(rest_emb_sum_2d, "rest_emb_sum_2d");
+        rest_proj_2d = ggml_mul_mat(ctx0, rest_proj_weight_2d, rest_emb_sum_2d);
+    } else {
+        for (int cb = 0; cb < 15; ++cb) {
+            struct ggml_tensor * cb_proj_2d = ggml_mul_mat(ctx0, rest_proj_weight_2d, rest_emb_2d[cb]);
 
-        if (rest_proj_2d == nullptr) {
-            rest_proj_2d = cb_proj_2d;
-        } else {
-            rest_proj_2d = ggml_add(ctx0, rest_proj_2d, cb_proj_2d);
+            if (rest_proj_2d == nullptr) {
+                rest_proj_2d = cb_proj_2d;
+            } else {
+                rest_proj_2d = ggml_add(ctx0, rest_proj_2d, cb_proj_2d);
+            }
         }
     }
     ggml_set_name(rest_proj_2d, "rest_proj_2d");

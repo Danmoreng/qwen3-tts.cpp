@@ -81,6 +81,66 @@ Runtime fallbacks:
 - `QWEN3_TTS_TALKER_PACKED_QKV=0`
 - `QWEN3_TTS_CODE_PRED_ZERO_KV=1`
 
+## Partial Optimizations
+
+### Sum Rest-Codebook Embeddings Before the Shared Decoder Projection
+
+Status: Partial
+
+The decoder now sums the 15 F32 rest-codebook embeddings before their shared,
+bias-free projection, removing 14 matrix multiplications. CUDA measurements
+showed a small win for short decodes but regressions at both 64 and 252 frames,
+so the automatic path is deliberately conservative:
+
+- CUDA inputs with at most 63 frames use the summed projection.
+- Longer CUDA inputs and all unmeasured backends keep the legacy graph.
+- `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0` forces the legacy graph.
+- `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=1` forces the summed graph for
+  diagnostics and future backend measurements.
+
+No model weights or persistent runtime allocations are added. The experiment
+used base commit `ed4ecf3`, GGML `0.15.3` at `eced84c8`, and
+`qwen-tokenizer-12hz-Q8_0.gguf` with SHA-256
+`1883BEEED99348FC35E23DD225E9082F93F6F8C109330A33D935BAA8ACDBFD94`.
+Raw artifacts are under the ignored
+`benchmark_output/decoder_rest_embedding_sum` directory.
+
+The final fixed-code A/B used eight alternating process pairs per length. Each
+process ran the two normal full-input correctness decodes, two additional
+benchmark warm-ups, and ten resident measurements with the Q8_0 codec on the
+primary RTX 5080 Laptop GPU. The raw medians below pool the 80 measured decodes;
+the paired median uses the eight process-mean pairs.
+
+| Frames | Legacy raw median | Summed raw median | Raw median gain | Paired median gain | Positive pairs |
+|---:|---:|---:|---:|---:|---:|
+| 32 | 20.170 ms | 20.029 ms | 0.70% | 0.98% | 5/8 |
+| 63 | 105.070 ms | 104.254 ms | 0.78% | 2.81% | 7/8 |
+| 64 | 40.764 ms | 44.897 ms | -10.14% | -0.92% | 3/8 |
+| 252 | 202.431 ms | 208.245 ms | -2.87% | -3.03% | 2/8 |
+
+Correctness validation covered fixed inputs of 1, 63, 64, 73, and 252 frames.
+Every output had the expected sample count and finite values. For the active
+63-frame path, candidate-versus-legacy maximum absolute error was `0.00191306`,
+mean absolute error was `0.000086634`, RMSE was `0.000147576`, and cosine
+similarity was `0.999716`. The default 64- and 252-frame paths remained
+byte-identical to legacy. The five seeded end-to-end cases (`0.6B`
+sampled/greedy, `1.7B` sampled/greedy/ICL) produced identical generated and
+decoder code files and equal durations; their worst RMSE was `0.000898` in
+PCM16 samples normalized to `[-1, 1]`. The component suite and standard CLI
+regression suite passed with 11 passes and no failures. Before/after WAVs are
+preserved in the artifact directory for a manual listening pass; no human
+perceptual result is claimed here.
+
+The optional 0.6B ICL smoke still produced a pre-existing `0.08 s` output in
+both modes. Its generated-code and decoder-code files were byte-identical
+between legacy and summed runs, so it is not attributed to this decoder change.
+
+`test_decoder` now supports `--bench-warmup` and `--bench-runs`, emitting
+machine-readable per-run and summary timing for future decoder experiments.
+Before widening the automatic path, benchmark the untested 65-251-frame range
+and each non-CUDA backend independently. A fused gather/reduction is the likely
+follow-up if the long-input CUDA regression is revisited.
+
 ## Evaluated and Rejected Experiments
 
 Do not repeat these unchanged. Revisit only if GGML kernels, tensor layouts,
@@ -96,40 +156,6 @@ hardware, or the surrounding graph architecture changes materially.
 | Packed Talker QKV on 0.6B | Rejected | Small paired regression; packed Talker QKV remains limited to models with `hidden_size > 1024` |
 
 ## Open Work Queue
-
-### P0: Sum Rest-Codebook Embeddings Before Decoder Projection
-
-Status: Open
-
-Current graph:
-
-```text
-for each of 15 rest codebooks:
-    embedding_i = get_rows(codebook_i, ids_i)
-    projected_i = W_rest * embedding_i
-sum(projected_i)
-```
-
-Proposed graph:
-
-```text
-embedding_sum = sum(get_rows(codebook_i, ids_i))
-rest_projection = W_rest * embedding_sum
-```
-
-Why first:
-
-- Algebraically removes 14 matrix multiplications from every decoder call.
-- Scope is confined to `src/decoder/decoder_graph.cpp`.
-- It is straightforward to A/B with fixed decoder codes.
-
-Risks and gates:
-
-- Floating-point addition order changes, so waveform equality is not assumed.
-- Compare maximum/mean waveform error, cosine similarity, RMS, duration, and
-  perceptual before/after WAVs.
-- Run `test_decoder`, full component tests, sampled/greedy/ICL synthesis, and
-  both short and long decoder inputs.
 
 ### P1: Fuse Talker Frame Embedding Gather-and-Sum
 
@@ -314,6 +340,16 @@ For small expected gains:
   raw median, paired median, positive-pair count, and wall-time impact.
 - Use longer runs or more pairs when the result is close to noise.
 
+For isolated decoder measurements, use fixed codes with the resident loop:
+
+```powershell
+.\build\test_decoder.exe --tokenizer <codec.gguf> --codes <codes.bin> `
+  --reference <audio.bin> --bench-warmup 2 --bench-runs 10
+```
+
+The two requested warm-ups are additional to the normal full-input correctness
+decodes that `test_decoder` performs before entering its benchmark loop.
+
 For publishable framework comparisons, follow
 `docs/benchmarking-frameworks.md` and keep generation throughput separate from
 cold process wall time.
@@ -357,10 +393,8 @@ Copy this section for each future experiment:
 
 ## Recommended Execution Order
 
-1. Sum decoder rest-codebook embeddings before their shared projection.
-2. Evaluate Talker frame gather-sum fusion.
-3. Evaluate decoder Flash Attention and Snake fusion independently.
-4. Design a true device-chained greedy Code Predictor supergraph.
-5. Design stateful streaming decoder overlap.
-6. Treat continuous batching and mixed quantization as separate milestones.
-
+1. Evaluate Talker frame gather-sum fusion.
+2. Evaluate decoder Flash Attention and Snake fusion independently.
+3. Design a true device-chained greedy Code Predictor supergraph.
+4. Design stateful streaming decoder overlap.
+5. Treat continuous batching and mixed quantization as separate milestones.

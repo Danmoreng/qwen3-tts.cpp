@@ -4,6 +4,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <climits>
 #include <fstream>
 #include <vector>
 #include <cmath>
@@ -29,6 +33,20 @@ static bool save_binary_file(const char * path, const void * data, size_t size) 
     return f.good();
 }
 
+static bool parse_nonnegative_int(const char * text, int & value) {
+    if (!text || text[0] == '\0') {
+        return false;
+    }
+    char * end = nullptr;
+    errno = 0;
+    const long parsed = strtol(text, &end, 10);
+    if (errno != 0 || !end || end[0] != '\0' || parsed < 0 || parsed > INT_MAX) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
 static void print_usage(const char * prog) {
     fprintf(stderr, "Usage: %s [options]\n", prog);
     fprintf(stderr, "Options:\n");
@@ -36,6 +54,8 @@ static void print_usage(const char * prog) {
     fprintf(stderr, "  --codes <path>      Path to speech codes binary file (int64)\n");
     fprintf(stderr, "  --reference <path>  Path to reference audio binary file (float32)\n");
     fprintf(stderr, "  --output <path>     Path to save decoded audio (optional)\n");
+    fprintf(stderr, "  --bench-warmup <n>  Additional benchmark warmups after correctness decodes (default: 0)\n");
+    fprintf(stderr, "  --bench-runs <n>    Fixed-code decoder benchmark measurements (default: 0)\n");
     fprintf(stderr, "  --help              Show this help\n");
 }
 
@@ -44,6 +64,8 @@ int main(int argc, char ** argv) {
     const char * codes_path = "reference/speech_codes.bin";
     const char * reference_path = "reference/decoded_audio.bin";
     const char * output_path = nullptr;
+    int benchmark_warmups = 0;
+    int benchmark_runs = 0;
     
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--tokenizer") == 0 && i + 1 < argc) {
@@ -54,10 +76,27 @@ int main(int argc, char ** argv) {
             reference_path = argv[++i];
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             output_path = argv[++i];
+        } else if (strcmp(argv[i], "--bench-warmup") == 0) {
+            if (i + 1 >= argc || !parse_nonnegative_int(argv[i + 1], benchmark_warmups)) {
+                fprintf(stderr, "Invalid or missing --bench-warmup value\n");
+                return 1;
+            }
+            ++i;
+        } else if (strcmp(argv[i], "--bench-runs") == 0) {
+            if (i + 1 >= argc || !parse_nonnegative_int(argv[i + 1], benchmark_runs)) {
+                fprintf(stderr, "Invalid or missing --bench-runs value\n");
+                return 1;
+            }
+            ++i;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
         }
+    }
+
+    if (benchmark_warmups > 0 && benchmark_runs == 0) {
+        fprintf(stderr, "Invalid benchmark counts: --bench-warmup requires --bench-runs > 0\n");
+        return 1;
     }
     
     printf("=== Audio Tokenizer Decoder Test ===\n\n");
@@ -144,7 +183,7 @@ int main(int argc, char ** argv) {
     printf("  Audio stats: min=%.4f, max=%.4f, mean=%.6f\n", min_val, max_val, sum / samples.size());
     printf("\n");
 
-    printf("Test 4: Decode stability with cached graph\n");
+    printf("Test 4: Decode repeat stability\n");
     std::vector<float> samples_second;
     if (!decoder.decode(codes_i32.data(), n_frames, samples_second)) {
         fprintf(stderr, "  FAIL: second decode failed: %s\n", decoder.get_error().c_str());
@@ -175,7 +214,7 @@ int main(int argc, char ** argv) {
             rms_diff += diff * diff;
         }
         rms_diff = samples.empty() ? 0.0 : std::sqrt(rms_diff / (double) samples.size());
-        printf("  Cached graph repeat max_abs_diff=%.9f rms=%.9f\n", max_abs_diff, rms_diff);
+        printf("  Repeat max_abs_diff=%.9f rms=%.9f\n", max_abs_diff, rms_diff);
         if (max_abs_diff > 1e-6 || rms_diff > 1e-7) {
             printf("  FAIL: repeated decode is not stable\n");
             fail_count++;
@@ -184,6 +223,92 @@ int main(int argc, char ** argv) {
         }
     }
     printf("\n");
+
+    if (benchmark_runs > 0) {
+        printf("Benchmark: Resident fixed-code decoder (2 prior correctness decodes, "
+               "%d additional warmups, %d runs)\n",
+               benchmark_warmups, benchmark_runs);
+
+        std::vector<float> benchmark_samples;
+        for (int i = 0; i < benchmark_warmups; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            if (!decoder.decode(codes_i32.data(), n_frames, benchmark_samples)) {
+                fprintf(stderr, "  FAIL: benchmark warmup %d failed: %s\n",
+                        i + 1, decoder.get_error().c_str());
+                return 1;
+            }
+            const auto end = std::chrono::steady_clock::now();
+            const double wall_ms = std::chrono::duration<double, std::milli>(end - start).count();
+            const qwen3_tts::audio_decoder_timing timing = decoder.get_last_timing();
+            printf("DECODER_BENCH_JSON {\"warmup\":true,\"iteration\":%d,"
+                   "\"wall_ms\":%.3f,\"build_ms\":%lld,\"alloc_ms\":%lld,"
+                   "\"upload_ms\":%lld,\"compute_ms\":%lld,\"read_ms\":%lld,"
+                   "\"total_ms\":%lld,\"rebuilt\":%d,\"frames\":%d}\n",
+                   i + 1, wall_ms, (long long) timing.graph_build_ms,
+                   (long long) timing.graph_alloc_ms, (long long) timing.input_upload_ms,
+                   (long long) timing.graph_compute_ms, (long long) timing.output_read_ms,
+                   (long long) timing.total_ms, timing.graph_rebuilt, n_frames);
+        }
+
+        std::vector<double> wall_times_ms;
+        wall_times_ms.reserve(benchmark_runs);
+        int64_t build_total_ms = 0;
+        int64_t alloc_total_ms = 0;
+        int64_t upload_total_ms = 0;
+        int64_t compute_total_ms = 0;
+        int64_t read_total_ms = 0;
+        int64_t decode_total_ms = 0;
+        for (int i = 0; i < benchmark_runs; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            if (!decoder.decode(codes_i32.data(), n_frames, benchmark_samples)) {
+                fprintf(stderr, "  FAIL: benchmark run %d failed: %s\n",
+                        i + 1, decoder.get_error().c_str());
+                return 1;
+            }
+            const auto end = std::chrono::steady_clock::now();
+            const double wall_ms = std::chrono::duration<double, std::milli>(end - start).count();
+            const qwen3_tts::audio_decoder_timing timing = decoder.get_last_timing();
+            wall_times_ms.push_back(wall_ms);
+            build_total_ms += timing.graph_build_ms;
+            alloc_total_ms += timing.graph_alloc_ms;
+            upload_total_ms += timing.input_upload_ms;
+            compute_total_ms += timing.graph_compute_ms;
+            read_total_ms += timing.output_read_ms;
+            decode_total_ms += timing.total_ms;
+            printf("DECODER_BENCH_JSON {\"warmup\":false,\"iteration\":%d,"
+                   "\"wall_ms\":%.3f,\"build_ms\":%lld,\"alloc_ms\":%lld,"
+                   "\"upload_ms\":%lld,\"compute_ms\":%lld,\"read_ms\":%lld,"
+                   "\"total_ms\":%lld,\"rebuilt\":%d,\"frames\":%d}\n",
+                   i + 1, wall_ms, (long long) timing.graph_build_ms,
+                   (long long) timing.graph_alloc_ms, (long long) timing.input_upload_ms,
+                   (long long) timing.graph_compute_ms, (long long) timing.output_read_ms,
+                   (long long) timing.total_ms, timing.graph_rebuilt, n_frames);
+        }
+
+        std::vector<double> sorted_wall_times = wall_times_ms;
+        std::sort(sorted_wall_times.begin(), sorted_wall_times.end());
+        const size_t middle = sorted_wall_times.size() / 2;
+        const double median_wall_ms = sorted_wall_times.size() % 2 == 0
+            ? (sorted_wall_times[middle - 1] + sorted_wall_times[middle]) * 0.5
+            : sorted_wall_times[middle];
+        double wall_total_ms = 0.0;
+        for (double wall_ms : wall_times_ms) {
+            wall_total_ms += wall_ms;
+        }
+        printf("DECODER_BENCH_SUMMARY {\"prior_full_decodes\":2,"
+               "\"additional_warmups\":%d,\"runs\":%d,"
+               "\"wall_total_ms\":%.3f,\"wall_mean_ms\":%.3f,"
+               "\"wall_median_ms\":%.3f,\"build_total_ms\":%lld,"
+               "\"alloc_total_ms\":%lld,\"upload_total_ms\":%lld,"
+               "\"compute_total_ms\":%lld,\"read_total_ms\":%lld,"
+               "\"decode_total_ms\":%lld,\"frames\":%d}\n",
+               benchmark_warmups, benchmark_runs, wall_total_ms,
+               wall_total_ms / benchmark_runs, median_wall_ms,
+               (long long) build_total_ms, (long long) alloc_total_ms,
+               (long long) upload_total_ms, (long long) compute_total_ms,
+               (long long) read_total_ms, (long long) decode_total_ms, n_frames);
+        printf("  PASS: Resident decoder benchmark completed\n\n");
+    }
     
     if (output_path) {
         printf("Test 5: Save decoded audio to %s\n", output_path);

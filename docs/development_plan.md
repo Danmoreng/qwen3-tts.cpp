@@ -36,6 +36,7 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | Recurrent SwiGLU fusion | Implemented | Talker and Code Predictor recurrent FFNs use `ggml_swiglu_split()`; commit `e9c4a21`. |
 | Code Predictor KV physical reuse | Implemented | Per-frame physical zeroing is disabled by default after overwrite-safety validation; commit `99ebc44`. |
 | CUDA packed recurrent QKV | Implemented | Code Predictor uses packed QKV for both model sizes; Talker uses it for 1.7B. Final paired gain was about 4.1% on 0.6B and 5.0% on 1.7B; commit `93867a5`. |
+| CUDA short-decoder rest projection | Partial | Inputs up to 63 frames sum the 15 rest-codebook embeddings before their shared projection; longer and unmeasured paths retain the legacy graph after length-dependent A/B regressions. |
 | Persistent performance roadmap | Implemented | `docs/performance_roadmap.md` records completed, rejected, and open performance work with a reusable validation protocol. |
 
 ## Current State (Open / Needs Verification)
@@ -45,7 +46,7 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | 1.7B regression coverage in automated tests | Partial | Lightweight 1.7B regression is in place; promote to stricter deterministic artifact-backed gate in CI where practical. |
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
 | M-RoPE position handling consistency | Partial | Remaining path consistency should still be audited and documented with explicit expected layouts per path. |
-| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; next candidate is consolidating the decoder's 15 shared rest-codebook projections. |
+| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; next candidate is the Talker frame embedding gather-and-sum fusion. |
 | Android / Snapdragon support | Backlog | Add Android NDK build support for the native library, portable model-path handling, and an initial CPU-first deployment path; evaluate Vulkan and Hexagon acceleration later for Snapdragon-class devices. |
 
 ## Performance Baselines and Targets
@@ -123,7 +124,7 @@ Exit criteria:
 ## Immediate Next Actions
 
 1. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
-2. Implement and A/B-test summing decoder rest-codebook embeddings before their shared projection.
+2. Implement and A/B-test the Talker frame embedding gather-and-sum fusion.
 3. Expand 1.7B cross-speaker/perceptual validation to include instruction-heavy prompts.
 4. Update `docs/performance_roadmap.md` after every accepted or rejected performance experiment.
 5. Keep Android support in backlog until correctness and benchmark gates are stable; when started, begin with NDK/shared-library portability and CPU-first on-device validation.
