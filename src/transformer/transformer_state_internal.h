@@ -81,6 +81,7 @@ struct transformer_layer {
     struct ggml_tensor * attn_q = nullptr;
     struct ggml_tensor * attn_k = nullptr;
     struct ggml_tensor * attn_v = nullptr;
+    struct ggml_tensor * attn_qkv = nullptr;
     struct ggml_tensor * attn_output = nullptr;
     struct ggml_tensor * attn_q_norm = nullptr;
     struct ggml_tensor * attn_k_norm = nullptr;

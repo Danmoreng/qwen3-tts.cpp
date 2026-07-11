@@ -65,9 +65,9 @@ generate from that embedding without prepending reference speech codes.
 
 | Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
 |--------|----------------------|---------|----------------------|---------|
-| `qwen3-tts.cpp` GGUF Q8_0 | 0.817 s | 8.585 | 1.194 s | 5.718 |
-| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 3.184 s | 2.513 | 3.047 s | 2.132 |
-| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 2.775 s | 2.797 | 2.835 s | 2.342 |
+| `qwen3-tts.cpp` GGUF Q8_0 | 0.794 s | 8.364 | 1.057 s | 6.741 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 3.496 s | 2.291 | 2.810 s | 2.306 |
+| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 2.793 s | 2.779 | 2.845 s | 2.334 |
 | `audio.cpp` | - | - | - | - |
 
 ### Full ICL Voice Clone
@@ -78,10 +78,10 @@ only warm `Generate+Decode` time, not reference prompt construction.
 
 | Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
 |--------|----------------------|---------|----------------------|---------|
-| `qwen3-tts.cpp` GGUF Q8_0 | 1.195 s | 8.589 | 1.488 s | 6.893 |
-| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 4.254 s | 2.412 | 4.261 s | 2.404 |
-| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 3.825 s | 2.678 | 4.448 s | 2.302 |
-| `audio.cpp` HF BF16, warm session | 5.217 s | 1.949 | 5.962 s | 1.704 |
+| `qwen3-tts.cpp` GGUF Q8_0 | 1.021 s | 10.027 | 1.456 s | 7.034 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 4.257 s | 2.406 | 4.397 s | 2.329 |
+| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 3.796 s | 2.698 | 4.370 s | 2.343 |
+| `audio.cpp` HF BF16, warm session | 4.754 s | 2.137 | 5.711 s | 1.783 |
 
 The comparison harness is:
 
@@ -492,6 +492,8 @@ Runtime performance toggles:
 | `QWEN3_TTS_CODE_PRED_REPLAY_GRAPHS=0` | Disable default Code Predictor replay graphs for backend or memory diagnostics |
 | `QWEN3_TTS_TALKER_REPLAY_GRAPHS=0` | Disable default Talker step replay graphs for backend or memory diagnostics |
 | `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Restore legacy per-frame physical Code Predictor KV zeroing for parity diagnostics; by default each live row is overwritten before reuse |
+| `QWEN3_TTS_CODE_PRED_PACKED_QKV=0` | Disable the CUDA packed Code Predictor step QKV projection and restore separate Q, K, and V matmuls |
+| `QWEN3_TTS_TALKER_PACKED_QKV=0` | Disable the CUDA packed Talker step QKV projection used by models wider than 1024 and restore separate Q, K, and V matmuls |
 
 ## Testing and Debugging
 

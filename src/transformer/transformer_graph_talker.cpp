@@ -4,8 +4,28 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 namespace qwen3_tts {
+
+namespace {
+
+bool packed_talker_qkv_enabled() {
+    static const bool enabled = []() {
+        const char * value = std::getenv("QWEN3_TTS_TALKER_PACKED_QKV");
+        return !(value && value[0] == '0');
+    }();
+    return enabled;
+}
+
+bool is_cuda_backend(ggml_backend_t backend) {
+    ggml_backend_dev_t device = backend ? ggml_backend_get_device(backend) : nullptr;
+    const char * name = device ? ggml_backend_dev_name(device) : nullptr;
+    return name && std::strstr(name, "CUDA") != nullptr;
+}
+
+} // namespace
 
 struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTSTransformer & self, int32_t n_tokens, int32_t n_past) {
     auto & impl = self.impl_;
@@ -232,6 +252,8 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
     ggml_set_name(inp_mask, "inp_mask");
     ggml_set_input(inp_mask);
 
+    // Packed QKV is limited to the recurrent Talker step; prefill keeps its
+    // established multi-token projection path.
     struct ggml_tensor * inpL = cur;
 
     const float KQscale = 1.0f / sqrtf((float) head_dim);
@@ -243,13 +265,29 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
         cur = ggml_rms_norm(ctx0, inpL, eps);
         cur = ggml_mul(ctx0, cur, layer.attn_norm);
 
-        struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.attn_q, cur);
-        struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.attn_k, cur);
-        struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, layer.attn_v, cur);
+        struct ggml_tensor * Qcur = nullptr;
+        struct ggml_tensor * Kcur = nullptr;
+        struct ggml_tensor * Vcur = nullptr;
+        if (packed_talker_qkv_enabled() &&
+            is_cuda_backend(impl->state.backend) && layer.attn_qkv) {
+            struct ggml_tensor * qkv = ggml_mul_mat(ctx0, layer.attn_qkv, cur);
+            const size_t q_bytes = (size_t) head_dim * (size_t) n_head * qkv->nb[0];
+            const size_t kv_bytes = (size_t) head_dim * (size_t) n_kv_head * qkv->nb[0];
+            Qcur = ggml_view_3d(ctx0, qkv, head_dim, n_head, n_tokens,
+                                (size_t) head_dim * qkv->nb[0], qkv->nb[1], 0);
+            Kcur = ggml_view_3d(ctx0, qkv, head_dim, n_kv_head, n_tokens,
+                                (size_t) head_dim * qkv->nb[0], qkv->nb[1], q_bytes);
+            Vcur = ggml_view_3d(ctx0, qkv, head_dim, n_kv_head, n_tokens,
+                                (size_t) head_dim * qkv->nb[0], qkv->nb[1], q_bytes + kv_bytes);
+        } else {
+            Qcur = ggml_mul_mat(ctx0, layer.attn_q, cur);
+            Kcur = ggml_mul_mat(ctx0, layer.attn_k, cur);
+            Vcur = ggml_mul_mat(ctx0, layer.attn_v, cur);
 
-        Qcur = ggml_reshape_3d(ctx0, Qcur, head_dim, n_head, n_tokens);
-        Kcur = ggml_reshape_3d(ctx0, Kcur, head_dim, n_kv_head, n_tokens);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, head_dim, n_kv_head, n_tokens);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, head_dim, n_head, n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, head_dim, n_kv_head, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, head_dim, n_kv_head, n_tokens);
+        }
 
         if (layer.attn_q_norm) {
             Qcur = ggml_rms_norm(ctx0, Qcur, eps);

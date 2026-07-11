@@ -15,7 +15,17 @@ bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct ggu
     const int64_t n_tensors = gguf_get_n_tensors(ctx);
     const auto & cfg = impl->model.config;
 
-    const size_t ctx_size = n_tensors * ggml_tensor_overhead();
+#ifdef QWEN3_TTS_CUDA_ENABLED
+    const bool create_packed_qkv = true;
+#else
+    const bool create_packed_qkv = false;
+#endif
+    const int32_t packed_code_pred_layers =
+        create_packed_qkv && !impl->skip_ggml_code_pred_layers ? cfg.code_pred_layers : 0;
+    const int32_t packed_talker_layers =
+        create_packed_qkv && cfg.hidden_size > 1024 ? cfg.n_layers : 0;
+    const size_t ctx_size =
+        (n_tensors + packed_code_pred_layers + packed_talker_layers) * ggml_tensor_overhead();
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx_size,
         /*.mem_buffer =*/ nullptr,
@@ -295,6 +305,69 @@ bool transformer_internal::ops::create_tensors(TTSTransformer & self, struct ggu
         }
     }
 
+    if (create_packed_qkv && !impl->skip_ggml_code_pred_layers) {
+        for (int32_t il = 0; il < cfg.code_pred_layers; ++il) {
+            auto & layer = impl->model.code_pred_layers[(size_t) il];
+            if (!layer.attn_q || !layer.attn_k || !layer.attn_v) {
+                error_msg = "Missing Code Predictor Q/K/V weights for packed layer " +
+                    std::to_string(il);
+                return false;
+            }
+            if (layer.attn_q->type != layer.attn_k->type ||
+                layer.attn_q->type != layer.attn_v->type ||
+                layer.attn_q->ne[0] != layer.attn_k->ne[0] ||
+                layer.attn_q->ne[0] != layer.attn_v->ne[0]) {
+                error_msg = "Incompatible Code Predictor Q/K/V weights for packed layer " +
+                    std::to_string(il);
+                return false;
+            }
+
+            layer.attn_qkv = ggml_new_tensor_2d(
+                impl->model.ctx,
+                layer.attn_q->type,
+                layer.attn_q->ne[0],
+                layer.attn_q->ne[1] + layer.attn_k->ne[1] + layer.attn_v->ne[1]);
+            if (!layer.attn_qkv) {
+                error_msg = "Failed to create packed Code Predictor QKV tensor for layer " +
+                    std::to_string(il);
+                return false;
+            }
+            ggml_format_name(layer.attn_qkv,
+                             "code_pred.blk.%d.attn_qkv.packed", il);
+        }
+    }
+
+    if (create_packed_qkv && cfg.hidden_size > 1024) {
+        for (int32_t il = 0; il < cfg.n_layers; ++il) {
+            auto & layer = impl->model.layers[(size_t) il];
+            if (!layer.attn_q || !layer.attn_k || !layer.attn_v) {
+                error_msg = "Missing Talker Q/K/V weights for packed layer " +
+                    std::to_string(il);
+                return false;
+            }
+            if (layer.attn_q->type != layer.attn_k->type ||
+                layer.attn_q->type != layer.attn_v->type ||
+                layer.attn_q->ne[0] != layer.attn_k->ne[0] ||
+                layer.attn_q->ne[0] != layer.attn_v->ne[0]) {
+                error_msg = "Incompatible Talker Q/K/V weights for packed layer " +
+                    std::to_string(il);
+                return false;
+            }
+
+            layer.attn_qkv = ggml_new_tensor_2d(
+                impl->model.ctx,
+                layer.attn_q->type,
+                layer.attn_q->ne[0],
+                layer.attn_q->ne[1] + layer.attn_k->ne[1] + layer.attn_v->ne[1]);
+            if (!layer.attn_qkv) {
+                error_msg = "Failed to create packed Talker QKV tensor for layer " +
+                    std::to_string(il);
+                return false;
+            }
+            ggml_format_name(layer.attn_qkv, "talker.blk.%d.attn_qkv.packed", il);
+        }
+    }
+
     return true;
 }
 
@@ -357,6 +430,38 @@ bool transformer_internal::ops::load_tensor_data(TTSTransformer & self, const st
         }
 
         ggml_backend_tensor_set(tensor, read_buf.data(), 0, nbytes);
+
+        int layer_idx = -1;
+        if (sscanf(name, "code_pred.blk.%d.", &layer_idx) == 1 &&
+            layer_idx >= 0 && layer_idx < impl->model.config.code_pred_layers) {
+            auto & layer = impl->model.code_pred_layers[(size_t) layer_idx];
+            if (layer.attn_qkv && strstr(name, "attn_q.weight")) {
+                ggml_backend_tensor_set(layer.attn_qkv, read_buf.data(), 0, nbytes);
+            } else if (layer.attn_qkv && strstr(name, "attn_k.weight")) {
+                ggml_backend_tensor_set(layer.attn_qkv, read_buf.data(),
+                                        ggml_nbytes(layer.attn_q), nbytes);
+            } else if (layer.attn_qkv && strstr(name, "attn_v.weight")) {
+                ggml_backend_tensor_set(layer.attn_qkv, read_buf.data(),
+                                        ggml_nbytes(layer.attn_q) + ggml_nbytes(layer.attn_k),
+                                        nbytes);
+            }
+        }
+
+        layer_idx = -1;
+        if (sscanf(name, "talker.blk.%d.", &layer_idx) == 1 &&
+            layer_idx >= 0 && layer_idx < impl->model.config.n_layers) {
+            auto & layer = impl->model.layers[(size_t) layer_idx];
+            if (layer.attn_qkv && strstr(name, "attn_q.weight")) {
+                ggml_backend_tensor_set(layer.attn_qkv, read_buf.data(), 0, nbytes);
+            } else if (layer.attn_qkv && strstr(name, "attn_k.weight")) {
+                ggml_backend_tensor_set(layer.attn_qkv, read_buf.data(),
+                                        ggml_nbytes(layer.attn_q), nbytes);
+            } else if (layer.attn_qkv && strstr(name, "attn_v.weight")) {
+                ggml_backend_tensor_set(layer.attn_qkv, read_buf.data(),
+                                        ggml_nbytes(layer.attn_q) + ggml_nbytes(layer.attn_k),
+                                        nbytes);
+            }
+        }
     }
 
     fclose(f);
