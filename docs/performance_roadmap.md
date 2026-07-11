@@ -53,7 +53,7 @@ Primary test hardware for the measurements below:
 | Reuse physical Code Predictor KV storage instead of synchronously zeroing it every frame | `99ebc44` | Removes ten small synchronous clears per frame; legacy clear remains behind `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Sampled, greedy, ICL, multi-request, and full regression gates passed |
 | Pack Code Predictor recurrent Q/K/V projections on CUDA | `93867a5` | Positive on both 0.6B and 1.7B | Generated codes and WAVs were byte-identical in final A/B cases |
 | Pack Talker recurrent Q/K/V projections on CUDA for models wider than 1024 | `93867a5` | Retained for 1.7B; disabled for 0.6B after a small regression | Generated codes and WAVs were byte-identical |
-| Pack and reduce recurrent Talker frame embeddings on CUDA | Working tree on `babc054` | Positive generation medians on both 0.6B and 1.7B with no added weight allocation | Generated codes, decoder codes, and WAVs were byte-identical in all five A/B cases |
+| Pack and reduce recurrent Talker frame embeddings on CUDA | `fb9a9e0` | Positive generation medians on both 0.6B and 1.7B with no added weight allocation | Generated codes, decoder codes, and WAVs were byte-identical in all five A/B cases |
 | Correct resident framework benchmark path and publish current README numbers | `93867a5` and preceding timing commits | Current README tables use warm generation metrics and fixed sampling parameters | All benchmark WAV sanity checks passed |
 | Use qwentts `examples/freeman.wav` plus its sidecar transcript as the default qwentts matrix reference | `a9534cd` | Prevents accidental comparison with the unrelated local README reference | Default preflight and corrected 8-run matrix passed |
 
@@ -104,7 +104,7 @@ decoding, seed 42, and at most 64 frames. The raw generation median pools the
 
 The five correctness cases were `0.6B` sampled/greedy, `1.7B`
 sampled/greedy/ICL. Generated-code JSON, decoder-code JSON, and WAV SHA-256
-hashes matched the saved `babc054` binary and the runtime legacy path in every
+hashes matched the saved pre-change binary from `babc054` and the runtime legacy path in every
 case. The CUDA regression suite passed with 11 passes and no failures, and a
 separate non-CUDA Release build completed successfully. A CUDA-graphs-disabled
 legacy/candidate diagnostic was also byte-identical. Raw artifacts are under
@@ -187,35 +187,21 @@ hardware, or the surrounding graph architecture changes materially.
 | Dedicated decoder replay scheduler | Rejected | Correct and byte-identical, but neutral/slower offline; streaming graph rebuilds fell from 13 to 7 while decode time only changed from about 323 to 322 ms |
 | Additional RMSNorm fusion patch | Inspected | GGML CUDA already fuses the relevant RMSNorm-to-Mul and RMSNorm-to-Mul-to-Add patterns |
 | Packed Talker QKV on 0.6B | Rejected | Small paired regression; packed Talker QKV remains limited to models with `hidden_size > 1024` |
+| Decoder pre-transformer Flash Attention | Rejected | Correct on fixed-code lengths 1, 32, 63, 64, 72, 128, and 252, but isolated CUDA medians were inconsistent: -5.0% at 63 frames, -0.5% at 64, +7.3% at 72, +2.0% at 128, and -2.1% at 252; opt-in prototype removed |
+| Decoder Snake activation fusion | Inspected | The vendored CUDA graph optimizer already fuses the five-op `mul -> sin -> sqr -> mul -> add` pattern into `ggml_cuda_op_snake_fused()` when shapes and types match; no project-side operator is needed |
+
+The Flash prototype used `QWEN3_TTS_DECODER_FLASH_ATTN=1`, converted the
+existing F32 causal/window mask to the F16 format required by
+`ggml_flash_attn_ext`, and passed the decoder reference and repeat-stability
+checks. At 63 frames the legacy/candidate waveform comparison had maximum
+absolute error `0.004707`, RMS error `0.000183`, and cosine correlation
+`0.999561`; both paths remained within the decoder reference thresholds. Raw
+logs and fixed-code length artifacts are under the ignored
+`benchmark_output/decoder_flash_attention` directory. The candidate was still
+removed because the launch and mask-conversion overhead produced no stable
+end-to-end decoder win across the sliding-window boundary and long-input cases.
 
 ## Open Work Queue
-
-### P1: Decoder Flash Attention
-
-Status: Open
-
-The eight pre-transformer decoder layers still materialize QK, softmax, and VK
-manually and upload a quadratic F32 causal/window mask. Evaluate:
-
-- `ggml_flash_attn_ext`
-- F16 mask storage if accepted by the backend path
-- exact sliding-window semantics
-
-Required validation includes multiple frame lengths around the sliding-window
-boundary, decoder reference comparison, and long-audio WAV checks.
-
-### P1: Fuse Decoder Snake Activation
-
-Status: Open
-
-The decoder Snake path expands to multiply, sine, square, multiply, and add.
-It is used repeatedly throughout the upsampling decoder. Investigate either:
-
-- the existing `GGML_OP_SNAKE` path if it can represent the required alpha/beta
-  semantics exactly, or
-- a CUDA graph-fusion pattern for the current expression.
-
-Benchmark decoder compute separately before measuring end-to-end impact.
 
 ### P2: Fully Device-Chained Greedy Code Predictor
 
@@ -409,7 +395,6 @@ Copy this section for each future experiment:
 
 ## Recommended Execution Order
 
-1. Evaluate decoder Flash Attention and Snake fusion independently.
-2. Design a true device-chained greedy Code Predictor supergraph.
-3. Design stateful streaming decoder overlap.
-4. Treat continuous batching and mixed quantization as separate milestones.
+1. Design a true device-chained greedy Code Predictor supergraph.
+2. Design stateful streaming decoder overlap.
+3. Treat continuous batching and mixed quantization as separate milestones.
