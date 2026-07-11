@@ -332,7 +332,7 @@ if ([string]::IsNullOrWhiteSpace($ServeurCodec)) {
     $ServeurCodec = if ($studioModels) { Join-Path $studioModels "qwen-tokenizer-12hz-Q8_0.gguf" } else { Join-Path $ServeurRepo "models\qwen-tokenizer-12hz-Q8_0.gguf" }
 }
 if ([string]::IsNullOrWhiteSpace($ReferenceAudio)) {
-    $ReferenceAudio = Join-Path $repoRoot "examples\readme_clone_input.wav"
+    $ReferenceAudio = Join-Path $ServeurRepo "examples\freeman.wav"
 }
 if ([string]::IsNullOrWhiteSpace($ReferenceText)) {
     $sidecar = [System.IO.Path]::ChangeExtension($ReferenceAudio, ".txt")
