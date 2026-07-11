@@ -319,6 +319,14 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_prefill_graph(TT
 
     ggml_build_forward_expand(gf, logits);
 
+    if (impl->state.code_pred_device_chain_active && impl->state.code_pred_tokens_bridge) {
+        struct ggml_tensor * token_slot = ggml_view_1d(
+            ctx0, impl->state.code_pred_tokens_bridge, 1, 0);
+        ggml_set_name(token_slot, "code_pred_token_slot_0");
+        struct ggml_tensor * token = ggml_argmax(ctx0, logits);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, token, token_slot));
+    }
+
     ggml_free(ctx0);
     return gf;
 }
@@ -354,9 +362,16 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
         ggml_set_input(inp_hidden);
     }
 
-    struct ggml_tensor * inp_code = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
-    ggml_set_name(inp_code, "inp_code");
-    ggml_set_input(inp_code);
+    struct ggml_tensor * inp_code = nullptr;
+    if (generation_step > 0 && impl->state.code_pred_device_chain_active && impl->state.code_pred_tokens_bridge) {
+        const size_t offset = (size_t) (generation_step - 1) * sizeof(int32_t);
+        inp_code = ggml_view_1d(ctx0, impl->state.code_pred_tokens_bridge, 1, offset);
+        ggml_set_name(inp_code, "code_pred_previous_token");
+    } else {
+        inp_code = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+        ggml_set_name(inp_code, "inp_code");
+        ggml_set_input(inp_code);
+    }
 
     struct ggml_tensor * inp_pos = nullptr;
     if (generation_step >= 0 && generation_step < (int) impl->state.code_pred_step_pos.size()) {
@@ -529,6 +544,15 @@ struct ggml_cgraph * transformer_internal::ops::build_code_pred_step_graph(TTSTr
     ggml_set_output(logits);
 
     ggml_build_forward_expand(gf, logits);
+
+    if (impl->state.code_pred_device_chain_active && impl->state.code_pred_tokens_bridge) {
+        const size_t offset = (size_t) generation_step * sizeof(int32_t);
+        struct ggml_tensor * token_slot = ggml_view_1d(
+            ctx0, impl->state.code_pred_tokens_bridge, 1, offset);
+        ggml_format_name(token_slot, "code_pred_token_slot_%02d", generation_step);
+        struct ggml_tensor * token = ggml_argmax(ctx0, logits);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, token, token_slot));
+    }
 
     ggml_free(ctx0);
     return gf;

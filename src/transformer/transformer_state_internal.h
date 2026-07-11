@@ -160,6 +160,7 @@ struct tts_transformer_state {
     struct ggml_cgraph * talker_replay_graph = nullptr;
     bool code_pred_replay_ready = false;
     bool code_pred_replay_failed = false;
+    bool code_pred_replay_device_chain = false;
 
     std::vector<uint8_t> compute_meta;
     std::vector<uint8_t> talker_replay_compute_meta;
@@ -172,6 +173,10 @@ struct tts_transformer_state {
     struct ggml_tensor * code_pred_prefill_mask_tensor = nullptr;
     std::vector<struct ggml_tensor *> code_pred_step_pos;
     std::vector<struct ggml_tensor *> code_pred_step_mask_tensors;
+    struct ggml_tensor * code_pred_tokens_bridge = nullptr;
+    bool code_pred_device_chain_requested = false;
+    bool code_pred_device_chain_active = false;
+    bool code_pred_device_chain_logged = false;
     std::vector<uint8_t> code_pred_graph_stats_logged;
 
     struct ggml_context * hidden_bridge_ctx = nullptr;

@@ -162,7 +162,21 @@ bool ensure_code_pred_replay_graphs(TTSTransformer & self, tts_transformer_priva
         return false;
     }
     if (state.code_pred_replay_ready) {
-        return true;
+        if (state.code_pred_replay_device_chain == state.code_pred_device_chain_active) {
+            return true;
+        }
+
+        // The host-token and device-token graphs have different inputs and
+        // outputs. A resident process may cross the automatic dispatch
+        // threshold between requests, so rebuild instead of replaying a graph
+        // created for the other contract.
+        for (ggml_backend_sched_t sched : state.code_pred_replay_scheds) {
+            if (sched) {
+                ggml_backend_sched_reset(sched);
+            }
+        }
+        state.code_pred_replay_ready = false;
+        state.code_pred_replay_graphs.clear();
     }
     if (state.code_pred_replay_failed) {
         return false;
@@ -224,6 +238,7 @@ bool ensure_code_pred_replay_graphs(TTSTransformer & self, tts_transformer_priva
     }
 
     state.code_pred_replay_ready = true;
+    state.code_pred_replay_device_chain = state.code_pred_device_chain_active;
     fprintf(stderr, "  CodePred replay graphs: enabled (default)\n");
     return true;
 }
@@ -459,6 +474,15 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
     }
     clear_code_pred_kv_cache();
+    const bool use_device_chain = impl_->state.code_pred_device_chain_requested &&
+        temperature == 0.0f && impl_->state.code_pred_tokens_bridge;
+    impl_->state.code_pred_device_chain_active = use_device_chain;
+    if (use_device_chain && !impl_->state.code_pred_device_chain_logged) {
+        fprintf(stderr, "  CodePred device chain: enabled (greedy CUDA path)\n");
+        impl_->state.code_pred_device_chain_logged = true;
+    } else if (!use_device_chain) {
+        impl_->state.code_pred_device_chain_logged = false;
+    }
     const bool use_hidden_bridge = hidden == nullptr && impl_->state.hidden_bridge != nullptr;
     if (!use_hidden_bridge && hidden == nullptr) {
         error_msg_ = "Code predictor requires hidden input or a device hidden bridge";
@@ -641,11 +665,13 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        ggml_backend_tensor_get(logits, logits_data.data(), 0,
-                                cfg.code_pred_vocab_size * sizeof(float));
+        if (!use_device_chain || trace_frame_enabled) {
+            ggml_backend_tensor_get(logits, logits_data.data(), 0,
+                                    cfg.code_pred_vocab_size * sizeof(float));
+        }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
-        if (impl_->timing) {
+        if (impl_->timing && (!use_device_chain || trace_frame_enabled)) {
             const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
             impl_->timing->t_code_pred_data_ms += dt_ms;
             impl_->timing->t_code_pred_prefill_data_ms += dt_ms;
@@ -662,7 +688,9 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                                         {(int64_t) cfg.code_pred_vocab_size});
         }
 
-        output[0] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        if (!use_device_chain) {
+            output[0] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        }
 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
@@ -802,11 +830,13 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        ggml_backend_tensor_get(logits, logits_data.data(), 0,
-                                cfg.code_pred_vocab_size * sizeof(float));
+        if (!use_device_chain || trace_frame_enabled) {
+            ggml_backend_tensor_get(logits, logits_data.data(), 0,
+                                    cfg.code_pred_vocab_size * sizeof(float));
+        }
 #ifdef QWEN3_TTS_TIMING
         t1 = clk::now();
-        if (impl_->timing) {
+        if (impl_->timing && (!use_device_chain || trace_frame_enabled)) {
             const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
             impl_->timing->t_code_pred_data_ms += dt_ms;
             impl_->timing->t_code_pred_steps_data_ms += dt_ms;
@@ -823,7 +853,9 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
                                                         {(int64_t) cfg.code_pred_vocab_size});
         }
 
-        output[step] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        if (!use_device_chain) {
+            output[step] = sample_or_argmax(logits_data.data(), cfg.code_pred_vocab_size);
+        }
 
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
@@ -840,6 +872,11 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
             impl_->timing->t_code_pred_sched_reset_ms += dt_ms;
         }
 #endif
+    }
+
+    if (use_device_chain) {
+        ggml_backend_tensor_get(impl_->state.code_pred_tokens_bridge, output.data(), 0,
+                                output.size() * sizeof(int32_t));
     }
 #ifdef QWEN3_TTS_TIMING
     if (impl_->timing) impl_->timing->t_code_pred_steps_ms += std::chrono::duration<double, std::milli>(clk::now() - t_steps_start).count();

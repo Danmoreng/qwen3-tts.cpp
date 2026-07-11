@@ -185,11 +185,13 @@ int main(int argc, char ** argv) {
     // Test 2: Initialize KV cache
     // -----------------------------------------------------------------------
     printf("Test %d: Initialize KV cache\n", ++test_num);
-    if (!transformer.init_kv_cache(4096)) {
+    const int32_t initial_kv_ctx = std::max<int32_t>(512, max_len + 64);
+    if (!transformer.init_kv_cache(initial_kv_ctx)) {
         printf("  FAIL: %s\n", transformer.get_error().c_str());
         return 1;
     }
-    test_pass("KV cache initialized (n_ctx=4096)");
+    printf("  KV cache context: %d tokens\n", initial_kv_ctx);
+    test_pass("KV cache initialized with bounded test context");
 
     // -----------------------------------------------------------------------
     // Test 3: Load all reference data
@@ -343,7 +345,14 @@ int main(int argc, char ** argv) {
     // Clear KV cache for a fresh generation
     transformer.clear_kv_cache();
 
-    const float * spk_ptr = speaker_embd.empty() ? nullptr : speaker_embd.data();
+    const float * spk_ptr = nullptr;
+    if (!speaker_embd.empty() && speaker_embd.size() == (size_t) config.hidden_size) {
+        spk_ptr = speaker_embd.data();
+    } else if (!speaker_embd.empty()) {
+        printf("  WARNING: speaker embedding has %zu values, model expects %d; "
+               "generation tests will run without a speaker embedding\n",
+               speaker_embd.size(), config.hidden_size);
+    }
 
     std::vector<int32_t> generated_codes;
     printf("  Calling generate(n_tokens=%d, max_len=%d, language_id=2050)...\n",
@@ -460,7 +469,61 @@ int main(int argc, char ** argv) {
     }
 
     // -----------------------------------------------------------------------
-    // Test 6: Summary statistics
+    // Test 6: Resident Code Predictor replay-mode switching
+    //   Exercise both automatic dispatch directions and sampled fallback on
+    //   one transformer instance. This catches stale replay graphs whose
+    //   token input/output contract does not match the current request.
+    // -----------------------------------------------------------------------
+    printf("Test %d: Resident Code Predictor replay-mode switching\n", ++test_num);
+
+    auto generate_switch_case = [&](const char * label, int32_t case_max_len,
+                                    float temperature, int64_t seed,
+                                    std::vector<int32_t> & codes) -> bool {
+        printf("  %s: max_len=%d temperature=%.1f seed=%lld\n",
+               label, case_max_len, temperature, (long long) seed);
+        if (!transformer.generate(
+                text_tokens.data(), n_tokens, spk_ptr, case_max_len,
+                codes, 2050, 1.05f, temperature,
+                temperature == 0.0f ? 0 : 50, 1.0f, seed)) {
+            printf("  FAIL: %s generation failed: %s\n",
+                   label, transformer.get_error().c_str());
+            return false;
+        }
+        printf("    generated %zu frames\n", codes.size() / config.n_codebooks);
+        return true;
+    };
+
+    std::vector<int32_t> greedy_32_a;
+    std::vector<int32_t> greedy_64_a;
+    std::vector<int32_t> greedy_32_b;
+    std::vector<int32_t> greedy_64_b;
+    std::vector<int32_t> sampled_64_a;
+    std::vector<int32_t> greedy_64_c;
+    std::vector<int32_t> sampled_64_b;
+
+    bool switch_ok = true;
+    switch_ok &= generate_switch_case("greedy-short-a", 32, 0.0f, 42, greedy_32_a);
+    switch_ok &= generate_switch_case("greedy-long-a", 64, 0.0f, 42, greedy_64_a);
+    switch_ok &= generate_switch_case("greedy-short-b", 32, 0.0f, 42, greedy_32_b);
+    switch_ok &= generate_switch_case("greedy-long-b", 64, 0.0f, 42, greedy_64_b);
+    switch_ok &= generate_switch_case("sampled-long-a", 64, 0.9f, 42, sampled_64_a);
+    switch_ok &= generate_switch_case("greedy-long-c", 64, 0.0f, 42, greedy_64_c);
+    switch_ok &= generate_switch_case("sampled-long-b", 64, 0.9f, 42, sampled_64_b);
+
+    if (!switch_ok) {
+        fail_count++;
+    } else if (greedy_32_a != greedy_32_b ||
+               greedy_64_a != greedy_64_b ||
+               greedy_64_a != greedy_64_c ||
+               sampled_64_a != sampled_64_b) {
+        printf("  FAIL: resident mode switch changed deterministic speech codes\n");
+        fail_count++;
+    } else {
+        test_pass("Resident short/long and greedy/sampled replay switches are byte-identical");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 7: Summary statistics
     // -----------------------------------------------------------------------
     printf("Test %d: Summary\n", ++test_num);
     printf("  +-------------------------------------+\n");

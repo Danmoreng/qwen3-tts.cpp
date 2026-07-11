@@ -6,9 +6,29 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace qwen3_tts {
+
+namespace {
+
+bool is_cuda_backend(ggml_backend_t backend) {
+    ggml_backend_dev_t device = backend ? ggml_backend_get_device(backend) : nullptr;
+    const char * name = device ? ggml_backend_dev_name(device) : nullptr;
+    return name && std::strstr(name, "CUDA") != nullptr;
+}
+
+bool device_chain_legacy_forced() {
+    const char * value = std::getenv("QWEN3_TTS_CODE_PRED_DEVICE_CHAIN");
+    return value && value[0] == '0';
+}
+
+constexpr int32_t code_pred_device_chain_min_frames = 64;
+constexpr int32_t code_pred_device_chain_hidden_size = 1024;
+
+} // namespace
 
 bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
                               const float * speaker_embd, int32_t max_len,
@@ -120,6 +140,14 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             return false;
         }
     }
+    impl_->state.code_pred_device_chain_requested =
+        !device_chain_legacy_forced() &&
+        temperature == 0.0f &&
+        max_len >= code_pred_device_chain_min_frames &&
+        cfg.hidden_size == code_pred_device_chain_hidden_size &&
+        is_cuda_backend(impl_->state.backend) &&
+        impl_->state.code_pred_tokens_bridge;
+    impl_->state.code_pred_device_chain_active = false;
     transformer_internal::ops::maybe_reserve_scheduler_graphs(*this, prefill_len, required_ctx);
 
     std::vector<float> hidden_out;

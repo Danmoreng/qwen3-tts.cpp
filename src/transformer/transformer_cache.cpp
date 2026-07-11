@@ -28,6 +28,7 @@ void reset_scheduler_reserve_state(tts_transformer_state & state) {
     }
     state.code_pred_replay_ready = false;
     state.code_pred_replay_failed = false;
+    state.code_pred_replay_device_chain = false;
     state.code_pred_replay_graphs.clear();
     for (ggml_backend_sched_t replay_sched : state.code_pred_replay_scheds) {
         if (replay_sched) {
@@ -62,6 +63,10 @@ void clear_code_pred_static_tensors(tts_transformer_state & state) {
     state.code_pred_prefill_mask_tensor = nullptr;
     state.code_pred_step_pos.clear();
     state.code_pred_step_mask_tensors.clear();
+    state.code_pred_tokens_bridge = nullptr;
+    state.code_pred_device_chain_requested = false;
+    state.code_pred_device_chain_active = false;
+    state.code_pred_device_chain_logged = false;
 }
 
 } // namespace
@@ -146,7 +151,7 @@ bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
     impl_->state.code_pred_static_mask_n_ctx = 0;
     impl_->state.code_pred_graph_stats_logged.assign(15, 0);
 
-    const size_t n_tensors = cfg.code_pred_layers * 2 + 2 + 15 * 2;
+    const size_t n_tensors = cfg.code_pred_layers * 2 + 2 + 15 * 2 + 1;
     const size_t ctx_size = n_tensors * ggml_tensor_overhead();
 
     struct ggml_init_params params = {
@@ -196,6 +201,10 @@ bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
         ggml_format_name(impl_->state.code_pred_step_mask_tensors[step],
                          "code_pred_step_%02d_mask_const", step);
     }
+
+    impl_->state.code_pred_tokens_bridge = ggml_new_tensor_1d(
+        impl_->state.code_pred_cache.ctx, GGML_TYPE_I32, 15);
+    ggml_set_name(impl_->state.code_pred_tokens_bridge, "code_pred_tokens_bridge");
 
     impl_->state.code_pred_cache.buffer = ggml_backend_alloc_ctx_tensors(impl_->state.code_pred_cache.ctx, impl_->state.backend);
     if (!impl_->state.code_pred_cache.buffer) {
@@ -315,7 +324,10 @@ void transformer_internal::ops::maybe_reserve_scheduler_graphs(TTSTransformer & 
     ok &= reserve_graph(build_step_graph(self, std::max<int32_t>(0, required_ctx - 1), true), "talker step");
     const bool use_dedicated_code_pred_sched =
         impl->state.code_pred_prefill_sched && impl->state.code_pred_step_sched;
-    if (!use_dedicated_code_pred_sched) {
+    // Device-chained greedy graphs have a different input/output contract
+    // (the token bridge is part of every graph). Let the autoregressive
+    // runtime reserve those graphs after it selects the decoding mode.
+    if (!use_dedicated_code_pred_sched && !impl->state.code_pred_device_chain_requested) {
         ok &= reserve_graph(build_code_pred_prefill_graph(self, impl->state.hidden_bridge != nullptr), "code predictor prefill");
 
         for (int step = 1; step < 15; ++step) {

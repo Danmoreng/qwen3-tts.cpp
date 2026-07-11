@@ -47,7 +47,7 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | 1.7B regression coverage in automated tests | Partial | Lightweight 1.7B regression is in place; promote to stricter deterministic artifact-backed gate in CI where practical. |
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
 | M-RoPE position handling consistency | Partial | Remaining path consistency should still be audited and documented with explicit expected layouts per path. |
-| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; decoder Flash Attention was measured and not retained, while Snake is already backend-fused. The next candidate is a device-chained greedy Code Predictor. |
+| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; decoder Flash Attention was measured and not retained, Snake is already backend-fused, and 0.6B CUDA greedy Code Predictor dispatch now selects the device bridge automatically for requests with at least 64 max frames. |
 | Android / Snapdragon support | Backlog | Add Android NDK build support for the native library, portable model-path handling, and an initial CPU-first deployment path; evaluate Vulkan and Hexagon acceleration later for Snapdragon-class devices. |
 
 ## Performance Baselines and Targets
@@ -125,7 +125,7 @@ Exit criteria:
 ## Immediate Next Actions
 
 1. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
-2. Design and benchmark a device-chained greedy Code Predictor supergraph.
+2. Expand the automatic 0.6B device-chained greedy Code Predictor matrix on additional prompts; keep 1.7B legacy until a stable gain is demonstrated.
 3. Expand 1.7B cross-speaker/perceptual validation to include instruction-heavy prompts.
 4. Update `docs/performance_roadmap.md` after every accepted or rejected performance experiment.
 5. Keep Android support in backlog until correctness and benchmark gates are stable; when started, begin with NDK/shared-library portability and CPU-first on-device validation.

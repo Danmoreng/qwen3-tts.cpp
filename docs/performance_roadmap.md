@@ -205,7 +205,7 @@ end-to-end decoder win across the sliding-window boundary and long-input cases.
 
 ### P2: Fully Device-Chained Greedy Code Predictor
 
-Status: Partial
+Status: Partial / automatic 0.6B long-request dispatch
 
 The standalone GPU `argmax` experiment regressed because each codebook step
 still synchronized with the host. A useful implementation must remove the
@@ -232,6 +232,61 @@ reproducible device sampler and is a separate project.
 This is a high-risk change. Require byte-identical greedy codes, long
 multi-request testing, both model sizes, CUDA-Graph on/off diagnostics, and a
 clear win over the current host-sampled path.
+
+The first safe slice is now selected automatically for 0.6B CUDA requests with
+`temperature=0` and at least 64 requested max frames. Each Code Predictor graph
+writes its argmax token into a persistent 15-element I32 device bridge. The
+next graph reads the previous slot directly, and the host reads the complete
+codebook sequence once at the end. Replay graphs remain enabled; sampled
+decoding, 1.7B, and CPU backends retain the legacy host-token bridge. The
+environment setting `QWEN3_TTS_CODE_PRED_DEVICE_CHAIN=0` is retained only as a
+diagnostic fallback for A/B tests; there is no opt-in path.
+
+The initial 0.6B resident smoke used four interleaved process pairs, two
+warm-ups, and four measured requests per process. Raw generation median
+improved from `729.5 ms` to `710.0 ms` (`+2.67%`); paired process medians
+improved by about `+1.03%` with two of four positive pairs. The 1.7B
+exploratory three-pair smoke improved the raw median from `641 ms` to `637 ms`
+(`+0.62%`), with two of three positive pairs. The graphs-disabled diagnostic
+remained byte-identical but was slightly slower.
+
+The length matrix explains the automatic threshold. With two process pairs,
+three warm resident measurements, and the same greedy settings, the raw
+generation medians were:
+
+| Model | 8 max frames | 32 max frames | 64 max frames | 96 max frames | 128 max frames |
+|---|---:|---:|---:|---:|---:|
+| 0.6B | -5.08% | -2.30% | +6.82% | +5.11% | 0.00% |
+| 1.7B | -11.89% | -2.13% | +1.37% | -1.46% | +2.82% |
+
+Short requests therefore keep the legacy graph automatically. For 0.6B, the
+device bridge is selected only from 64 requested frames onward; 1.7B remains
+legacy because its measured gains were inconsistent. The initial automatic
+dispatch matrix confirmed byte-identical outputs at every tested length for
+both model sizes.
+
+The final post-implementation validation used four interleaved process pairs,
+two warm-ups, and five resident measurements per process at 64 requested
+frames. The 0.6B paired median gain was `+3.25%` with three of four positive
+pairs. The 1.7B result was effectively neutral at `+0.33%`, with two of four
+positive pairs and high process variance; this is why automatic dispatch is
+limited to the measured 1024-hidden-size profile. A 32-frame control confirmed
+that automatic dispatch remains on the legacy graph.
+
+Replay-graph reuse is keyed by the active token-bridge contract. A new resident
+regression sequence exercises `32 -> 64 -> 32 -> 64` greedy requests followed
+by `sampled -> greedy -> sampled` on one transformer instance. Repeated outputs
+were byte-identical on 0.6B while crossing the bridge contract, and the same
+sequence confirmed deterministic legacy fallback on 1.7B. This prevents a
+graph built for the host-token contract from being replayed as a device-token
+graph, or vice versa.
+
+The final post-dispatch hash matrix covered 0.6B at 8, 32, 64, 96, and 128
+requested frames plus 1.7B at 64 and 128. Every automatic-versus-legacy pair
+produced byte-identical generated-code JSON, decoder-code JSON, and WAV SHA-256
+hashes. The sampled fallback and the CUDA-graphs-off diagnostic also matched
+the legacy path byte-for-byte. Raw artifacts are under the ignored
+`benchmark_output/code_pred_device_chain` directory.
 
 ### P2: Asynchronous Code Predictor I/O
 

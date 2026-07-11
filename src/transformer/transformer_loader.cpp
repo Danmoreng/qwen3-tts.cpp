@@ -44,6 +44,10 @@ bool env_flag_disabled(const char * name) {
 void TTSTransformer::unload_model() {
     free_tts_kv_cache(impl_->state.cache);
     free_tts_kv_cache(impl_->state.code_pred_cache);
+    impl_->state.code_pred_tokens_bridge = nullptr;
+    impl_->state.code_pred_device_chain_requested = false;
+    impl_->state.code_pred_device_chain_active = false;
+    impl_->state.code_pred_device_chain_logged = false;
     free_hidden_bridge(impl_->state);
     free_transformer_model(impl_->model);
 
@@ -77,6 +81,7 @@ void TTSTransformer::unload_model() {
     impl_->state.code_pred_replay_graphs.clear();
     impl_->state.code_pred_replay_ready = false;
     impl_->state.code_pred_replay_failed = false;
+    impl_->state.code_pred_replay_device_chain = false;
     if (impl_->state.sched) {
         ggml_backend_sched_free(impl_->state.sched);
         impl_->state.sched = nullptr;
@@ -89,6 +94,7 @@ void TTSTransformer::unload_model() {
     impl_->state.code_pred_sched_reserve_failed = false;
     impl_->state.code_pred_replay_ready = false;
     impl_->state.code_pred_replay_failed = false;
+    impl_->state.code_pred_replay_device_chain = false;
     if (impl_->state.backend) {
         release_preferred_backend(impl_->state.backend);
         impl_->state.backend = nullptr;
