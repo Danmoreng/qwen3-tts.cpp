@@ -1,6 +1,6 @@
 # Qwen3-TTS Development Plan
 
-Last updated: 2026-03-09
+Last updated: 2026-07-11
 
 ## Purpose
 
@@ -9,6 +9,9 @@ Maintain a single, current plan that separates:
 - What is already implemented
 - What is partially implemented or unverified
 - What should be implemented next
+
+The detailed CUDA and inference optimization backlog, including completed and
+rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md).
 
 ## Current State (Implemented)
 
@@ -30,6 +33,10 @@ Maintain a single, current plan that separates:
 | 1.7B instruction prompt parity | Implemented | C++ now routes `--instruct/--instruction` through separate instruction tokens (`encode_instruct` + transformer `instruct_tokens`), mirroring Python `instruct_ids` behavior and preventing read-aloud instruction regressions. |
 | 1.7B converter/regeneration baseline | Implemented | Team baseline now assumes regenerated Serveurperso-compatible `qwen-talker-1.7b-base-Q8_0.gguf` from current converter before runtime/debug comparisons. |
 | Lightweight 1.7B deterministic gate | Implemented | A lightweight 1.7B regression check is now part of the active regression workflow. |
+| Recurrent SwiGLU fusion | Implemented | Talker and Code Predictor recurrent FFNs use `ggml_swiglu_split()`; commit `e9c4a21`. |
+| Code Predictor KV physical reuse | Implemented | Per-frame physical zeroing is disabled by default after overwrite-safety validation; commit `99ebc44`. |
+| CUDA packed recurrent QKV | Implemented | Code Predictor uses packed QKV for both model sizes; Talker uses it for 1.7B. Final paired gain was about 4.1% on 0.6B and 5.0% on 1.7B; commit `93867a5`. |
+| Persistent performance roadmap | Implemented | `docs/performance_roadmap.md` records completed, rejected, and open performance work with a reusable validation protocol. |
 
 ## Current State (Open / Needs Verification)
 
@@ -38,7 +45,7 @@ Maintain a single, current plan that separates:
 | 1.7B regression coverage in automated tests | Partial | Lightweight 1.7B regression is in place; promote to stricter deterministic artifact-backed gate in CI where practical. |
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
 | M-RoPE position handling consistency | Partial | Remaining path consistency should still be audited and documented with explicit expected layouts per path. |
-| CUDA throughput benchmark refresh | Needs verification | Re-run and publish comparable CPU/CUDA benchmark data after the 1.7B predictor changes. |
+| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; next candidate is consolidating the decoder's 15 shared rest-codebook projections. |
 | Android / Snapdragon support | Backlog | Add Android NDK build support for the native library, portable model-path handling, and an initial CPU-first deployment path; evaluate Vulkan and Hexagon acceleration later for Snapdragon-class devices. |
 
 ## Performance Baselines and Targets
@@ -90,7 +97,8 @@ Exit criteria:
 
 Scope:
 
-- Continue CUDA-centric optimizations for encoder, predictor orchestration, and vocoder.
+- Continue CUDA-centric optimizations using `docs/performance_roadmap.md` as the
+  source of truth for experiment order and prior negative results.
 - Prioritize wins that preserve output quality and determinism gates.
 
 Exit criteria:
@@ -115,9 +123,9 @@ Exit criteria:
 ## Immediate Next Actions
 
 1. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
-2. Re-run baseline CPU and CUDA benchmarks with identical prompts, token limits, and reporting fields.
+2. Implement and A/B-test summing decoder rest-codebook embeddings before their shared projection.
 3. Expand 1.7B cross-speaker/perceptual validation to include instruction-heavy prompts.
-4. Update this document with measured results and move verified items from "Open" to "Implemented".
+4. Update `docs/performance_roadmap.md` after every accepted or rejected performance experiment.
 5. Keep Android support in backlog until correctness and benchmark gates are stable; when started, begin with NDK/shared-library portability and CPU-first on-device validation.
 
 ## Ownership and Update Rule
