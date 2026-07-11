@@ -136,8 +136,7 @@ struct ggml_cgraph * transformer_internal::ops::build_prefill_forward_graph(TTST
         struct ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, cur);
         struct ggml_tensor * up = ggml_mul_mat(ctx0, layer.ffn_up, cur);
 
-        gate = ggml_silu(ctx0, gate);
-        cur = ggml_mul(ctx0, gate, up);
+        cur = ggml_swiglu_split(ctx0, gate, up);
 
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
 
@@ -335,8 +334,7 @@ struct ggml_cgraph * transformer_internal::ops::build_step_graph(TTSTransformer 
         struct ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, cur);
         struct ggml_tensor * up = ggml_mul_mat(ctx0, layer.ffn_up, cur);
 
-        gate = ggml_silu(ctx0, gate);
-        cur = ggml_mul(ctx0, gate, up);
+        cur = ggml_swiglu_split(ctx0, gate, up);
 
         cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);
 
