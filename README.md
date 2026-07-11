@@ -491,6 +491,7 @@ Runtime performance toggles:
 |----------|---------|
 | `QWEN3_TTS_CODE_PRED_REPLAY_GRAPHS=0` | Disable default Code Predictor replay graphs for backend or memory diagnostics |
 | `QWEN3_TTS_TALKER_REPLAY_GRAPHS=0` | Disable default Talker step replay graphs for backend or memory diagnostics |
+| `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Restore legacy per-frame physical Code Predictor KV zeroing for parity diagnostics; by default each live row is overwritten before reuse |
 
 ## Testing and Debugging
 

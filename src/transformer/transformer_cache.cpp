@@ -52,6 +52,11 @@ bool env_flag_enabled(const char * name) {
 #endif
 }
 
+bool code_pred_zero_kv_enabled() {
+    static const bool enabled = env_flag_enabled("QWEN3_TTS_CODE_PRED_ZERO_KV");
+    return enabled;
+}
+
 void clear_code_pred_static_tensors(tts_transformer_state & state) {
     state.code_pred_prefill_pos = nullptr;
     state.code_pred_prefill_mask_tensor = nullptr;
@@ -198,6 +203,11 @@ bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
         return false;
     }
 
+    // Initialize the cache once. Every predictor pass overwrites each row
+    // before that row becomes unmasked; fixed causal masks hide all stale
+    // future rows. Re-uploading zeroes before every frame is redundant.
+    ggml_backend_buffer_clear(impl_->state.code_pred_cache.buffer, 0);
+
     const int32_t prefill_pos[2] = {0, 1};
     ggml_backend_tensor_set(impl_->state.code_pred_prefill_pos, prefill_pos, 0, sizeof(prefill_pos));
 
@@ -229,6 +239,14 @@ bool TTSTransformer::init_code_pred_kv_cache(int32_t n_ctx) {
 
 void TTSTransformer::clear_code_pred_kv_cache() {
     impl_->state.code_pred_cache.n_used = 0;
+
+    // The default hot path reuses the physical cache storage; every live row
+    // is overwritten before it becomes unmasked. Keep the previous physical
+    // clear as a parity/debug fallback across backends and model variants.
+    if (!code_pred_zero_kv_enabled()) {
+        return;
+    }
+
     static thread_local std::vector<uint8_t> zero_buf;
 
     size_t max_bytes = 0;
