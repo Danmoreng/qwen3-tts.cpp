@@ -195,6 +195,7 @@ struct tts_transformer_state {
     struct ggml_context * hidden_bridge_ctx = nullptr;
     ggml_backend_buffer_t hidden_bridge_buffer = nullptr;
     struct ggml_tensor * hidden_bridge = nullptr;
+    struct ggml_tensor * hidden_bridge_snapshot = nullptr;
 
     tts_kv_cache cache;
     tts_kv_cache code_pred_cache;
@@ -209,6 +210,12 @@ struct tts_transformer_private {
     std::vector<float> cached_reference_codec_embed;
     int32_t cached_reference_frames = 0;
     int32_t cached_reference_codebooks = 0;
+    std::vector<float> cached_icl_prefill_key;
+    std::vector<float> cached_icl_prefill_logits;
+    std::vector<float> cached_icl_prefill_hidden;
+    int32_t cached_icl_prefill_len = 0;
+    int32_t cached_icl_prefill_n_ctx = 0;
+    bool cached_icl_prefill_valid = false;
     CoreMLCodePredictor coreml_code_predictor;
     bool use_coreml_code_predictor = false;
     std::string coreml_code_predictor_path;

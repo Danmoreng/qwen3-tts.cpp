@@ -30,6 +30,11 @@ bool code_pred_supergraph_legacy_forced() {
     return value && value[0] == '0';
 }
 
+bool icl_prefill_cache_legacy_forced() {
+    const char * value = std::getenv("QWEN3_TTS_ICL_PREFILL_CACHE");
+    return value && value[0] == '0';
+}
+
 constexpr int32_t code_pred_device_chain_min_frames = 64;
 constexpr int32_t code_pred_device_chain_hidden_size = 1024;
 
@@ -168,8 +173,47 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    if (!forward_prefill(prefill_embd.data(), prefill_len, 0, hidden_out, &logits)) {
-        return false;
+    const bool request_icl_prefill_cache =
+        !icl_prefill_cache_legacy_forced() &&
+        !trace_cfg.enabled &&
+        impl_->state.hidden_bridge && impl_->state.hidden_bridge_snapshot &&
+        reference_tokens && n_reference_tokens > 0 &&
+        reference_codes && n_reference_frames > 0;
+    const bool icl_prefill_cache_hit =
+        request_icl_prefill_cache &&
+        impl_->cached_icl_prefill_valid &&
+        impl_->cached_icl_prefill_len == prefill_len &&
+        impl_->cached_icl_prefill_n_ctx == impl_->state.cache.n_ctx &&
+        impl_->cached_icl_prefill_key.size() == prefill_embd.size() &&
+        memcmp(impl_->cached_icl_prefill_key.data(), prefill_embd.data(),
+               prefill_embd.size() * sizeof(float)) == 0;
+    if (icl_prefill_cache_hit) {
+        logits = impl_->cached_icl_prefill_logits;
+        last_hidden_ = impl_->cached_icl_prefill_hidden;
+        if (impl_->state.hidden_bridge && impl_->state.hidden_bridge_snapshot) {
+            ggml_backend_tensor_copy(impl_->state.hidden_bridge_snapshot,
+                                     impl_->state.hidden_bridge);
+        }
+        impl_->state.cache.n_used = prefill_len;
+        fprintf(stderr, "  Talker ICL prefill cache: reused %d rows\n", prefill_len);
+    } else {
+        if (!forward_prefill(prefill_embd.data(), prefill_len, 0, hidden_out, &logits)) {
+            return false;
+        }
+        if (request_icl_prefill_cache) {
+            impl_->cached_icl_prefill_key = prefill_embd;
+            impl_->cached_icl_prefill_logits = logits;
+            impl_->cached_icl_prefill_hidden = last_hidden_;
+            impl_->cached_icl_prefill_len = prefill_len;
+            impl_->cached_icl_prefill_n_ctx = impl_->state.cache.n_ctx;
+            impl_->cached_icl_prefill_valid = true;
+            if (impl_->state.hidden_bridge && impl_->state.hidden_bridge_snapshot) {
+                ggml_backend_tensor_copy(impl_->state.hidden_bridge,
+                                         impl_->state.hidden_bridge_snapshot);
+            }
+        } else {
+            impl_->cached_icl_prefill_valid = false;
+        }
     }
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();

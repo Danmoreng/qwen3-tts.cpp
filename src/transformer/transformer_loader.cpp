@@ -32,6 +32,7 @@ void free_hidden_bridge(tts_transformer_state & state) {
         state.hidden_bridge_ctx = nullptr;
     }
     state.hidden_bridge = nullptr;
+    state.hidden_bridge_snapshot = nullptr;
 }
 
 bool env_flag_disabled(const char * name) {
@@ -136,6 +137,12 @@ void TTSTransformer::unload_model() {
     impl_->cached_reference_codec_embed.clear();
     impl_->cached_reference_frames = 0;
     impl_->cached_reference_codebooks = 0;
+    impl_->cached_icl_prefill_key.clear();
+    impl_->cached_icl_prefill_logits.clear();
+    impl_->cached_icl_prefill_hidden.clear();
+    impl_->cached_icl_prefill_len = 0;
+    impl_->cached_icl_prefill_n_ctx = 0;
+    impl_->cached_icl_prefill_valid = false;
 }
 
 bool TTSTransformer::load_model(const std::string & model_path) {
@@ -290,6 +297,10 @@ bool TTSTransformer::load_model(const std::string & model_path) {
             ggml_new_tensor_1d(impl_->state.hidden_bridge_ctx, GGML_TYPE_F32,
                                impl_->model.config.hidden_size);
         ggml_set_name(impl_->state.hidden_bridge, "talker_hidden_bridge");
+        impl_->state.hidden_bridge_snapshot =
+            ggml_new_tensor_1d(impl_->state.hidden_bridge_ctx, GGML_TYPE_F32,
+                               impl_->model.config.hidden_size);
+        ggml_set_name(impl_->state.hidden_bridge_snapshot, "talker_hidden_bridge_snapshot");
         impl_->state.hidden_bridge_buffer =
             ggml_backend_alloc_ctx_tensors(impl_->state.hidden_bridge_ctx, impl_->state.backend);
         if (!impl_->state.hidden_bridge_buffer) {

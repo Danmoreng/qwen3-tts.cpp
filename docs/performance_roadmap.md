@@ -292,6 +292,67 @@ end-to-end decoder win across the sliding-window boundary and long-input cases.
 
 ## Open Work Queue
 
+### 2026-07-12: Combined Greedy Talker/Code-Predictor Frame Supergraph
+
+- Status: Rejected and removed.
+- Hypothesis: append the recurrent Talker step, device-side CB0 suppression and
+  repetition penalty, CB0 argmax, and the accepted 15-step Code Predictor
+  supergraph into one scheduler graph, eliminating one graph boundary and the
+  CB0 logits readback per generated frame.
+- Correctness: Q8_0 0.6B and 1.7B at 32 and 96 frames were byte-identical with
+  the established path for generated-code JSON and WAV output. The 1.7B cases
+  used the Freeman ICL prompt. An additional 0.6B eight-frame smoke also matched
+  exactly. The combined graph contained roughly 3,600 nodes.
+- Performance: four interleaved process pairs per model, two warm-ups and five
+  resident measurements per process at 96 frames. 0.6B raw medians improved
+  only from `706 -> 696 ms` wall and `663 -> 652 ms` generation; paired wall
+  results were positive in only `2/4` pairs (`+1.45/-1.00/-0.28/+3.21%`).
+  On 1.7B, raw medians regressed from `764 -> 803 ms` wall and `712 -> 752 ms`
+  generation. All four paired wall results were negative
+  (`-4.25/-0.26/-6.44/-2.67%`).
+- Decision: removed. Device-side repetition postprocessing and the larger
+  combined graph cost more than the saved synchronization on 1.7B, while the
+  0.6B result remained below a stable acceptance threshold. Raw artifacts are
+  retained under ignored `benchmark_output/greedy_frame_supergraph`.
+
+### 2026-07-12: Exact Resident ICL Talker Prefill Reuse
+
+- Status: Accepted / automatic for exact repeated ICL prefills.
+- Constraint: the official ICL layout overlays target-text embeddings with
+  reference-code positions. A cache keyed only by voice would therefore be
+  incorrect when target text changes. Dispatch requires a byte-identical full
+  prefill embedding; changed text, voice, language, instruction, context size,
+  trace mode, or direct public prefill/step use invalidates or misses the cache.
+- Implementation: after a successful ICL prefill, immutable Talker KV prefix
+  rows remain in the resident cache. The full prefill embedding is retained as
+  an exact host key, first-frame logits are retained on the host, and the final
+  hidden bridge is saved/restored through a backend-resident tensor copy. A hit
+  therefore skips the multi-token Talker forward without copying the full KV
+  cache. `QWEN3_TTS_ICL_PREFILL_CACHE=0` is a diagnostic kill switch, not an
+  opt-in path.
+- Correctness: four-pair performance matrices produced `40/40` identical WAVs
+  between automatic and disabled paths for both Q8_0 0.6B and 1.7B at 96 greedy
+  frames. A separate seeded 1.7B sampled matrix produced `6/6` identical WAVs.
+  Repeated outputs within every resident process were byte-identical.
+- 0.6B performance: four interleaved process pairs, two warm-ups and five
+  measurements per process. Raw medians improved `878 -> 856 ms` wall and
+  `797 -> 775 ms` generation; TTFA improved `50 -> 14 ms`. All `4/4` paired
+  wall, generation, and TTFA results were positive; paired TTFA savings were
+  `29-45 ms`.
+- 1.7B Freeman performance: the same protocol improved raw medians
+  `875 -> 872 ms` wall and `816 -> 809 ms` generation, effectively neutral
+  throughput within run variance. TTFA improved `38 -> 11 ms`, with all `4/4`
+  pairs saving `25-36 ms`.
+- Memory: the exact host key is about `3.0 MiB` for the tested 759-row 0.6B
+  prompt and `1.75 MiB` for the 224-row 1.7B Freeman prompt. Logits, saved
+  hidden state, and the backend hidden snapshot add only kilobytes. No second
+  full KV buffer is allocated.
+- Tests: the standard Windows suite passed `11/11` executed checks. The
+  optional sampled ICL smoke still reaches its pre-existing early EOS at
+  `0.08 s` with the cache both enabled and explicitly disabled; it is not a
+  cache hit and is recorded as an unrelated fixture/model behavior.
+- Artifacts: ignored `benchmark_output/icl_prefill_cache`.
+
 ### P2: Fully Device-Chained Greedy Code Predictor
 
 Status: Implemented / automatic CUDA greedy supergraph

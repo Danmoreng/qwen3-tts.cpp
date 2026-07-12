@@ -83,6 +83,9 @@ bool ensure_talker_replay_graph(TTSTransformer & self, tts_transformer_private &
 bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_tokens,
                                      int32_t n_past, std::vector<float> & output,
                                      std::vector<float> * logits_out) {
+    // A direct prefill call may overwrite rows owned by a cached generate()
+    // prefix. generate() records a new exact key after its own successful miss.
+    impl_->cached_icl_prefill_valid = false;
     if (!impl_->model.ctx) {
         error_msg_ = "Model not loaded";
         return false;
@@ -512,6 +515,7 @@ bool TTSTransformer::forward_step_internal(const float * step_embd,
 bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
                                   std::vector<float> & output,
                                   std::vector<float> * hidden_out) {
+    impl_->cached_icl_prefill_valid = false;
     return forward_step_internal(step_embd, nullptr, nullptr, n_past, output, hidden_out, true);
 }
 

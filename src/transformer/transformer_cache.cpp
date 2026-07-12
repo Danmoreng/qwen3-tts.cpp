@@ -86,6 +86,12 @@ bool TTSTransformer::init_kv_cache(int32_t n_ctx) {
     const ggml_type cache_type = use_f32_cache ? GGML_TYPE_F32 : GGML_TYPE_F16;
 
     free_tts_kv_cache(impl_->state.cache);
+    impl_->cached_icl_prefill_key.clear();
+    impl_->cached_icl_prefill_logits.clear();
+    impl_->cached_icl_prefill_hidden.clear();
+    impl_->cached_icl_prefill_len = 0;
+    impl_->cached_icl_prefill_n_ctx = 0;
+    impl_->cached_icl_prefill_valid = false;
 
     impl_->state.cache.n_ctx = n_ctx;
     impl_->state.cache.n_used = 0;
