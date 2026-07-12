@@ -273,6 +273,7 @@ hardware, or the surrounding graph architecture changes materially.
 | Standalone device-side greedy `argmax` | Rejected | Byte-identical, but approximately 1.9% slower on 0.6B and 5.6% slower on 1.7B; the extra kernel does not remove the synchronization by itself |
 | Naive decoder graph pointer reuse after scheduler reset | Rejected | Invalid allocation lifetime caused a CUDA illegal-memory-access failure on the second decode |
 | Dedicated decoder replay scheduler | Rejected | Correct and byte-identical, but neutral/slower offline; streaming graph rebuilds fell from 13 to 7 while decode time only changed from about 323 to 322 ms |
+| Reuse streaming wrapper slice/output vectors | Rejected | Inspired by qwentts.cpp `d17c33d`; codes and WAVs were byte-identical at 5 and 19 chunks, but four paired 1.7B runs regressed by median 1.59% wall / 3.25% decode at 19 chunks and were wall-neutral (-0.32%) at 5 chunks. Prototype removed; persistent decoder position/mask/codebook buffers were already present. |
 | Additional RMSNorm fusion patch | Inspected | GGML CUDA already fuses the relevant RMSNorm-to-Mul and RMSNorm-to-Mul-to-Add patterns |
 | Packed Talker QKV on 0.6B | Rejected | Small paired regression; packed Talker QKV remains limited to models with `hidden_size > 1024` |
 | Decoder pre-transformer Flash Attention | Rejected | Correct on fixed-code lengths 1, 32, 63, 64, 72, 128, and 252, but isolated CUDA medians were inconsistent: -5.0% at 63 frames, -0.5% at 64, +7.3% at 72, +2.0% at 128, and -2.1% at 252; opt-in prototype removed |
@@ -477,13 +478,26 @@ Status: Open
 The tested replay scheduler did not materially improve performance. A larger
 design would keep persistent decoder state per common chunk width and overlap:
 
+Profiling after the qwentts.cpp `d17c33d` scratch-buffer comparison confirms
+that host allocation is not the limiting factor here. With a `0.25 s` chunk,
+the current overlap decoder consumed `532` input/context frames to emit `57`
+new frames across `19` chunks; `442/447 ms` was graph compute while graph
+building was only `3 ms`. At `1.0 s`, it consumed `182` input/context frames
+for the same `57` emitted frames and spent `230/234 ms` in compute. The next
+prototype must therefore preserve transformer KV and causal convolution state
+between chunks instead of merely caching graphs or host vectors.
+
 ```text
 generate chunk N+1        decode chunk N
         GPU/stream A  ||  GPU/stream B or bounded worker queue
 ```
 
 This requires explicit backpressure, bounded memory, deterministic chunk
-ordering, final-tail handling, and comparison against non-streaming audio.
+ordering, final-tail handling, and comparison against non-streaming audio. Its
+correctness gate must cover chunk sizes on both sides of the decoder sliding
+window, byte-stable repeated runs where feasible, waveform error/correlation
+against the current overlap implementation, and reset/reuse across resident
+requests.
 
 ### P3: Continuous Request Batching
 
