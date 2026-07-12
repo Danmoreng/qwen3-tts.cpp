@@ -473,31 +473,77 @@ upstream backend change.
 
 ### P2: Stateful Streaming Decoder and Pipeline Overlap
 
-Status: Open
+Status: Completed for low-latency chunks
 
-The tested replay scheduler did not materially improve performance. A larger
-design would keep persistent decoder state per common chunk width and overlap:
+The accepted implementation keeps the decoder transformer's sliding-window KV
+ring plus every causal convolution/transposed-convolution carry on the backend.
+Each streaming call therefore consumes only new codec frames and emits exactly
+`1920` new samples per frame. Persistent graphs are keyed by chunk width, and a
+single backend-resident snapshot avoids decoding an unchanged ICL reference on
+every resident request. Wide graphs used only to create that snapshot are freed
+after priming.
 
-Profiling after the qwentts.cpp `d17c33d` scratch-buffer comparison confirms
-that host allocation is not the limiting factor here. With a `0.25 s` chunk,
-the current overlap decoder consumed `532` input/context frames to emit `57`
-new frames across `19` chunks; `442/447 ms` was graph compute while graph
-building was only `3 ms`. At `1.0 s`, it consumed `182` input/context frames
-for the same `57` emitted frames and spent `230/234 ms` in compute. The next
-prototype must therefore preserve transformer KV and causal convolution state
-between chunks instead of merely caching graphs or host vectors.
+Dispatch is automatic for chunks up to four codec frames. An exploratory
+crossover matrix on the RTX 5080 Laptop GPU showed the end-to-end gain at four
+frames, but regressions from six frames onward; larger chunks consequently keep
+the established overlap implementation. `QWEN3_TTS_STATEFUL_STREAM_DECODER=0`
+is a diagnostic kill switch, not an opt-in path.
 
-```text
-generate chunk N+1        decode chunk N
-        GPU/stream A  ||  GPU/stream B or bounded worker queue
-```
+Validation used Q8_0 codec/talker models, greedy generation, CUDA, and the
+pre-change `f9898ae` binary as baseline:
 
-This requires explicit backpressure, bounded memory, deterministic chunk
-ordering, final-tail handling, and comparison against non-streaming audio. Its
-correctness gate must cover chunk sizes on both sides of the decoder sliding
-window, byte-stable repeated runs where feasible, waveform error/correlation
-against the current overlap implementation, and reset/reuse across resident
-requests.
+- 0.6B ICL, 64 generated frames, `0.25 s` chunks, two processes per mode and
+  three resident measurements per process: wall median `942.5 -> 598.5 ms`
+  (`36.5%` faster), decoder median `369.5 -> 65.5 ms` (`82.3%` faster).
+- 1.7B Freeman ICL, 96 generated frames, `0.25 s` chunks, four interleaved
+  pairs: wall gain median `17.6%` with `4/4` positive pairs; decoder gain median
+  `39.8%`, also `4/4` positive.
+- The four-frame crossover probe remained positive (`15.5%` wall, `9.1%`
+  decoder). Six, eight, and ten frames regressed, which defines the dispatch
+  boundary. At `1.0 s`, the automatic fallback is byte-identical to `f9898ae`.
+- Fixed 63-frame decoder codes now exercise chunk widths `1/3/4` in the
+  component test. Stateful versus full decode measured cosine `0.998952` and
+  RMS error `0.002032`; repeated snapshot restore is byte-deterministic.
+- For 1.7B Freeman ICL at 32 frames, stateful versus offline improved waveform
+  cosine from `0.931845` (overlap) to `0.987907`, with RMS error improving from
+  `0.011553` to `0.004864`. Generated greedy codes remained identical.
+- A resident 1.7B snapshot smoke produced four byte-identical WAVs. After the
+  first warm-up, TTFA was median `29 ms` and decoder time median `45 ms`.
+- The full Windows suite passed `11/11` executed checks with the optional ICL
+  smoke skipped. The focused decoder test, including the new streaming and
+  snapshot gates, also passed.
+
+Persistent state and its optional ICL snapshot each occupy `8.54 MiB`. Graph
+scratch is width-dependent (`5.29/15.84/21.11 MiB` for `1/3/4` frames). Initial
+reference priming temporarily builds wider graphs (`168.77 MiB` at 32 frames),
+then releases them after capturing the snapshot.
+
+Actual generation/decoder overlap remains a separate future scheduling change;
+this milestone removes redundant decoder work without introducing a worker
+thread or changing callback ordering.
+
+A follow-up framework matrix rebuilt Serveurperso qwentts.cpp at `d17c33d` and
+compared eight measured requests after two warm-ups using Freeman ICL, the 1.7B
+Q8_0 models, 96 greedy frames, and seed 42. qwen3 streaming explicitly used
+`0.25 s` chunks so the accepted stateful path was under test:
+
+- Resident buffered median: qwen3 `1.052 s` versus qwentts HTTP `1.1645 s`;
+  qwen3 was `9.7%` faster (`7.30x` versus `6.60x` realtime).
+- Resident streaming median: qwen3 `1.066 s` versus qwentts HTTP PCM `1.2045 s`;
+  qwen3 was `11.5%` faster (`7.21x` versus `6.38x` realtime).
+- Streaming TTFA median: qwen3 `26.0 ms` versus qwentts `34.95 ms` (`25.6%`
+  lower).
+- Cold pre-encoded median: qwen3 `3.104 s` versus qwentts `3.487 s` (`11.0%`
+  faster). Cold reference-WAV median was `3.669 s` versus `4.2125 s` (`12.9%`
+  faster).
+- All matrix outputs passed WAV validation and were exactly `7.68 s` long.
+
+The qwentts change itself was effective: relative to the earlier `bb250f5`
+matrix its server median improved by approximately `10.3%` buffered and `13.7%`
+streaming. The comparison above therefore uses the stronger rebuilt baseline,
+not the stale pre-`d17c33d` binaries. Raw results are retained in the ignored
+`benchmark_output/qwentts_matrix/freeman_greedy96_stateful_d17c33d_20260712-212303`
+artifact directory.
 
 ### P3: Continuous Request Batching
 
@@ -636,6 +682,7 @@ Copy this section for each future experiment:
 
 ## Recommended Execution Order
 
-1. Design stateful streaming decoder overlap.
-2. Treat continuous batching and mixed quantization as separate milestones.
-3. Promote the exact Python parity fixtures and broader 1.7B voice coverage.
+1. Treat continuous batching and mixed quantization as separate milestones.
+2. Promote the exact Python parity fixtures and broader 1.7B voice coverage.
+3. Revisit generation/decoder overlap only with an explicit bounded scheduling
+   design and measurements showing idle GPU capacity.

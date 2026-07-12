@@ -374,6 +374,14 @@ public:
         text_estimator_ = text_estimator;
         error_ = error;
         codes_.clear();
+        slice_.clear();
+        decoded_.clear();
+        const char * stateful_env = std::getenv("QWEN3_TTS_STATEFUL_STREAM_DECODER");
+        stateful_ = decoder_ && chunk_frames_ <= 4 &&
+            !(stateful_env && stateful_env[0] == '0') && decoder_->reset_stream();
+        if (stateful_) {
+            fprintf(stderr, "  Stateful streaming decoder: enabled\n");
+        }
         total_frames_ = 0;
         emit_start_frame_ = 0;
         preloaded_frames_ = 0;
@@ -382,13 +390,26 @@ public:
         return decoder_ && n_codebooks_ > 0 && callback_ && *callback_;
     }
 
-    void preload_context(const int32_t * codes, int32_t n_frames) {
+    bool preload_context(const int32_t * codes, int32_t n_frames) {
         if (!codes || n_frames <= 0) {
-            return;
+            return true;
+        }
+        if (stateful_) {
+            const int64_t start = get_time_ms();
+            if (!decoder_->prime_stream(codes, n_frames, decoded_)) {
+                set_error("Failed to prime stateful streaming decoder: " + decoder_->get_error());
+                return false;
+            }
+            decode_ms_ += get_time_ms() - start;
+            decode_input_frames_ += n_frames;
+            decode_context_frames_ += n_frames;
+            accumulate_decoder_timing();
+            decoded_.clear();
+            return true;
         }
         const int32_t seed_frames = std::min<int32_t>(n_frames, left_context_frames_);
         if (seed_frames <= 0) {
-            return;
+            return true;
         }
         const int32_t start_frame = n_frames - seed_frames;
         const int32_t * tail = codes + (size_t) start_frame * n_codebooks_;
@@ -396,6 +417,7 @@ public:
         total_frames_ = seed_frames;
         emit_start_frame_ = seed_frames;
         preloaded_frames_ = seed_frames;
+        return true;
     }
 
     bool push_frame(const int32_t * frame_codes) {
@@ -476,7 +498,7 @@ private:
     }
 
     bool emit_one(int32_t end_frame) {
-        const int32_t ctx = (emit_start_frame_ - left_context_frames_ > 0)
+        const int32_t ctx = stateful_ ? 0 : (emit_start_frame_ - left_context_frames_ > 0)
             ? left_context_frames_
             : emit_start_frame_;
         const int32_t slice_start = emit_start_frame_ - ctx;
@@ -492,37 +514,35 @@ private:
         decode_emitted_frames_ += std::max<int32_t>(0, emit_frames);
         decode_context_frames_ += ctx;
 
-        std::vector<int32_t> slice((size_t) slice_frames * n_codebooks_);
+        slice_.resize((size_t) slice_frames * n_codebooks_);
         const size_t offset = (size_t) slice_start * n_codebooks_;
         std::copy(codes_.begin() + offset,
-                  codes_.begin() + offset + slice.size(),
-                  slice.begin());
+                  codes_.begin() + offset + slice_.size(),
+                  slice_.begin());
 
-        std::vector<float> decoded;
         const int64_t t_decode_start = get_time_ms();
-        if (!decoder_->decode(slice.data(), slice_frames, decoded)) {
+        const bool decoded_ok = stateful_
+            ? decoder_->decode_stream(slice_.data(), slice_frames, decoded_)
+            : decoder_->decode(slice_.data(), slice_frames, decoded_);
+        if (!decoded_ok) {
             set_error("Streaming vocoder decode failed: " + decoder_->get_error());
             return false;
         }
-        const audio_decoder_timing & timing = decoder_->get_last_timing();
-        decode_graph_rebuilds_ += timing.graph_rebuilt;
-        decode_graph_build_ms_ += timing.graph_build_ms;
-        decode_graph_alloc_ms_ += timing.graph_alloc_ms;
-        decode_input_upload_ms_ += timing.input_upload_ms;
-        decode_graph_compute_ms_ += timing.graph_compute_ms;
-        decode_output_read_ms_ += timing.output_read_ms;
-        decoder_->clear_decode_cache();
+        accumulate_decoder_timing();
+        if (!stateful_) {
+            decoder_->clear_decode_cache();
+        }
         decode_ms_ += get_time_ms() - t_decode_start;
 
         const size_t drop = slice_frames > 0
-            ? (size_t) ((double) ctx / (double) slice_frames * (double) decoded.size() + 0.5)
+            ? (size_t) ((double) ctx / (double) slice_frames * (double) decoded_.size() + 0.5)
             : 0;
-        if (drop > decoded.size()) {
+        if (drop > decoded_.size()) {
             set_error("Streaming vocoder context trim is out of range");
             return false;
         }
-        const float * emit = decoded.data() + drop;
-        const int32_t n_emit = (int32_t) (decoded.size() - drop);
+        const float * emit = decoded_.data() + drop;
+        const int32_t n_emit = (int32_t) (decoded_.size() - drop);
         if (n_emit > 0) {
             tts_audio_chunk chunk;
             chunk.samples = emit;
@@ -554,6 +574,16 @@ private:
         return true;
     }
 
+    void accumulate_decoder_timing() {
+        const audio_decoder_timing & timing = decoder_->get_last_timing();
+        decode_graph_rebuilds_ += timing.graph_rebuilt;
+        decode_graph_build_ms_ += timing.graph_build_ms;
+        decode_graph_alloc_ms_ += timing.graph_alloc_ms;
+        decode_input_upload_ms_ += timing.input_upload_ms;
+        decode_graph_compute_ms_ += timing.graph_compute_ms;
+        decode_output_read_ms_ += timing.output_read_ms;
+    }
+
     AudioTokenizerDecoder * decoder_ = nullptr;
     int32_t n_codebooks_ = 0;
     int32_t chunk_frames_ = 1;
@@ -568,6 +598,7 @@ private:
     const text_span_estimator * text_estimator_ = nullptr;
     std::string * error_ = nullptr;
     bool cancelled_ = false;
+    bool stateful_ = false;
     int64_t decode_ms_ = 0;
     int32_t chunks_ = 0;
     int32_t decode_input_frames_ = 0;
@@ -580,6 +611,8 @@ private:
     int64_t decode_graph_compute_ms_ = 0;
     int64_t decode_output_read_ms_ = 0;
     std::vector<int32_t> codes_;
+    std::vector<int32_t> slice_;
+    std::vector<float> decoded_;
 };
 
 } // namespace
@@ -1414,7 +1447,12 @@ tts_result pipeline_internal::ops::synthesize_internal(Qwen3TTS & self,
             return result;
         }
         if (reference_codes_ptr) {
-            stream.preload_context(reference_codes_ptr->codes.data(), reference_codes_ptr->n_frames);
+            if (!stream.preload_context(reference_codes_ptr->codes.data(), reference_codes_ptr->n_frames)) {
+                result.error_msg = stream_error.empty()
+                    ? "Failed to prime streaming decoder"
+                    : stream_error;
+                return result;
+            }
         }
     }
 

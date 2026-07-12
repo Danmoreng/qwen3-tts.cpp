@@ -60,6 +60,7 @@ void AudioTokenizerDecoder::unload_model() {
     auto & mask_buf = impl_->mask_buf;
 
     decoder_internal::ops::release_cached_decode_graph(*this);
+    decoder_internal::ops::release_stream(*this);
     free_audio_decoder_model(model);
 
     if (state.sched) {
@@ -85,6 +86,10 @@ void AudioTokenizerDecoder::unload_model() {
     codebook_input_bufs.clear();
     positions_buf.clear();
     mask_buf.clear();
+    impl_->stream_codes_buf.clear();
+    impl_->stream_positions_buf.clear();
+    impl_->stream_rows_buf.clear();
+    impl_->stream_mask_buf.clear();
 }
 
 void decoder_internal::ops::normalize_codebooks(AudioTokenizerDecoder & self) {

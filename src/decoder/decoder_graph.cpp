@@ -276,4 +276,136 @@ struct ggml_cgraph * decoder_internal::ops::build_graph_impl(AudioTokenizerDecod
     return gf;
 }
 
+bool decoder_internal::ops::ensure_stream_graph(AudioTokenizerDecoder & self, int32_t n_frames) {
+    auto & impl = self.impl_;
+    auto & state = impl->state;
+    auto & model = impl->model;
+    auto & error_msg = impl->error_msg;
+    const auto & cfg = model.config;
+    if (n_frames <= 0 || n_frames > 32) {
+        error_msg = "Streaming decoder chunk width must be between 1 and 32";
+        return false;
+    }
+    auto existing = state.stream_graphs.find(n_frames);
+    if (existing != state.stream_graphs.end() && existing->second.gf) {
+        return true;
+    }
+    if (!ensure_stream_state(self)) {
+        return false;
+    }
+
+    audio_decoder_state::decoder_stream_graph & graph = state.stream_graphs[n_frames];
+    struct ggml_init_params params = {
+        ggml_tensor_overhead() * QWEN3_TTS_DEC_MAX_NODES +
+            ggml_graph_overhead_custom(QWEN3_TTS_DEC_MAX_NODES, false),
+        nullptr,
+        true,
+    };
+    graph.ctx = ggml_init(params);
+    if (!graph.ctx) {
+        error_msg = "Failed to initialize streaming decoder graph";
+        state.stream_graphs.erase(n_frames);
+        return false;
+    }
+    struct ggml_context * ctx0 = graph.ctx;
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, QWEN3_TTS_DEC_MAX_NODES, false);
+    struct ggml_tensor * codes = ggml_new_tensor_2d(
+        ctx0, GGML_TYPE_I32, n_frames, cfg.n_codebooks);
+    struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_frames);
+    struct ggml_tensor * rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_frames);
+    struct ggml_tensor * mask = ggml_new_tensor_2d(
+        ctx0, GGML_TYPE_F32, state.stream_ring, n_frames);
+    ggml_set_name(codes, "stream_codes");
+    ggml_set_name(positions, "stream_positions");
+    ggml_set_name(rows, "stream_rows");
+    ggml_set_name(mask, "stream_mask");
+    ggml_set_input(codes);
+    ggml_set_input(positions);
+    ggml_set_input(rows);
+    ggml_set_input(mask);
+
+    auto codebook_indices = [&](int cb) {
+        return ggml_cont(ctx0, ggml_view_1d(
+            ctx0, codes, n_frames, (size_t) cb * codes->nb[1]));
+    };
+    struct ggml_tensor * first_emb = ggml_get_rows(
+        ctx0, model.vq_first_codebook, codebook_indices(0));
+    struct ggml_tensor * first_weight = ggml_reshape_2d(
+        ctx0, model.vq_first_output_proj, cfg.codebook_dim, cfg.hidden_dim);
+    struct ggml_tensor * first_proj = ggml_mul_mat(ctx0, first_weight, first_emb);
+    struct ggml_tensor * rest_weight = ggml_reshape_2d(
+        ctx0, model.vq_rest_output_proj, cfg.codebook_dim, cfg.hidden_dim);
+    struct ggml_tensor * rest_sum = nullptr;
+    for (int cb = 0; cb < 15; ++cb) {
+        struct ggml_tensor * emb = ggml_get_rows(
+            ctx0, model.vq_rest_codebook[cb], codebook_indices(cb + 1));
+        rest_sum = rest_sum ? ggml_add(ctx0, rest_sum, emb) : emb;
+    }
+    struct ggml_tensor * cur = ggml_add(
+        ctx0, first_proj, ggml_mul_mat(ctx0, rest_weight, rest_sum));
+    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [T, hidden_dim]
+    cur = apply_causal_conv_stream(ctx0, gf, cur, model.pre_conv_w, model.pre_conv_b,
+                                   3, 1, state.stream_pre_conv);
+    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [latent_dim, T]
+    cur = ggml_mul_mat(ctx0, model.pre_tfm_input_proj_w, cur);
+    if (model.pre_tfm_input_proj_b) {
+        cur = ggml_add(ctx0, cur, model.pre_tfm_input_proj_b);
+    }
+    for (int i = 0; i < cfg.n_pre_tfm_layers; ++i) {
+        cur = apply_pre_tfm_layer_stream(
+            ctx0, gf, self, cur, model.pre_tfm_layers[i], n_frames,
+            positions, rows, mask, state.stream_k[(size_t) i],
+            state.stream_v[(size_t) i], state.stream_ring);
+    }
+    if (model.pre_tfm_norm_w) {
+        cur = apply_rms_norm(ctx0, cur, model.pre_tfm_norm_w, cfg.rms_norm_eps);
+    }
+    cur = ggml_mul_mat(ctx0, model.pre_tfm_output_proj_w, cur);
+    if (model.pre_tfm_output_proj_b) {
+        cur = ggml_add(ctx0, cur, model.pre_tfm_output_proj_b);
+    }
+    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [T, latent_dim]
+    for (int i = 0; i < 2; ++i) {
+        cur = apply_upsample_block_stream(
+            ctx0, gf, cur, model.upsample[i], state.stream_upsample_dw[i], i);
+    }
+    cur = apply_causal_conv_stream(ctx0, gf, cur, model.dec0_conv_w, model.dec0_conv_b,
+                                   7, 1, state.stream_dec_pre);
+    for (int i = 0; i < 4; ++i) {
+        cur = apply_decoder_block_stream(
+            ctx0, gf, self, cur, model.dec_blocks[i], cfg.upsample_rates[i],
+            state.stream_dec_carry[i], state.stream_dec_res[i], i);
+    }
+    cur = apply_snake(ctx0, cur, model.dec5_snake_alpha, model.dec5_snake_beta,
+                      model.dec5_snake_alpha_exp, model.dec5_snake_inv_beta_exp);
+    cur = apply_causal_conv_stream(ctx0, gf, cur, model.dec6_conv_w, model.dec6_conv_b,
+                                   7, 1, state.stream_dec_post);
+    cur = ggml_tanh(ctx0, cur);
+    cur = ggml_reshape_1d(ctx0, cur, cur->ne[0]);
+    ggml_set_name(cur, "stream_audio");
+    ggml_set_output(cur);
+    ggml_build_forward_expand(gf, cur);
+
+    graph.galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(state.backend));
+    if (!graph.galloc || !ggml_gallocr_alloc_graph(graph.galloc, gf)) {
+        error_msg = "Failed to allocate streaming decoder graph";
+        if (graph.galloc) {
+            ggml_gallocr_free(graph.galloc);
+        }
+        ggml_free(graph.ctx);
+        state.stream_graphs.erase(n_frames);
+        return false;
+    }
+    graph.gf = gf;
+    graph.codes = codes;
+    graph.positions = positions;
+    graph.rows = rows;
+    graph.mask = mask;
+    graph.audio = cur;
+    fprintf(stderr, "  Stateful decoder graph: %d frames, %.2f MiB scratch\n",
+            n_frames,
+            (double) ggml_gallocr_get_buffer_size(graph.galloc, 0) / (1024.0 * 1024.0));
+    return true;
+}
+
 } // namespace qwen3_tts

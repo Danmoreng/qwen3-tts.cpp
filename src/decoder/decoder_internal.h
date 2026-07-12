@@ -3,6 +3,7 @@
 #include "audio_tokenizer_decoder.h"
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-alloc.h"
 #include "gguf.h"
 
 #include <map>
@@ -133,6 +134,37 @@ struct audio_decoder_state {
     struct ggml_tensor * decode_mask_tensor = nullptr;
     struct ggml_tensor * decode_audio_tensor = nullptr;
     int32_t decode_graph_n_frames = 0;
+
+    struct decoder_stream_graph {
+        struct ggml_context * ctx = nullptr;
+        struct ggml_cgraph * gf = nullptr;
+        ggml_gallocr_t galloc = nullptr;
+        struct ggml_tensor * codes = nullptr;
+        struct ggml_tensor * positions = nullptr;
+        struct ggml_tensor * rows = nullptr;
+        struct ggml_tensor * mask = nullptr;
+        struct ggml_tensor * audio = nullptr;
+    };
+
+    bool stream_ready = false;
+    int32_t stream_pos = 0;
+    int32_t stream_ring = 128;
+    struct ggml_context * stream_ctx = nullptr;
+    ggml_backend_buffer_t stream_buffer = nullptr;
+    struct ggml_tensor * stream_pre_conv = nullptr;
+    struct ggml_tensor * stream_upsample_dw[2] = {nullptr};
+    struct ggml_tensor * stream_dec_pre = nullptr;
+    struct ggml_tensor * stream_dec_carry[4] = {nullptr};
+    struct ggml_tensor * stream_dec_res[4][3] = {{nullptr}};
+    struct ggml_tensor * stream_dec_post = nullptr;
+    std::vector<struct ggml_tensor *> stream_k;
+    std::vector<struct ggml_tensor *> stream_v;
+    std::map<int32_t, decoder_stream_graph> stream_graphs;
+    struct ggml_context * stream_snapshot_ctx = nullptr;
+    ggml_backend_buffer_t stream_snapshot_buffer = nullptr;
+    uint64_t stream_snapshot_key = 0;
+    int32_t stream_snapshot_pos = 0;
+    bool stream_snapshot_valid = false;
 };
 
 namespace decoder_internal {
@@ -144,6 +176,10 @@ struct ops {
                                                  struct ggml_context ** graph_ctx_out);
     static void release_cached_decode_graph(AudioTokenizerDecoder & self);
     static bool ensure_cached_decode_graph(AudioTokenizerDecoder & self, int32_t n_frames);
+    static void release_stream(AudioTokenizerDecoder & self);
+    static void release_stream_graphs_above(AudioTokenizerDecoder & self, int32_t max_frames);
+    static bool ensure_stream_state(AudioTokenizerDecoder & self);
+    static bool ensure_stream_graph(AudioTokenizerDecoder & self, int32_t n_frames);
     static struct ggml_tensor * apply_snake(struct ggml_context * ctx,
                                             struct ggml_tensor * x,
                                             struct ggml_tensor * alpha,
@@ -161,9 +197,38 @@ struct ops {
                                                     int32_t n_frames,
                                                     struct ggml_tensor * positions,
                                                     struct ggml_tensor * mask);
+    static struct ggml_tensor * apply_pre_tfm_layer_stream(
+                                                    struct ggml_context * ctx,
+                                                    struct ggml_cgraph * gf,
+                                                    AudioTokenizerDecoder & self,
+                                                    struct ggml_tensor * x,
+                                                    const pre_tfm_layer & layer,
+                                                    int32_t n_frames,
+                                                    struct ggml_tensor * positions,
+                                                    struct ggml_tensor * rows,
+                                                    struct ggml_tensor * mask,
+                                                    struct ggml_tensor * k_cache,
+                                                    struct ggml_tensor * v_cache,
+                                                    int32_t ring);
+    static struct ggml_tensor * apply_causal_conv_stream(
+                                                    struct ggml_context * ctx,
+                                                    struct ggml_cgraph * gf,
+                                                    struct ggml_tensor * x,
+                                                    struct ggml_tensor * weight,
+                                                    struct ggml_tensor * bias,
+                                                    int kernel,
+                                                    int dilation,
+                                                    struct ggml_tensor * stream_state);
     static struct ggml_tensor * apply_upsample_block(struct ggml_context * ctx,
                                                      struct ggml_tensor * x,
                                                      const upsample_block & block,
+                                                     int block_idx);
+    static struct ggml_tensor * apply_upsample_block_stream(
+                                                     struct ggml_context * ctx,
+                                                     struct ggml_cgraph * gf,
+                                                     struct ggml_tensor * x,
+                                                     const upsample_block & block,
+                                                     struct ggml_tensor * dw_state,
                                                      int block_idx);
     static struct ggml_tensor * apply_residual_block(struct ggml_context * ctx,
                                                      struct ggml_tensor * x,
@@ -173,6 +238,16 @@ struct ops {
                                                     struct ggml_tensor * x,
                                                     const decoder_block & block,
                                                     int upsample_rate,
+                                                    int block_idx);
+    static struct ggml_tensor * apply_decoder_block_stream(
+                                                    struct ggml_context * ctx,
+                                                    struct ggml_cgraph * gf,
+                                                    AudioTokenizerDecoder & self,
+                                                    struct ggml_tensor * x,
+                                                    const decoder_block & block,
+                                                    int upsample_rate,
+                                                    struct ggml_tensor * carry,
+                                                    struct ggml_tensor * const res_state[3],
                                                     int block_idx);
     static void normalize_codebooks(AudioTokenizerDecoder & self);
     static void prepare_snake_tensors(AudioTokenizerDecoder & self);

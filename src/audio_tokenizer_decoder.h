@@ -70,6 +70,15 @@ public:
     bool decode(const int32_t * codes, int32_t n_frames,
                 std::vector<float> & samples);
 
+    // Reset and incrementally advance the causal streaming decoder. Each
+    // decode_stream() call consumes only fresh codec frames and returns
+    // exactly n_frames * 1920 new samples.
+    bool reset_stream();
+    bool prime_stream(const int32_t * codes, int32_t n_frames,
+                      std::vector<float> & scratch_samples);
+    bool decode_stream(const int32_t * codes, int32_t n_frames,
+                       std::vector<float> & samples);
+
     // Drop the cached decode graph. Streaming may call this between chunks on
     // CUDA backends to avoid reusing a graph with short rolling windows.
     void clear_decode_cache();

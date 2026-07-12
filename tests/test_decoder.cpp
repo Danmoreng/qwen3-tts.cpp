@@ -224,6 +224,83 @@ int main(int argc, char ** argv) {
     }
     printf("\n");
 
+    printf("Test 5: Stateful streaming decoder correctness\n");
+    std::vector<float> stream_samples;
+    if (!decoder.reset_stream()) {
+        fprintf(stderr, "  FAIL: stream reset failed: %s\n", decoder.get_error().c_str());
+        fail_count++;
+    } else {
+        const int chunk_pattern[] = {1, 3, 4};
+        int frame = 0;
+        int chunk_index = 0;
+        while (frame < n_frames) {
+            const int width = std::min(chunk_pattern[chunk_index % 3], n_frames - frame);
+            std::vector<float> chunk;
+            if (!decoder.decode_stream(codes_i32.data() + (size_t) frame * config.n_codebooks,
+                                       width, chunk)) {
+                fprintf(stderr, "  FAIL: stream chunk failed: %s\n", decoder.get_error().c_str());
+                fail_count++;
+                stream_samples.clear();
+                break;
+            }
+            stream_samples.insert(stream_samples.end(), chunk.begin(), chunk.end());
+            frame += width;
+            ++chunk_index;
+        }
+    }
+    if (!stream_samples.empty()) {
+        if (stream_samples.size() != samples.size()) {
+            fprintf(stderr, "  FAIL: streaming sample count changed: %zu vs %zu\n",
+                    stream_samples.size(), samples.size());
+            fail_count++;
+        } else {
+            double dot = 0.0;
+            double stream_energy = 0.0;
+            double full_energy = 0.0;
+            double rms_diff = 0.0;
+            for (size_t i = 0; i < samples.size(); ++i) {
+                const double streamed = stream_samples[i];
+                const double full = samples[i];
+                const double diff = streamed - full;
+                dot += streamed * full;
+                stream_energy += streamed * streamed;
+                full_energy += full * full;
+                rms_diff += diff * diff;
+            }
+            rms_diff = std::sqrt(rms_diff / (double) samples.size());
+            const double cosine = dot / std::sqrt(stream_energy * full_energy);
+            printf("  Offline comparison: cosine=%.9f rms=%.9f\n", cosine, rms_diff);
+            if (cosine < 0.995 || rms_diff > 0.01) {
+                printf("  FAIL: stateful streaming differs too much from full decode\n");
+                fail_count++;
+            } else {
+                printf("  PASS: stateful streaming matches full decode\n");
+            }
+        }
+    }
+
+    if (n_frames > 1) {
+        const int prefix_frames = std::min(8, n_frames - 1);
+        std::vector<float> prime_scratch;
+        std::vector<float> suffix_first;
+        std::vector<float> suffix_second;
+        bool snapshot_ok = decoder.reset_stream() &&
+            decoder.prime_stream(codes_i32.data(), prefix_frames, prime_scratch) &&
+            decoder.decode_stream(codes_i32.data() + (size_t) prefix_frames * config.n_codebooks,
+                                  n_frames - prefix_frames, suffix_first) &&
+            decoder.reset_stream() &&
+            decoder.prime_stream(codes_i32.data(), prefix_frames, prime_scratch) &&
+            decoder.decode_stream(codes_i32.data() + (size_t) prefix_frames * config.n_codebooks,
+                                  n_frames - prefix_frames, suffix_second);
+        if (!snapshot_ok || suffix_first != suffix_second) {
+            fprintf(stderr, "  FAIL: resident stream snapshot restore is not deterministic\n");
+            fail_count++;
+        } else {
+            printf("  PASS: resident stream snapshot restore is deterministic\n");
+        }
+    }
+    printf("\n");
+
     if (benchmark_runs > 0) {
         printf("Benchmark: Resident fixed-code decoder (2 prior correctness decodes, "
                "%d additional warmups, %d runs)\n",

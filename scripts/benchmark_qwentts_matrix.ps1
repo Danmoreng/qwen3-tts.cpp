@@ -13,6 +13,7 @@ param(
     [int]$TopK = 50,
     [double]$TopP = 1.0,
     [double]$RepetitionPenalty = 1.05,
+    [double]$QwenStreamChunkSec = 1.0,
     [string]$OutDir = "",
     [string]$WorkspaceRoot = "",
     [string]$QwenCppExe = "",
@@ -368,6 +369,7 @@ Set-Content -LiteralPath $referenceTextFile -Value $ReferenceText -Encoding UTF8
 Write-Host "Benchmark matrix preflight" -ForegroundColor Cyan
 Write-Host "  OutDir:        $OutDir"
 Write-Host "  Runs/Warmup:   $Runs / $Warmup"
+Write-Host "  qwen3 stream:  $QwenStreamChunkSec s chunks"
 Write-Host "  qwen3 CLI:     $QwenCppExe"
 Write-Host "  qwentts CLI:   $ServeurExe"
 Write-Host "  qwentts server:$ServeurServerExe"
@@ -451,7 +453,7 @@ foreach ($line in ($cmd.Stdout -split "`r?`n")) {
 Write-Host "[resident] qwen3 streaming" -ForegroundColor Yellow
 $out = Join-Path $OutDir "qwen3_resident_stream.wav"
 $log = Join-Path $logDir "qwen3_resident_stream.log"
-$cmd = Invoke-BenchCommand "qwen3-tts.cpp" $QwenCppExe ($qwenBaseArgs + @("-o", $out, "--icl-prompt", $qwenIclPrompt, "--stream", "--bench-server", "$Runs", "--bench-warmup", "$Warmup")) $repoRoot $log
+$cmd = Invoke-BenchCommand "qwen3-tts.cpp" $QwenCppExe ($qwenBaseArgs + @("-o", $out, "--icl-prompt", $qwenIclPrompt, "--stream", "--stream-chunk-sec", "$QwenStreamChunkSec", "--bench-server", "$Runs", "--bench-warmup", "$Warmup")) $repoRoot $log
 foreach ($line in ($cmd.Stdout -split "`r?`n")) {
     if ($line -match '^BENCH_JSON\s+(\{.+\})') {
         $json = $matches[1] | ConvertFrom-Json
