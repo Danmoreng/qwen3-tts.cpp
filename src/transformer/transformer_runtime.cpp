@@ -151,7 +151,9 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
         }
         size_t write_size = positions.size() * sizeof(int32_t);
         if (write_size > ggml_nbytes(inp_pos)) {
-            fprintf(stderr, "  ERROR: inp_pos write out of bounds! nbytes=%zu, write=%zu\n", ggml_nbytes(inp_pos), write_size);
+            error_msg_ = "Talker position input is smaller than the requested prefill write";
+            ggml_backend_sched_reset(impl_->state.sched);
+            return false;
         }
         ggml_backend_tensor_set(inp_pos, positions.data(), 0, write_size);
     }
@@ -168,7 +170,9 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
         }
         size_t write_size = positions.size() * sizeof(int32_t);
         if (write_size > ggml_nbytes(inp_mrope_pos)) {
-            fprintf(stderr, "  ERROR: inp_mrope_pos write out of bounds! nbytes=%zu, write=%zu\n", ggml_nbytes(inp_mrope_pos), write_size);
+            error_msg_ = "Talker M-RoPE input is smaller than the requested prefill write";
+            ggml_backend_sched_reset(impl_->state.sched);
+            return false;
         }
         ggml_backend_tensor_set(inp_mrope_pos, positions.data(), 0, write_size);
     }
