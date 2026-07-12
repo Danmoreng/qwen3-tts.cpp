@@ -48,6 +48,9 @@ void TTSTransformer::unload_model() {
     impl_->state.code_pred_device_chain_requested = false;
     impl_->state.code_pred_device_chain_active = false;
     impl_->state.code_pred_device_chain_logged = false;
+    impl_->state.code_pred_supergraph_requested = false;
+    impl_->state.code_pred_supergraph_active = false;
+    impl_->state.code_pred_supergraph_logged = false;
     free_hidden_bridge(impl_->state);
     free_transformer_model(impl_->model);
 
@@ -78,10 +81,17 @@ void TTSTransformer::unload_model() {
         }
     }
     impl_->state.code_pred_replay_scheds.clear();
+    if (impl_->state.code_pred_supergraph_sched) {
+        ggml_backend_sched_free(impl_->state.code_pred_supergraph_sched);
+        impl_->state.code_pred_supergraph_sched = nullptr;
+    }
     impl_->state.code_pred_replay_graphs.clear();
+    impl_->state.code_pred_supergraph = nullptr;
     impl_->state.code_pred_replay_ready = false;
     impl_->state.code_pred_replay_failed = false;
-    impl_->state.code_pred_replay_device_chain = false;
+    impl_->state.code_pred_supergraph_failed = false;
+    impl_->state.code_pred_supergraph_ready = false;
+    impl_->state.code_pred_mode = code_pred_graph_mode::none;
     if (impl_->state.sched) {
         ggml_backend_sched_free(impl_->state.sched);
         impl_->state.sched = nullptr;
@@ -94,7 +104,9 @@ void TTSTransformer::unload_model() {
     impl_->state.code_pred_sched_reserve_failed = false;
     impl_->state.code_pred_replay_ready = false;
     impl_->state.code_pred_replay_failed = false;
-    impl_->state.code_pred_replay_device_chain = false;
+    impl_->state.code_pred_supergraph_failed = false;
+    impl_->state.code_pred_supergraph_ready = false;
+    impl_->state.code_pred_mode = code_pred_graph_mode::none;
     if (impl_->state.backend) {
         release_preferred_backend(impl_->state.backend);
         impl_->state.backend = nullptr;
@@ -107,6 +119,7 @@ void TTSTransformer::unload_model() {
     impl_->state.compute_meta.clear();
     impl_->state.talker_replay_compute_meta.clear();
     impl_->state.code_pred_compute_meta.clear();
+    impl_->state.code_pred_supergraph_compute_meta.clear();
     impl_->state.talker_mask.clear();
     impl_->state.code_pred_prefill_mask.clear();
     impl_->state.code_pred_step_masks.clear();
@@ -298,6 +311,9 @@ bool TTSTransformer::load_model(const std::string & model_path) {
             ggml_tensor_overhead() * QWEN3_TTS_CODE_PRED_MAX_NODES +
             ggml_graph_overhead_custom(QWEN3_TTS_CODE_PRED_MAX_NODES, false));
     }
+    impl_->state.code_pred_supergraph_compute_meta.resize(
+        ggml_tensor_overhead() * QWEN3_TTS_CODE_PRED_MAX_NODES +
+        ggml_graph_overhead_custom(QWEN3_TTS_CODE_PRED_MAX_NODES, false));
 
     if (!transformer_internal::ops::try_init_coreml_code_predictor(*this, model_path)) {
         return false;

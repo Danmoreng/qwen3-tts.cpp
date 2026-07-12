@@ -293,7 +293,7 @@ end-to-end decoder win across the sliding-window boundary and long-input cases.
 
 ### P2: Fully Device-Chained Greedy Code Predictor
 
-Status: Partial / automatic 0.6B long-request dispatch
+Status: Implemented / automatic CUDA greedy supergraph
 
 The standalone GPU `argmax` experiment regressed because each codebook step
 still synchronized with the host. A useful implementation must remove the
@@ -322,6 +322,54 @@ reproducible device sampler and is a separate project.
 This is a high-risk change. Require byte-identical greedy codes, long
 multi-request testing, both model sizes, CUDA-Graph on/off diagnostics, and a
 clear win over the current host-sampled path.
+
+The fully unrolled option was implemented on 2026-07-12. One graph now owns the
+two-token Code Predictor prefill and all 14 recurrent steps. Each step writes
+its KV rows explicitly, computes a device argmax into a persistent I32 token
+bridge, and feeds that stored token into the next embedding lookup. The host
+submits once and reads the 15 final codes once per audio frame. The graph has
+`2533` nodes on 0.6B and `2593` on 1.7B, one scheduler split, and about `0.1 MiB`
+of reported scheduler scratch. Construction and allocation were both below
+`1 ms` in the measured runs.
+
+Dispatch is automatic for `temperature=0` on CUDA for both 0.6B and 1.7B.
+Sampling, debug tracing, CPU/non-CUDA backends, CoreML, and construction
+failures before submission retain the established path. A compute failure
+after submission fails the request instead of retrying against a mutated KV
+cache. `QWEN3_TTS_CODE_PRED_SUPERGRAPH=0` is a diagnostic kill switch, not an
+opt-in. A dedicated scheduler keeps CUDA-graph allocations stable across the
+resident `greedy -> sampled -> greedy` mode transition.
+
+Correctness validation covered Q8_0 0.6B and 1.7B at `32/64/96/128` requested
+frames; every automatic-versus-disabled generated-code hash was byte-identical.
+Seeded sampling stayed on its old path and was byte-identical with the switch
+enabled or disabled. CUDA Graphs off, physical KV zeroing, and the resident
+short/long/greedy/sampled switch test also passed. The reusable Python validator
+now disables both optimized paths for its legacy leg and reports supergraph
+dispatch explicitly. Historical exact gates remained at `100%`: 0.6B F16
+top-k-1 for `32/64/96`, and 1.7B F32 ICL top-k-1 for `64`.
+
+The robust 64-frame acceptance runs used two warm-ups and seven measured
+resident requests per process. For 0.6B, eight interleaved process pairs had
+`7/8` positive generation and wall results; paired median gains were `+3.10%`
+generation and `+4.04%` wall. For 1.7B, all four exploratory pairs were
+positive, so the gate was extended to eight pairs; all `8/8` were positive and
+the final medians were `+3.46%` generation and `+3.73%` wall. The 95% lower
+confidence bounds were positive for generation and wall on both model sizes
+(`0.98%/1.02%` on 0.6B and `2.03%/1.95%` on 1.7B). The earlier
+0.6B length probes at `32/96/128` frames also had positive medians, although
+short-process measurements were noisier than the primary gate.
+
+A 100-request resident memory run completed `102/102` warm-up plus measured
+requests for both binaries. Relative to the 15-scheduler baseline, the
+supergraph reduced peak working set by `53.9 MiB` and peak private memory by
+about `1.16 GiB`; no growth or crash was observed. The complete Windows suite
+finished with `11` pass, `0` fail, and `1` optional skip. Raw artifacts live
+under the ignored `benchmark_output/supergraph-*` directories.
+
+The older multi-graph device bridge described below remains as a tested
+fallback and as historical context; the supergraph supersedes it in normal
+greedy CUDA dispatch.
 
 The first safe slice is now selected automatically for 0.6B CUDA requests with
 `temperature=0` and at least 64 requested max frames. Each Code Predictor graph
@@ -574,6 +622,6 @@ Copy this section for each future experiment:
 
 ## Recommended Execution Order
 
-1. Design a true device-chained greedy Code Predictor supergraph.
-2. Design stateful streaming decoder overlap.
-3. Treat continuous batching and mixed quantization as separate milestones.
+1. Design stateful streaming decoder overlap.
+2. Treat continuous batching and mixed quantization as separate milestones.
+3. Promote the exact Python parity fixtures and broader 1.7B voice coverage.

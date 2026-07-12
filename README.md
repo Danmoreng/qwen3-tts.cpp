@@ -493,7 +493,8 @@ Runtime performance toggles:
 | `QWEN3_TTS_TALKER_REPLAY_GRAPHS=0` | Disable default Talker step replay graphs for backend or memory diagnostics |
 | `QWEN3_TTS_CODE_PRED_ZERO_KV=1` | Restore legacy per-frame physical Code Predictor KV zeroing for parity diagnostics; by default each live row is overwritten before reuse |
 | `QWEN3_TTS_CODE_PRED_PACKED_QKV=0` | Disable the CUDA packed Code Predictor step QKV projection and restore separate Q, K, and V matmuls |
-| `QWEN3_TTS_CODE_PRED_DEVICE_CHAIN=0` | Force the legacy host-token bridge for diagnostics; by default 0.6B CUDA greedy requests with at least 64 max frames select the device bridge automatically |
+| `QWEN3_TTS_CODE_PRED_SUPERGRAPH=0` | Disable the automatic greedy CUDA Code Predictor supergraph for diagnostics and restore the established 15-graph path |
+| `QWEN3_TTS_CODE_PRED_DEVICE_CHAIN=0` | Disable the older multi-graph device-token bridge as well; this only affects the fallback used when the supergraph is disabled |
 | `QWEN3_TTS_TALKER_PACKED_QKV=0` | Disable the CUDA packed Talker step QKV projection used by models wider than 1024 and restore separate Q, K, and V matmuls |
 | `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0/1` | Force the legacy/summed decoder rest-codebook projection; automatic mode uses the summed CUDA path only for inputs up to 63 frames |
 
@@ -517,7 +518,7 @@ Useful debugging tools:
 |------|---------|
 | `scripts/prepare_test_assets.ps1` | Generate or refresh deterministic reference assets |
 | `scripts/compare_e2e.py` | End-to-end Python vs C++ comparison |
-| `scripts/validate_device_chain_python.ps1` | Gate automatic vs legacy C++ byte identity and compare 0.6B/1.7B Q8, F16/BF16, and F32 against official float32 Python |
+| `scripts/validate_device_chain_python.ps1` | Gate automatic optimized vs legacy C++ byte identity and compare 0.6B/1.7B Q8, F16/BF16, and F32 against official float32 Python |
 | `scripts/dump_python_trace.py` | Dump Python logits/tokens for frame-level debugging |
 | `scripts/debug_trace_report.py` | Compare trace directories |
 | `scripts/wav_stats.ps1` | Validate WAV duration, peak, RMS, and silence checks |
@@ -526,7 +527,7 @@ Useful debugging tools:
 | `QWEN3_TTS_DEBUG_DUMP_MAX_FRAMES` | Limit dumped generation frames |
 | `QWEN3_TTS_DEBUG_DUMP_MAX_CODE_STEPS` | Limit dumped code-predictor steps |
 
-The device-chain parity workflow reuses one official Python model load, feeds
+The Code Predictor parity workflow reuses one official Python model load, feeds
 the resulting Python speaker embedding to C++, and reports token, audio,
 dispatch, and optional resident performance metrics:
 
@@ -536,9 +537,10 @@ dispatch, and optional resident performance metrics:
   -BenchmarkWarmups 2 -BenchmarkRuns 5
 ```
 
-Schema-2 reports record repository and Python revisions, the Hugging Face
+Schema-3 reports record repository and Python revisions, the Hugging Face
 snapshot/config hash, binary/model/codec hashes, relevant optimization
-environment variables, and the observed transformer backend/hidden size.
+environment variables, the observed transformer backend/hidden size, and
+whether the automatic supergraph or older device-chain fallback was selected.
 `-RequireExactPythonCodes` requires the complete Python trajectory to match;
 the known single extra C++ `max_tokens` frame is reported separately instead
 of being silently treated as Python output.

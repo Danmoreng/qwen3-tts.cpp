@@ -75,6 +75,13 @@ struct tts_timing {
 #define QWEN3_TTS_MAX_NODES 16384
 #define QWEN3_TTS_CODE_PRED_MAX_NODES 4096
 
+enum class code_pred_graph_mode : uint8_t {
+    none,
+    legacy_replay,
+    device_chain_replay,
+    supergraph,
+};
+
 struct transformer_layer {
     struct ggml_tensor * attn_norm = nullptr;
 
@@ -145,7 +152,9 @@ struct tts_transformer_state {
     ggml_backend_sched_t code_pred_prefill_sched = nullptr;
     ggml_backend_sched_t code_pred_step_sched = nullptr;
     std::vector<ggml_backend_sched_t> code_pred_replay_scheds;
+    ggml_backend_sched_t code_pred_supergraph_sched = nullptr;
     std::vector<struct ggml_cgraph *> code_pred_replay_graphs;
+    struct ggml_cgraph * code_pred_supergraph = nullptr;
     bool sched_reserved = false;
     bool sched_reserve_failed = false;
     int32_t sched_reserved_ctx = 0;
@@ -158,11 +167,14 @@ struct tts_transformer_state {
     struct ggml_cgraph * talker_replay_graph = nullptr;
     bool code_pred_replay_ready = false;
     bool code_pred_replay_failed = false;
-    bool code_pred_replay_device_chain = false;
+    bool code_pred_supergraph_failed = false;
+    bool code_pred_supergraph_ready = false;
+    code_pred_graph_mode code_pred_mode = code_pred_graph_mode::none;
 
     std::vector<uint8_t> compute_meta;
     std::vector<uint8_t> talker_replay_compute_meta;
     std::vector<std::vector<uint8_t>> code_pred_compute_meta;
+    std::vector<uint8_t> code_pred_supergraph_compute_meta;
     std::vector<ggml_fp16_t> talker_mask;
     std::vector<ggml_fp16_t> code_pred_prefill_mask;
     std::vector<ggml_fp16_t> code_pred_step_masks;
@@ -175,6 +187,9 @@ struct tts_transformer_state {
     bool code_pred_device_chain_requested = false;
     bool code_pred_device_chain_active = false;
     bool code_pred_device_chain_logged = false;
+    bool code_pred_supergraph_requested = false;
+    bool code_pred_supergraph_active = false;
+    bool code_pred_supergraph_logged = false;
     std::vector<uint8_t> code_pred_graph_stats_logged;
 
     struct ggml_context * hidden_bridge_ctx = nullptr;

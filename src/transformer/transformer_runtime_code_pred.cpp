@@ -4,6 +4,7 @@
 #include "transformer/transformer_sampling.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -162,7 +163,10 @@ bool ensure_code_pred_replay_graphs(TTSTransformer & self, tts_transformer_priva
         return false;
     }
     if (state.code_pred_replay_ready) {
-        if (state.code_pred_replay_device_chain == state.code_pred_device_chain_active) {
+        const code_pred_graph_mode requested_mode = state.code_pred_device_chain_active
+            ? code_pred_graph_mode::device_chain_replay
+            : code_pred_graph_mode::legacy_replay;
+        if (state.code_pred_mode == requested_mode) {
             return true;
         }
 
@@ -177,6 +181,7 @@ bool ensure_code_pred_replay_graphs(TTSTransformer & self, tts_transformer_priva
         }
         state.code_pred_replay_ready = false;
         state.code_pred_replay_graphs.clear();
+        state.code_pred_mode = code_pred_graph_mode::none;
     }
     if (state.code_pred_replay_failed) {
         return false;
@@ -238,8 +243,83 @@ bool ensure_code_pred_replay_graphs(TTSTransformer & self, tts_transformer_priva
     }
 
     state.code_pred_replay_ready = true;
-    state.code_pred_replay_device_chain = state.code_pred_device_chain_active;
+    state.code_pred_mode = state.code_pred_device_chain_active
+        ? code_pred_graph_mode::device_chain_replay
+        : code_pred_graph_mode::legacy_replay;
     fprintf(stderr, "  CodePred replay graphs: enabled (default)\n");
+    return true;
+}
+
+bool ensure_code_pred_supergraph(TTSTransformer & self, tts_transformer_private & impl) {
+    auto & state = impl.state;
+    if (!code_pred_replay_enabled() || !state.code_pred_supergraph_requested ||
+        state.code_pred_supergraph_failed || !state.backend ||
+        !state.hidden_bridge || !state.code_pred_tokens_bridge) {
+        return false;
+    }
+    if (state.code_pred_supergraph_ready) {
+        state.code_pred_replay_ready = true;
+        state.code_pred_mode = code_pred_graph_mode::supergraph;
+        return true;
+    }
+
+    for (ggml_backend_sched_t sched : state.code_pred_replay_scheds) {
+        if (sched) {
+            ggml_backend_sched_reset(sched);
+        }
+    }
+    state.code_pred_replay_ready = false;
+    state.code_pred_replay_graphs.clear();
+    state.code_pred_mode = code_pred_graph_mode::none;
+
+    std::vector<ggml_backend_t> backends;
+    backends.push_back(state.backend);
+    if (state.backend_cpu) {
+        backends.push_back(state.backend_cpu);
+    }
+    if (!state.code_pred_supergraph_sched) {
+        state.code_pred_supergraph_sched = ggml_backend_sched_new(
+            backends.data(), nullptr, (int) backends.size(),
+            QWEN3_TTS_CODE_PRED_MAX_NODES, false, true);
+        if (!state.code_pred_supergraph_sched) {
+            state.code_pred_supergraph_failed = true;
+            fprintf(stderr, "  CodePred supergraph scheduler initialization failed; using established path\n");
+            return false;
+        }
+    }
+
+    const auto build_start = std::chrono::high_resolution_clock::now();
+    if (!state.code_pred_supergraph) {
+        state.code_pred_supergraph = transformer_internal::ops::build_code_pred_supergraph(self);
+    }
+    const auto build_end = std::chrono::high_resolution_clock::now();
+    if (!state.code_pred_supergraph) {
+        state.code_pred_supergraph_failed = true;
+        fprintf(stderr, "  CodePred supergraph construction failed; using established path\n");
+        return false;
+    }
+
+    ggml_backend_sched_t sched = state.code_pred_supergraph_sched;
+    const auto alloc_start = std::chrono::high_resolution_clock::now();
+    const bool allocated = ggml_backend_sched_alloc_graph(sched, state.code_pred_supergraph);
+    const auto alloc_end = std::chrono::high_resolution_clock::now();
+    if (!allocated || ggml_backend_sched_get_n_splits(sched) != 1) {
+        ggml_backend_sched_reset(sched);
+        state.code_pred_supergraph_failed = true;
+        fprintf(stderr, "  CodePred supergraph allocation/single-backend validation failed; using established path\n");
+        return false;
+    }
+
+    state.code_pred_replay_ready = true;
+    state.code_pred_supergraph_ready = true;
+    state.code_pred_mode = code_pred_graph_mode::supergraph;
+    const double build_ms = std::chrono::duration<double, std::milli>(build_end - build_start).count();
+    const double alloc_ms = std::chrono::duration<double, std::milli>(alloc_end - alloc_start).count();
+    const double scratch_mib = (double) ggml_backend_sched_get_buffer_size(sched, state.backend) /
+                               (1024.0 * 1024.0);
+    fprintf(stderr,
+            "  CodePred supergraph: ready (nodes=%d, build=%.2f ms, alloc=%.2f ms, scratch=%.1f MiB)\n",
+            ggml_graph_n_nodes(state.code_pred_supergraph), build_ms, alloc_ms, scratch_mib);
     return true;
 }
 
@@ -474,6 +554,85 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         }
     }
     clear_code_pred_kv_cache();
+    const bool use_hidden_bridge = hidden == nullptr && impl_->state.hidden_bridge != nullptr;
+    if (!use_hidden_bridge && hidden == nullptr) {
+        error_msg_ = "Code predictor requires hidden input or a device hidden bridge";
+        return false;
+    }
+
+    const bool request_supergraph =
+        impl_->state.code_pred_supergraph_requested &&
+        temperature == 0.0f && use_hidden_bridge && !trace_frame_enabled;
+    impl_->state.code_pred_device_chain_active = false;
+    if (request_supergraph && ensure_code_pred_supergraph(*this, *impl_)) {
+        impl_->state.code_pred_supergraph_active = true;
+        if (!impl_->state.code_pred_supergraph_logged) {
+            fprintf(stderr, "  CodePred supergraph: enabled (greedy CUDA path)\n");
+            impl_->state.code_pred_supergraph_logged = true;
+        }
+
+        struct ggml_cgraph * gf = impl_->state.code_pred_supergraph;
+        ggml_backend_sched_t sched = impl_->state.code_pred_supergraph_sched;
+        struct ggml_tensor * inp_cb0_code = ggml_graph_get_tensor(gf, "inp_cb0_code");
+        if (!inp_cb0_code) {
+            error_msg_ = "Failed to find code predictor supergraph input";
+            return false;
+        }
+#ifdef QWEN3_TTS_TIMING
+        t0 = clk::now();
+#endif
+        ggml_backend_tensor_set(inp_cb0_code, &codebook_0_token, 0, sizeof(int32_t));
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        if (impl_->timing) {
+            const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            impl_->timing->t_code_pred_data_ms += dt_ms;
+            impl_->timing->t_code_pred_input_upload_ms += dt_ms;
+        }
+        t0 = clk::now();
+#endif
+        if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
+            impl_->state.code_pred_replay_ready = false;
+            impl_->state.code_pred_supergraph_failed = true;
+            impl_->state.code_pred_supergraph_ready = false;
+            impl_->state.code_pred_mode = code_pred_graph_mode::none;
+            ggml_backend_sched_reset(sched);
+            error_msg_ = "Failed to compute code predictor supergraph";
+            return false;
+        }
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        if (impl_->timing) {
+            impl_->timing->t_code_pred_compute_ms +=
+                std::chrono::duration<double, std::milli>(t1 - t0).count();
+        }
+        t0 = clk::now();
+#endif
+        output.resize(15);
+        ggml_backend_tensor_get(impl_->state.code_pred_tokens_bridge, output.data(), 0,
+                                output.size() * sizeof(int32_t));
+#ifdef QWEN3_TTS_TIMING
+        t1 = clk::now();
+        if (impl_->timing) {
+            const double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            impl_->timing->t_code_pred_data_ms += dt_ms;
+            impl_->timing->t_code_pred_logits_read_ms += dt_ms;
+        }
+#endif
+        for (int32_t token : output) {
+            if (token < 0 || token >= cfg.code_pred_vocab_size) {
+                error_msg_ = "Code predictor supergraph returned an invalid token";
+                return false;
+            }
+        }
+        // Greedy decoding consumes no random subsequences.
+        return true;
+    }
+    impl_->state.code_pred_supergraph_active = false;
+    if (!request_supergraph) {
+        impl_->state.code_pred_supergraph_logged = false;
+    }
+
     const bool use_device_chain = impl_->state.code_pred_device_chain_requested &&
         temperature == 0.0f && impl_->state.code_pred_tokens_bridge;
     impl_->state.code_pred_device_chain_active = use_device_chain;
@@ -482,11 +641,6 @@ bool TTSTransformer::predict_codes_autoregressive(const float * hidden, int32_t 
         impl_->state.code_pred_device_chain_logged = true;
     } else if (!use_device_chain) {
         impl_->state.code_pred_device_chain_logged = false;
-    }
-    const bool use_hidden_bridge = hidden == nullptr && impl_->state.hidden_bridge != nullptr;
-    if (!use_hidden_bridge && hidden == nullptr) {
-        error_msg_ = "Code predictor requires hidden input or a device hidden bridge";
-        return false;
     }
     const bool use_replay_graphs =
         ensure_code_pred_replay_graphs(*this, *impl_, use_hidden_bridge);

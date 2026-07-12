@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the automatic C++ device chain against legacy C++ and official Python.
+"""Validate automatic C++ Code Predictor paths against legacy C++ and official Python.
 
 The hard optimization gate is byte identity between the automatic and legacy
 C++ paths. The official float32 Python run adds an independent model-parity
@@ -185,8 +185,10 @@ def _run_cpp(
     env = os.environ.copy()
     if mode == "legacy":
         env["QWEN3_TTS_CODE_PRED_DEVICE_CHAIN"] = "0"
+        env["QWEN3_TTS_CODE_PRED_SUPERGRAPH"] = "0"
     else:
         env.pop("QWEN3_TTS_CODE_PRED_DEVICE_CHAIN", None)
+        env.pop("QWEN3_TTS_CODE_PRED_SUPERGRAPH", None)
 
     temperature = "1.0" if args.decode_mode == "topk1" else "0"
     top_k = "1" if args.decode_mode == "topk1" else "0"
@@ -263,6 +265,7 @@ def _run_cpp(
         "wav": wav_path,
         "log": log_path,
         "device_chain_active": "CodePred device chain: enabled" in combined_log,
+        "supergraph_active": "CodePred supergraph: enabled" in combined_log,
         "transformer_backend": backend,
         "transformer_hidden_size": hidden_size,
     }
@@ -280,8 +283,10 @@ def _run_cpp_benchmark(
     env = os.environ.copy()
     if mode == "legacy":
         env["QWEN3_TTS_CODE_PRED_DEVICE_CHAIN"] = "0"
+        env["QWEN3_TTS_CODE_PRED_SUPERGRAPH"] = "0"
     else:
         env.pop("QWEN3_TTS_CODE_PRED_DEVICE_CHAIN", None)
+        env.pop("QWEN3_TTS_CODE_PRED_SUPERGRAPH", None)
     temperature = "1.0" if args.decode_mode == "topk1" else "0"
     top_k = "1" if args.decode_mode == "topk1" else "0"
     cmd = [
@@ -360,6 +365,7 @@ def _run_cpp_benchmark(
             statistics.median(float(row["wall_ms"]) for row in rows)
         ),
         "device_chain_active": "CodePred device chain: enabled" in combined_log,
+        "supergraph_active": "CodePred supergraph: enabled" in combined_log,
         "log": str(log_path),
     }
 
@@ -616,13 +622,12 @@ def main() -> int:
             cpp_codes = _load_code_json(auto["generated"])
             code_metrics = _compare_codes(python_codes, cpp_codes)
             audio_metrics = _compare_audio(python_wav, auto["wav"])
-            expect_chain = (
+            expect_optimized = (
                 args.decode_mode == "greedy"
-                and length >= 64
-                and auto["transformer_hidden_size"] == 1024
                 and auto["transformer_backend"] is not None
                 and "CUDA" in auto["transformer_backend"]
             )
+            optimized_active = auto["supergraph_active"] or auto["device_chain_active"]
 
             performance = None
             if args.benchmark_runs > 0:
@@ -658,7 +663,7 @@ def main() -> int:
 
             gates = {
                 "cpp_auto_legacy_exact": all(cpp_exact.values()),
-                "automatic_dispatch": auto["device_chain_active"] == expect_chain,
+                "automatic_dispatch": optimized_active == expect_optimized,
                 "python_cpp_codebooks": code_metrics["common_shape"][1] == 16,
                 "python_cpp_nonempty": code_metrics["common_shape"][0] > 0,
                 "python_cpp_code_match": code_metrics["match_ratio"]
@@ -690,9 +695,11 @@ def main() -> int:
                 "max_tokens": length,
                 "cpp_exact": cpp_exact,
                 "automatic_device_chain_active": auto["device_chain_active"],
+                "automatic_supergraph_active": auto["supergraph_active"],
+                "automatic_optimized_path_active": optimized_active,
                 "automatic_transformer_backend": auto["transformer_backend"],
                 "automatic_transformer_hidden_size": auto["transformer_hidden_size"],
-                "expected_device_chain_active": expect_chain,
+                "expected_optimized_path_active": expect_optimized,
                 "python_cpp_codes": code_metrics,
                 "python_cpp_audio": audio_metrics,
                 "cpp_performance": performance,
@@ -709,7 +716,7 @@ def main() -> int:
             )
 
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "provenance": {
             "repo_revision": _git_revision(args.repo_root),
             "python_repo_revision": _git_revision(args.python_repo),

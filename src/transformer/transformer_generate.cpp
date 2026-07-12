@@ -25,6 +25,11 @@ bool device_chain_legacy_forced() {
     return value && value[0] == '0';
 }
 
+bool code_pred_supergraph_legacy_forced() {
+    const char * value = std::getenv("QWEN3_TTS_CODE_PRED_SUPERGRAPH");
+    return value && value[0] == '0';
+}
+
 constexpr int32_t code_pred_device_chain_min_frames = 64;
 constexpr int32_t code_pred_device_chain_hidden_size = 1024;
 
@@ -148,6 +153,13 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
         is_cuda_backend(impl_->state.backend) &&
         impl_->state.code_pred_tokens_bridge;
     impl_->state.code_pred_device_chain_active = false;
+    impl_->state.code_pred_supergraph_requested =
+        !code_pred_supergraph_legacy_forced() &&
+        temperature == 0.0f &&
+        is_cuda_backend(impl_->state.backend) &&
+        impl_->state.hidden_bridge &&
+        impl_->state.code_pred_tokens_bridge;
+    impl_->state.code_pred_supergraph_active = false;
     transformer_internal::ops::maybe_reserve_scheduler_graphs(*this, prefill_len, required_ctx);
 
     std::vector<float> hidden_out;

@@ -28,12 +28,18 @@ void reset_scheduler_reserve_state(tts_transformer_state & state) {
     }
     state.code_pred_replay_ready = false;
     state.code_pred_replay_failed = false;
-    state.code_pred_replay_device_chain = false;
+    state.code_pred_supergraph_failed = false;
+    state.code_pred_supergraph_ready = false;
+    state.code_pred_mode = code_pred_graph_mode::none;
     state.code_pred_replay_graphs.clear();
+    state.code_pred_supergraph = nullptr;
     for (ggml_backend_sched_t replay_sched : state.code_pred_replay_scheds) {
         if (replay_sched) {
             ggml_backend_sched_reset(replay_sched);
         }
+    }
+    if (state.code_pred_supergraph_sched) {
+        ggml_backend_sched_reset(state.code_pred_supergraph_sched);
     }
 }
 
@@ -67,6 +73,9 @@ void clear_code_pred_static_tensors(tts_transformer_state & state) {
     state.code_pred_device_chain_requested = false;
     state.code_pred_device_chain_active = false;
     state.code_pred_device_chain_logged = false;
+    state.code_pred_supergraph_requested = false;
+    state.code_pred_supergraph_active = false;
+    state.code_pred_supergraph_logged = false;
 }
 
 } // namespace

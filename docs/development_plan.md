@@ -37,6 +37,7 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | Recurrent SwiGLU fusion | Implemented | Talker and Code Predictor recurrent FFNs use `ggml_swiglu_split()`; commit `e9c4a21`. |
 | Code Predictor KV physical reuse | Implemented | Per-frame physical zeroing is disabled by default after overwrite-safety validation; commit `99ebc44`. |
 | CUDA packed recurrent QKV | Implemented | Code Predictor uses packed QKV for both model sizes; Talker uses it for 1.7B. Final paired gain was about 4.1% on 0.6B and 5.0% on 1.7B; commit `93867a5`. |
+| Greedy CUDA Code Predictor supergraph | Implemented | Prefill plus all 14 recurrent predictor steps now execute as one unrolled graph with device-resident argmax/token/KV dependencies. It is automatic for greedy CUDA on 0.6B and 1.7B; sampled, trace, CPU, and unsupported paths retain the established implementation. |
 | CUDA packed Talker frame embeddings | Rejected | Reverted after the stricter 1.7B F32 Python ICL gate exposed a trajectory regression: `1008/1008` before, `521/1008` packed, and `1008/1008` after restoration. The measured Q8 speedup was too small to justify the loss. |
 | CUDA short-decoder rest projection | Partial | Inputs up to 63 frames sum the 15 rest-codebook embeddings before their shared projection; longer and unmeasured paths retain the legacy graph after length-dependent A/B regressions. |
 | Persistent performance roadmap | Implemented | `docs/performance_roadmap.md` records completed, rejected, and open performance work with a reusable validation protocol. |
@@ -50,7 +51,7 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | 1.7B long-run exact parity | Partial | Historical and current F32 ICL binaries both match Python exactly through 73 frames in the 96-token case, then follow the same divergent trajectory. The restored 32/64-token gates are exact; longer exact parity remains separate future work. |
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
 | M-RoPE position handling consistency | Partial | The supported unpadded single-item layout matches official Python and oversized prefill position writes now fail before touching tensor memory. Batched/padded variants still need explicit artifact-backed coverage. |
-| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; asynchronous replay chaining and packed QKV in the two-token Code Predictor prefill were correct but rejected on 2026-07-12 after neutral/regressive A/B results. The accepted 0.6B greedy device bridge remains automatic from 64 requested frames. |
+| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; the full greedy Code Predictor supergraph is accepted, while asynchronous replay chaining and packed QKV in the two-token prefill remain documented rejected experiments. |
 | Android / Snapdragon support | Backlog | Add Android NDK build support for the native library, portable model-path handling, and an initial CPU-first deployment path; evaluate Vulkan and Hexagon acceleration later for Snapdragon-class devices. |
 
 ## Performance Baselines and Targets
