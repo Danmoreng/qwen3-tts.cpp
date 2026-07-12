@@ -1,6 +1,6 @@
 # Qwen3-TTS Development Plan
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Purpose
 
@@ -29,6 +29,7 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | 1.7B `small_to_mtp` projection support | Implemented | GGUF conversion and C++ loading now include `code_pred.small_to_mtp.{weight,bias}` and apply projection in predictor prefill/step paths. |
 | Missing-projection safety guard | Implemented | Loader now fails fast with a clear message when a model requires `small_to_mtp` but GGUF is missing those tensors. |
 | Python vs C++ trace tooling | Implemented | `scripts/dump_python_trace.py` and `scripts/debug_trace_report.py` allow frame/step-level parity checks. |
+| Python parity provenance and exact gates | Implemented | `validate_device_chain_python` records repository/binary/model/HF revisions and hashes, selects cached snapshots deterministically, mirrors official ICL decode-and-trim behavior, and reports the known extra C++ max-token frame separately from exact common-trajectory parity. |
 | Windows 1.7B CLI regression hook | Implemented | `scripts/run_all_tests.ps1` now supports optional 1.7B CLI checks (`-Require17B`, `-ModelName17`, `-Model17Speaker`). |
 | 1.7B instruction prompt parity | Implemented | C++ now routes `--instruct/--instruction` through separate instruction tokens (`encode_instruct` + transformer `instruct_tokens`), mirroring Python `instruct_ids` behavior and preventing read-aloud instruction regressions. |
 | 1.7B converter/regeneration baseline | Implemented | Team baseline now assumes regenerated Serveurperso-compatible `qwen-talker-1.7b-base-Q8_0.gguf` from current converter before runtime/debug comparisons. |
@@ -48,8 +49,8 @@ rejected experiments, lives in [`performance_roadmap.md`](performance_roadmap.md
 | 1.7B Python parity workflow | Implemented locally | `validate_device_chain_python.ps1` supports 1.7B, speaker-only/ICL prompts, saved Python prompt artifacts, Q8/BF16/F32 matrices, and an exact historical F32 gate. Promote suitable assets to CI where storage permits. |
 | 1.7B long-run exact parity | Partial | Historical and current F32 ICL binaries both match Python exactly through 73 frames in the 96-token case, then follow the same divergent trajectory. The restored 32/64-token gates are exact; longer exact parity remains separate future work. |
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
-| M-RoPE position handling consistency | Partial | Remaining path consistency should still be audited and documented with explicit expected layouts per path. |
-| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; decoder Flash Attention was measured and not retained, Snake is already backend-fused, and 0.6B CUDA greedy Code Predictor dispatch now selects the device bridge automatically for requests with at least 64 max frames. |
+| M-RoPE position handling consistency | Partial | The supported unpadded single-item layout matches official Python and oversized prefill position writes now fail before touching tensor memory. Batched/padded variants still need explicit artifact-backed coverage. |
+| Remaining CUDA throughput work | Active | Continue from `docs/performance_roadmap.md`; asynchronous replay chaining and packed QKV in the two-token Code Predictor prefill were correct but rejected on 2026-07-12 after neutral/regressive A/B results. The accepted 0.6B greedy device bridge remains automatic from 64 requested frames. |
 | Android / Snapdragon support | Backlog | Add Android NDK build support for the native library, portable model-path handling, and an initial CPU-first deployment path; evaluate Vulkan and Hexagon acceleration later for Snapdragon-class devices. |
 
 ## Performance Baselines and Targets
@@ -126,8 +127,8 @@ Exit criteria:
 
 ## Immediate Next Actions
 
-1. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
-2. Expand the automatic 0.6B device-chained greedy Code Predictor matrix on additional prompts using `scripts/validate_device_chain_python.ps1`; keep 1.7B legacy until a stable gain is demonstrated.
+1. Promote the exact 0.6B F16 and 1.7B F32 ICL Python gates into reproducible tracked or nightly fixtures, including explicit M-RoPE layout coverage.
+2. Reprofile the synchronous Code Predictor before selecting another local kernel candidate; do not repeat asynchronous replay chaining or two-token prefill QKV packing without new backend evidence.
 3. Expand 1.7B cross-speaker/perceptual validation to include instruction-heavy prompts.
 4. Update `docs/performance_roadmap.md` after every accepted or rejected performance experiment.
 5. Keep Android support in backlog until correctness and benchmark gates are stable; when started, begin with NDK/shared-library portability and CPU-first on-device validation.

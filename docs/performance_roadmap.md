@@ -1,6 +1,6 @@
 # Performance Optimization Roadmap
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Purpose
 
@@ -222,8 +222,53 @@ follow-up if the long-input CUDA regression is revisited.
 Do not repeat these unchanged. Revisit only if GGML kernels, tensor layouts,
 hardware, or the surrounding graph architecture changes materially.
 
+### 2026-07-12: Asynchronous Device-Chain Replay
+
+- Status: Rejected and removed.
+- Hypothesis: enqueue the Code Predictor prefill and 14 replay steps without
+  intermediate host waits, then synchronize and read the 15-token bridge once.
+- Scope: automatic greedy 0.6B CUDA device-chain requests only; sampled, trace,
+  replay-disabled, CPU, and 1.7B paths retained synchronous fallbacks.
+- Correctness: automatic and synchronous outputs remained byte-identical across
+  Q8_0/F16/F32 length matrices, sampled/fallback checks, the 0.6B F16 exact
+  Python gate, and the historical 1.7B F32 ICL exact gate.
+- Performance: across 20 independent process pairs at 64/96/128 frames, paired
+  generation median was `+1.17%` (95% bootstrap CI `-0.19%` to `+2.77%`) and
+  paired wall median was `+0.93%` (CI `-0.08%` to `+2.01%`). A refined 64-frame
+  variant that queued the bridge D2H copy before the final wait reached only
+  `+0.66%` raw wall median and `+1.05%` paired wall median (Wilcoxon `p=0.078`).
+- Decision: the possible gain remained below the laptop-GPU noise floor and did
+  not justify backend-split checks, asynchronous error handling, and altered
+  timing semantics. Raw artifacts are under the ignored
+  `benchmark_output/code_pred_async_chain` directory.
+
+### 2026-07-12: Packed QKV in Code Predictor 2-Token Prefill
+
+- Status: Rejected and removed.
+- Hypothesis: reuse the accepted packed Code Predictor QKV tensor in prefill and
+  replace three projections per layer with one, removing ten matmul nodes per
+  audio frame.
+- Correctness: generated codes, decoder codes, and WAVs were byte-identical in
+  30 greedy cases covering both model sizes, every local Q8_0/F16/BF16/F32
+  talker, and 8/32/64/96/128 frames. Twelve sampled cases covering all six
+  models and two seeds were also byte-identical. Official-Python gates retained
+  100% common-trajectory parity for 0.6B F16 at 32/64/96 frames and historical
+  1.7B F32 ICL at 64 frames.
+- Performance: the eight-pair 0.6B Q8_0 early gate used three warm-ups and eight
+  resident measurements per process. Generation regressed from `507.5 ms` to
+  `518.0 ms` raw median (`-2.07%`) with a `-2.19%` paired median and only 2/8
+  positive pairs. Wall median regressed from `544.5 ms` to `552.0 ms`
+  (`-1.38%`; paired `-1.99%`).
+- Decision: the wider two-token quantized matmul selected a worse CUDA workload
+  than the three established projections. Keep packed QKV limited to recurrent
+  Code Predictor steps; no dtype-specific special path was retained. Raw
+  artifacts are under the ignored
+  `benchmark_output/code_pred_prefill_packed_qkv` directory.
+
 | Experiment | Status | Measurement / reason |
 |---|---|---|
+| Asynchronous device-chain replay | Rejected | Byte-identical, but pooled 64/96/128 wall gain was only `+0.93%` with a confidence interval crossing zero; refined D2H chaining remained about 1% |
+| Packed QKV in Code Predictor prefill | Rejected | Broad byte parity passed, but the primary 0.6B Q8_0 path regressed by about 2% generation and wall time |
 | Pack Code Predictor FFN Gate+Up weights into one matmul | Rejected | Byte-identical, but 0.6B was effectively neutral and 1.7B regressed by roughly 1-2% in paired measurements |
 | Standalone device-side greedy `argmax` | Rejected | Byte-identical, but approximately 1.9% slower on 0.6B and 5.6% slower on 1.7B; the extra kernel does not remove the synchronization by itself |
 | Naive decoder graph pointer reuse after scheduler reset | Rejected | Invalid allocation lifetime caused a CUDA illegal-memory-access failure on the second decode |
@@ -267,7 +312,9 @@ CodePred prefill/step
 Options:
 
 - One unrolled supergraph for all 15 codebooks.
-- Multiple replay graphs enqueued on one stream with device-resident bridges.
+- Multiple replay graphs enqueued on one stream with device-resident bridges
+  was tested on 2026-07-12 and rejected because its measured wall gain remained
+  around 1% and below the noise floor.
 
 Initial scope should be greedy only. Sampled top-k/top-p generation requires a
 reproducible device sampler and is a separate project.
@@ -364,13 +411,16 @@ interleaved process-pair acceptance result remains authoritative.
 
 ### P2: Asynchronous Code Predictor I/O
 
-Status: Open
+Status: Partial / replay-chain variant rejected
 
 Evaluate persistent/pinned host buffers plus asynchronous tensor upload,
 compute, and readback. CPU sampling still creates a dependency between steps,
 so first prove with a trace that asynchronous APIs remove a real synchronization
 or overlap useful CPU work. Do not assume that replacing calls with `_async`
-variants is itself an optimization.
+variants is itself an optimization. The greedy replay-chain experiment removed
+the larger intermediate compute waits and still failed the acceptance gate, so
+do not revisit smaller I/O-only changes without new profiling evidence or an
+upstream backend change.
 
 ### P2: Stateful Streaming Decoder and Pipeline Overlap
 
