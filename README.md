@@ -48,7 +48,8 @@ Test setup:
 - Windows, CUDA backend, NVIDIA GeForce RTX 5080 Laptop GPU 16 GB
 - `max_tokens=128`, CPU threads set to physical cores, sampled decoding with temperature `0.9`,
   top-k `50`, top-p `1.0`, repetition penalty `1.05`
-- Reference audio is trimmed to 5.95 s before benchmarking
+- Reference audio is qwentts.cpp's `examples/freeman.wav`, trimmed to 5.95 s
+  before benchmarking
 - `qwen3-tts.cpp` uses a resident CLI repeat (`BenchmarkScope=session_repeat`)
   and the Q8_0 GGUF models from `%USERPROFILE%\.qwen-tts-studio\models`
 - `faster-qwen3-tts` uses warm CUDA-graphs streaming with `chunk_size=8`
@@ -65,9 +66,9 @@ generate from that embedding without prepending reference speech codes.
 
 | Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
 |--------|----------------------|---------|----------------------|---------|
-| `qwen3-tts.cpp` GGUF Q8_0 | 0.794 s | 8.364 | 1.057 s | 6.741 |
-| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 3.496 s | 2.291 | 2.810 s | 2.306 |
-| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 2.793 s | 2.779 | 2.845 s | 2.334 |
+| `qwen3-tts.cpp` GGUF Q8_0 | 0.659 s | 9.587 | 1.032 s | 7.675 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 3.511 s | 2.324 | 3.361 s | 2.285 |
+| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 2.724 s | 3.055 | 3.056 s | 2.619 |
 | `audio.cpp` | - | - | - | - |
 
 ### Full ICL Voice Clone
@@ -78,47 +79,54 @@ only warm `Generate+Decode` time, not reference prompt construction.
 
 | Engine | 0.6B Generate+Decode | 0.6B RTF | 1.7B Generate+Decode | 1.7B RTF |
 |--------|----------------------|---------|----------------------|---------|
-| `qwen3-tts.cpp` GGUF Q8_0 | 1.021 s | 10.027 | 1.456 s | 7.034 |
-| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 4.257 s | 2.406 | 4.397 s | 2.329 |
-| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 3.796 s | 2.698 | 4.370 s | 2.343 |
-| `audio.cpp` HF BF16, warm session | 4.754 s | 2.137 | 5.711 s | 1.783 |
+| `qwen3-tts.cpp` GGUF Q8_0 | 1.031 s | 9.935 | 1.268 s | 8.074 |
+| `ServeurpersoCom/qwentts.cpp` GGUF Q8_0 | 4.331 s | 2.365 | 4.378 s | 2.339 |
+| `faster-qwen3-tts` HF BF16, warm CUDA graphs | 3.454 s | 2.964 | 3.941 s | 2.598 |
+| `audio.cpp` HF BF16, warm session | 2.002 s | 5.076 | 2.405 s | 4.224 |
 
 The comparison harness is:
 
 ```powershell
 $models = "$env:USERPROFILE\.qwen-tts-studio\models"
+$reference = "..\qwentts.cpp-serveurperso\examples\freeman.wav"
 
 # Speaker-embedding voice clone.
 .\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso `
   -Variant 1.7b-base -BenchmarkMode split -Runs 3 `
-  -ReferenceMaxSec 5.95 -QwenCppModels $models -QwenCppSessionRepeats 2
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 `
+  -QwenCppModels $models -QwenCppSessionRepeats 2
 .\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
   -Variant 1.7b-base -BenchmarkMode split -Runs 3 `
-  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 `
+  -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
 .\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso `
   -Variant 0.6b-base -BenchmarkMode split -Runs 3 `
-  -ReferenceMaxSec 5.95 -QwenCppModels $models -QwenCppSessionRepeats 2
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 `
+  -QwenCppModels $models -QwenCppSessionRepeats 2
 .\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
   -Variant 0.6b-base -BenchmarkMode split -Runs 3 `
-  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 `
+  -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
 
 # Full ICL path: reference transcript + reference speech codes are part of the workload.
 .\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso,audio_cpp `
   -Variant 1.7b-base -BenchmarkMode full -Runs 3 `
-  -ReferenceMaxSec 5.95 -QwenCppModels $models `
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 -QwenCppModels $models `
   -QwenCppSessionRepeats 2 -AudioCppSessionRepeats 2
 .\scripts\benchmark_frameworks.ps1 -Implementations qwen_cpp,serveurperso,audio_cpp `
   -Variant 0.6b-base -BenchmarkMode full -Runs 3 `
-  -ReferenceMaxSec 5.95 -QwenCppModels $models `
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 -QwenCppModels $models `
   -QwenCppSessionRepeats 2 -AudioCppSessionRepeats 2
 
 # Faster CUDA-graphs streaming path. Report separately from process/CLI rows.
 .\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
   -Variant 1.7b-base -BenchmarkMode full -Runs 3 `
-  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 `
+  -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
 .\scripts\benchmark_frameworks.ps1 -Implementations faster_python `
   -Variant 0.6b-base -BenchmarkMode full -Runs 3 `
-  -ReferenceMaxSec 5.95 -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
+  -ReferenceAudio $reference -ReferenceMaxSec 5.95 `
+  -FasterStreaming -FasterChunkSize 8 -FasterWarmupTokens 20
 ```
 
 The raw and summary CSVs include `PromptMode`, `BenchmarkScope`,
