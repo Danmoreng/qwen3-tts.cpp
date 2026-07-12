@@ -28,7 +28,35 @@ import torch
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_revision(path: Path | None) -> str | None:
+    if not path:
+        return None
+    completed = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _hf_revision(path: Path) -> str | None:
+    return path.name if path.parent.name == "snapshots" else None
+
+
+def _relevant_environment() -> dict[str, str]:
+    prefixes = ("QWEN3_TTS_", "GGML_CUDA_")
+    return {
+        key: value
+        for key, value in sorted(os.environ.items())
+        if key.startswith(prefixes)
+    }
 
 
 def _slug(value: str) -> str:
@@ -100,6 +128,9 @@ def _compare_codes(python_codes: np.ndarray, cpp_codes: np.ndarray) -> dict[str,
         "cb0_match_ratio": float(equal[:, 0].mean()) if frames else 0.0,
         "first_frame_match_ratio": float(equal[0].mean()) if frames else 0.0,
         "exact_prefix_frames": exact_prefix_frames,
+        "python_fully_compared": frames == python_codes.shape[0]
+        and codebooks == python_codes.shape[1],
+        "cpp_extra_frames": max(0, int(cpp_codes.shape[0] - python_codes.shape[0])),
         "first_diff": first_diff,
     }
 
@@ -218,12 +249,22 @@ def _run_cpp(
         raise RuntimeError(f"C++ {mode} run failed; see {log_path}")
 
     combined_log = completed.stdout + completed.stderr
+    backend = None
+    hidden_size = None
+    for line in combined_log.splitlines():
+        if "TTSTransformer backend:" in line:
+            backend = line.split("TTSTransformer backend:", 1)[1].strip()
+        if "TTS transformer loaded: hidden_size=" in line:
+            value = line.split("hidden_size=", 1)[1].split(",", 1)[0]
+            hidden_size = int(value)
     return {
         "generated": generated_path,
         "decoder": decoder_path,
         "wav": wav_path,
         "log": log_path,
         "device_chain_active": "CodePred device chain: enabled" in combined_log,
+        "transformer_backend": backend,
+        "transformer_hidden_size": hidden_size,
     }
 
 
@@ -423,10 +464,19 @@ def _run_python_case(
             subtalker_temperature=None,
         )
     codes = code_list[0].detach().cpu().to(torch.int64).numpy()
+    decode_codes = code_list[0]
+    reference_frame_count = 0
+    if args.prompt_mode == "icl" and prompt["ref_code"][0] is not None:
+        reference = prompt["ref_code"][0].to(decode_codes.device)
+        reference_frame_count = int(reference.shape[0])
+        decode_codes = torch.cat([reference, decode_codes], dim=0)
     wavs, sample_rate = model.model.speech_tokenizer.decode(
-        [{"audio_codes": code_list[0]}]
+        [{"audio_codes": decode_codes}]
     )
     wav = np.asarray(wavs[0], dtype=np.float32).reshape(-1)
+    if reference_frame_count:
+        cut = int(reference_frame_count / max(int(decode_codes.shape[0]), 1) * wav.size)
+        wav = wav[cut:]
     codes_path = output_dir / f"python_{length}f_codes.json"
     wav_path = output_dir / f"python_{length}f.wav"
     _write_code_json(codes_path, codes)
@@ -566,7 +616,13 @@ def main() -> int:
             cpp_codes = _load_code_json(auto["generated"])
             code_metrics = _compare_codes(python_codes, cpp_codes)
             audio_metrics = _compare_audio(python_wav, auto["wav"])
-            expect_chain = "0.6b" in model_name.lower() and length >= 64
+            expect_chain = (
+                args.decode_mode == "greedy"
+                and length >= 64
+                and auto["transformer_hidden_size"] == 1024
+                and auto["transformer_backend"] is not None
+                and "CUDA" in auto["transformer_backend"]
+            )
 
             performance = None
             if args.benchmark_runs > 0:
@@ -607,9 +663,9 @@ def main() -> int:
                 "python_cpp_nonempty": code_metrics["common_shape"][0] > 0,
                 "python_cpp_code_match": code_metrics["match_ratio"]
                 >= args.min_code_match,
-                "python_cpp_exact_codes": (
+                "python_cpp_exact_common_trajectory": (
                     code_metrics["match_ratio"] == 1.0
-                    and code_metrics["common_shape"] == code_metrics["python_shape"]
+                    and code_metrics["python_fully_compared"]
                     and code_metrics["cpp_shape"][1] == code_metrics["python_shape"][1]
                     and code_metrics["python_shape"][0]
                     <= code_metrics["cpp_shape"][0]
@@ -634,6 +690,8 @@ def main() -> int:
                 "max_tokens": length,
                 "cpp_exact": cpp_exact,
                 "automatic_device_chain_active": auto["device_chain_active"],
+                "automatic_transformer_backend": auto["transformer_backend"],
+                "automatic_transformer_hidden_size": auto["transformer_hidden_size"],
                 "expected_device_chain_active": expect_chain,
                 "python_cpp_codes": code_metrics,
                 "python_cpp_audio": audio_metrics,
@@ -651,7 +709,16 @@ def main() -> int:
             )
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "provenance": {
+            "repo_revision": _git_revision(args.repo_root),
+            "python_repo_revision": _git_revision(args.python_repo),
+            "hf_snapshot_revision": _hf_revision(args.hf_model),
+            "hf_config_sha256": _sha256(args.hf_model / "config.json")
+            if (args.hf_model / "config.json").exists()
+            else None,
+            "environment": _relevant_environment(),
+        },
         "official_python": {
             "model": str(args.hf_model),
             "device": args.python_device,
@@ -659,13 +726,25 @@ def main() -> int:
         },
         "cpp": {
             "binary": str(args.cpp_cli),
-            "models": args.cpp_model,
+            "binary_sha256": _sha256(args.cpp_cli),
+            "models": [
+                {
+                    "name": model_name,
+                    "sha256": _sha256(args.cpp_model_dir / model_name),
+                }
+                for model_name in args.cpp_model
+            ],
             "codec_model": str(args.codec_model),
+            "codec_sha256": _sha256(args.codec_model),
         },
         "text": args.text,
         "prompt_mode": args.prompt_mode,
         "decode_mode": args.decode_mode,
         "require_exact_python_codes": args.require_exact_python_codes,
+        "exact_gate_semantics": (
+            "Require every Python frame/codebook to match; C++ may contain the "
+            "known max_new_tokens extra frame, which is reported but not compared."
+        ),
         "lengths": args.length,
         "thresholds": {
             "min_code_match": args.min_code_match,

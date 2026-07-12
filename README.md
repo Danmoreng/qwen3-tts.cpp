@@ -536,6 +536,13 @@ dispatch, and optional resident performance metrics:
   -BenchmarkWarmups 2 -BenchmarkRuns 5
 ```
 
+Schema-2 reports record repository and Python revisions, the Hugging Face
+snapshot/config hash, binary/model/codec hashes, relevant optimization
+environment variables, and the observed transformer backend/hidden size.
+`-RequireExactPythonCodes` requires the complete Python trajectory to match;
+the known single extra C++ `max_tokens` frame is reported separately instead
+of being silently treated as Python output.
+
 Precision models are local test assets and are not committed. Generate missing
 0.6B F16/F32 GGUF files with `scripts/convert_tts_to_gguf.py --type f16` or
 `--type f32` before using `-IncludePrecisionModels`.
@@ -553,6 +560,13 @@ artifacts, F32 GGUF files, and deterministic top-k-1 decoding:
   -ReferenceTextFile benchmark_output\parity_serveurperso_seed\ref.txt `
   -Text "This is a short parity check for ICL voice cloning." -Lengths 64
 ```
+
+The prompt paths in that historical command are deliberately ignored local
+artifacts, so it is not yet a clean-checkout CI gate. Supply prompt artifacts
+generated from the intended reference audio/transcript (or point the command
+at equivalent local files); the report hashes and revisions make the resulting
+run auditable. Promoting a compact prompt fixture to tracked/nightly coverage
+remains an open development-plan item.
 
 Example trace run:
 

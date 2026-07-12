@@ -41,6 +41,9 @@ function Resolve-RepoPath([string]$PathValue) {
 if ([string]::IsNullOrWhiteSpace($HfModel)) {
     $snapshotRoot = Join-Path $env:USERPROFILE ".cache\huggingface\hub\models--Qwen--Qwen3-TTS-12Hz-$ModelSize-Base\snapshots"
     $snapshot = Get-ChildItem -LiteralPath $snapshotRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object -Property `
+            @{ Expression = "LastWriteTimeUtc"; Descending = $true }, `
+            @{ Expression = "FullName"; Descending = $false } |
         Select-Object -First 1
     if (-not $snapshot) {
         throw "No cached official $ModelSize Hugging Face snapshot found under $snapshotRoot"
