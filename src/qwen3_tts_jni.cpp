@@ -465,6 +465,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     jstring text,
     jstring reference_wav,
     jstring speaker_embedding_path,
+    jstring icl_prompt_path,
     jobject params,
     jfloat chunk_seconds,
     jfloat left_context_seconds,
@@ -478,6 +479,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
 
     const char* c_ref_wav = nullptr;
     const char* c_speaker_embedding = nullptr;
+    const char* c_icl_prompt = nullptr;
     if (reference_wav != nullptr) {
         c_ref_wav = env->GetStringUTFChars(reference_wav, nullptr);
         if (c_ref_wav == nullptr) {
@@ -493,6 +495,15 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
             return nullptr;
         }
     }
+    if (icl_prompt_path != nullptr) {
+        c_icl_prompt = env->GetStringUTFChars(icl_prompt_path, nullptr);
+        if (c_icl_prompt == nullptr) {
+            if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
+            if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
+            env->ReleaseStringUTFChars(text, c_text);
+            return nullptr;
+        }
+    }
 
     jclass callback_class = env->GetObjectClass(callback);
     jmethodID on_audio_chunk = env->GetMethodID(
@@ -504,6 +515,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     if (on_audio_chunk == nullptr) {
         if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
         if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
+        if (c_icl_prompt) env->ReleaseStringUTFChars(icl_prompt_path, c_icl_prompt);
         env->ReleaseStringUTFChars(text, c_text);
         return nullptr;
     }
@@ -578,7 +590,16 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     };
 
     qwen3_tts_result_t c_result;
-    if (c_speaker_embedding && strlen(c_speaker_embedding) > 0) {
+    if (c_icl_prompt && strlen(c_icl_prompt) > 0) {
+        c_result = qwen3_tts_synthesize_with_icl_prompt_streaming(
+            reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+            c_text,
+            c_icl_prompt,
+            c_stream_params,
+            c_callback,
+            &state
+        );
+    } else if (c_speaker_embedding && strlen(c_speaker_embedding) > 0) {
         c_result = qwen3_tts_synthesize_with_speaker_embedding_streaming(
             reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
             c_text,
@@ -609,6 +630,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     env->DeleteGlobalRef(callback_ref);
     if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
     if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
+    if (c_icl_prompt) env->ReleaseStringUTFChars(icl_prompt_path, c_icl_prompt);
     if (c_instruction) env->ReleaseStringUTFChars(j_instruction, c_instruction);
     if (c_speaker) env->ReleaseStringUTFChars(j_speaker, c_speaker);
     env->ReleaseStringUTFChars(text, c_text);
