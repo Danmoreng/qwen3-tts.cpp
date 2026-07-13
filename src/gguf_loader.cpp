@@ -369,9 +369,11 @@ bool load_tensor_data_from_file(
         }
         
         struct ggml_tensor * tensor = it->second;
-        size_t nbytes = ggml_nbytes(tensor);
-        
-        read_buf.resize(nbytes);
+        const enum ggml_type source_type = gguf_get_tensor_type(ctx, i);
+        const size_t source_nbytes = gguf_get_tensor_size(ctx, i);
+        const size_t target_nbytes = ggml_nbytes(tensor);
+
+        read_buf.resize(source_nbytes);
         
 #ifdef _WIN32
         if (_fseeki64(f, (int64_t)data_offset + (int64_t)offset, SEEK_SET) != 0) {
@@ -384,14 +386,48 @@ bool load_tensor_data_from_file(
             return false;
         }
         
-        if (fread(read_buf.data(), 1, nbytes, f) != nbytes) {
+        if (fread(read_buf.data(), 1, source_nbytes, f) != source_nbytes) {
             error_msg = "Failed to read tensor data: " + std::string(name);
             fclose(f);
             ggml_backend_free(backend);
             return false;
         }
-        
-        ggml_backend_tensor_set(tensor, read_buf.data(), 0, nbytes);
+
+        if (source_type == tensor->type) {
+            if (source_nbytes != target_nbytes) {
+                error_msg = "Tensor byte size mismatch: " + std::string(name);
+                fclose(f);
+                ggml_backend_free(backend);
+                return false;
+            }
+            ggml_backend_tensor_set(tensor, read_buf.data(), 0, target_nbytes);
+        } else if (tensor->type == GGML_TYPE_F16 &&
+                   (source_type == GGML_TYPE_F32 || source_type == GGML_TYPE_BF16)) {
+            const int64_t n = ggml_nelements(tensor);
+            std::vector<ggml_fp16_t> converted((size_t) n);
+            if (source_type == GGML_TYPE_F32) {
+                ggml_fp32_to_fp16_row(reinterpret_cast<const float *>(read_buf.data()),
+                                      converted.data(), n);
+            } else {
+                const ggml_bf16_t * source = reinterpret_cast<const ggml_bf16_t *>(read_buf.data());
+                for (int64_t element = 0; element < n; ++element) {
+                    converted[(size_t) element] = ggml_fp32_to_fp16(ggml_bf16_to_fp32(source[element]));
+                }
+            }
+            if (converted.size() * sizeof(ggml_fp16_t) != target_nbytes) {
+                error_msg = "Converted tensor byte size mismatch: " + std::string(name);
+                fclose(f);
+                ggml_backend_free(backend);
+                return false;
+            }
+            ggml_backend_tensor_set(tensor, converted.data(), 0, target_nbytes);
+        } else {
+            error_msg = "Unsupported tensor conversion for " + std::string(name) + ": " +
+                        ggml_type_name(source_type) + " -> " + ggml_type_name(tensor->type);
+            fclose(f);
+            ggml_backend_free(backend);
+            return false;
+        }
     }
     
     fclose(f);

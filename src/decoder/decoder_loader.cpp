@@ -29,6 +29,31 @@ ggml_backend_t init_dedicated_decoder_backend(std::string & error_msg) {
     return backend;
 }
 
+bool is_runtime_f16_conv_weight(const std::string & name) {
+    if (name == "tok_dec.pre_conv.weight" ||
+        name == "tok_dec.dec.0.conv.weight" ||
+        name == "tok_dec.dec.6.conv.weight") {
+        return true;
+    }
+    if (name.find("tok_dec.upsample.") == 0 &&
+        name.size() >= strlen(".dwconv.weight") &&
+        name.compare(name.size() - strlen(".dwconv.weight"),
+                     strlen(".dwconv.weight"), ".dwconv.weight") == 0) {
+        return true;
+    }
+    if (name.find("tok_dec.dec.") == 0 && name.find(".res.") != std::string::npos) {
+        const char * suffixes[] = { ".conv1.weight", ".conv2.weight" };
+        for (const char * suffix : suffixes) {
+            const size_t suffix_len = strlen(suffix);
+            if (name.size() >= suffix_len &&
+                name.compare(name.size() - suffix_len, suffix_len, suffix) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 AudioTokenizerDecoder::AudioTokenizerDecoder()
@@ -217,12 +242,17 @@ bool AudioTokenizerDecoder::load_model_impl(const std::string & model_path,
             continue;
         }
 
-        struct ggml_tensor * tensor = ggml_dup_tensor(model.ctx, meta_tensor);
+        struct ggml_tensor * tensor = nullptr;
+        const std::string sname(name);
+        if (is_runtime_f16_conv_weight(sname)) {
+            tensor = ggml_new_tensor(model.ctx, GGML_TYPE_F16,
+                                     ggml_n_dims(meta_tensor), meta_tensor->ne);
+        } else {
+            tensor = ggml_dup_tensor(model.ctx, meta_tensor);
+        }
         ggml_set_name(tensor, name);
 
         model.tensors[name] = tensor;
-
-        std::string sname(name);
 
         if (sname == "tok_dec.vq_first.input_proj.weight") model.vq_first_input_proj = tensor;
         else if (sname == "tok_dec.vq_first.output_proj.weight") model.vq_first_output_proj = tensor;

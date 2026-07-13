@@ -504,7 +504,7 @@ Runtime performance toggles:
 | `QWEN3_TTS_CODE_PRED_SUPERGRAPH=0` | Disable the automatic greedy CUDA Code Predictor supergraph for diagnostics and restore the established 15-graph path |
 | `QWEN3_TTS_CODE_PRED_DEVICE_CHAIN=0` | Disable the older multi-graph device-token bridge as well; this only affects the fallback used when the supergraph is disabled |
 | `QWEN3_TTS_TALKER_PACKED_QKV=0` | Disable the CUDA packed Talker step QKV projection used by models wider than 1024 and restore separate Q, K, and V matmuls |
-| `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0/1` | Force the legacy/summed decoder rest-codebook projection; automatic mode uses the summed CUDA path only for inputs up to 63 frames |
+| `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0/1` | Force the legacy/summed decoder rest-codebook projection; automatic mode uses the summed path on CPU and on CUDA inputs up to 63 frames |
 
 ## Testing and Debugging
 

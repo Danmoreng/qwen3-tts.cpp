@@ -53,6 +53,11 @@ bool is_cuda_backend(ggml_backend_t backend) {
     return name && std::strstr(name, "CUDA") != nullptr;
 }
 
+bool is_cpu_backend(ggml_backend_t backend) {
+    ggml_backend_dev_t device = backend ? ggml_backend_get_device(backend) : nullptr;
+    return device && ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
 bool summed_rest_codebook_projection_enabled(ggml_backend_t backend, int32_t n_frames) {
     const rest_codebook_projection_mode mode = get_rest_codebook_projection_mode();
     if (mode == rest_codebook_projection_mode::legacy) {
@@ -62,9 +67,10 @@ bool summed_rest_codebook_projection_enabled(ggml_backend_t backend, int32_t n_f
         return true;
     }
 
-    // CUDA A/B testing retained the summed path only for short inputs. Longer
-    // inputs and unmeasured backends keep the established graph by default.
-    return is_cuda_backend(backend) && n_frames < 64;
+    // CPU benefits from removing fourteen repeated projections across the
+    // tested decoder lengths. CUDA retains the summed path only for short
+    // inputs, where its launch reduction offsets the changed GEMM shape.
+    return is_cpu_backend(backend) || (is_cuda_backend(backend) && n_frames < 64);
 }
 
 } // namespace

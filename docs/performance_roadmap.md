@@ -161,15 +161,18 @@ directory.
 
 ### Sum Rest-Codebook Embeddings Before the Shared Decoder Projection
 
-Status: Partial
+Status: Enabled on CPU and short CUDA inputs
 
 The decoder now sums the 15 F32 rest-codebook embeddings before their shared,
-bias-free projection, removing 14 matrix multiplications. CUDA measurements
+bias-free projection, removing 14 matrix multiplications. CPU profiling showed
+that matrix multiplication accounts for about 60% of a 63-frame decoder graph;
+the summed graph reduced its 129 `MUL_MAT` nodes to 115. CUDA measurements
 showed a small win for short decodes but regressions at both 64 and 252 frames,
-so the automatic path is deliberately conservative:
+so backend-specific automatic selection remains deliberate:
 
+- All CPU inputs use the summed projection.
 - CUDA inputs with at most 63 frames use the summed projection.
-- Longer CUDA inputs and all unmeasured backends keep the legacy graph.
+- Longer CUDA inputs and other unmeasured backends keep the legacy graph.
 - `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=0` forces the legacy graph.
 - `QWEN3_TTS_DECODER_SUM_REST_EMBEDDINGS=1` forces the summed graph for
   diagnostics and future backend measurements.
@@ -180,6 +183,13 @@ used base commit `ed4ecf3`, GGML `0.15.3` at `eced84c8`, and
 `1883BEEED99348FC35E23DD225E9082F93F6F8C109330A33D935BAA8ACDBFD94`.
 Raw artifacts are under the ignored
 `benchmark_output/decoder_rest_embedding_sum` directory.
+
+The CPU gate used four alternating legacy/summed process pairs at 63 frames.
+Each process included the normal correctness coverage, one additional warm-up,
+and five resident measurements. Pooled process medians were 951.1 ms legacy
+and 938.3 ms summed (1.35%); all repeated-decode, streaming, sample-count, RMS,
+and reference-correlation checks passed. At 128 frames, the summed path was
+also included in the full CPU comparison described below.
 
 The final fixed-code A/B used eight alternating process pairs per length. Each
 process ran the two normal full-input correctness decodes, two additional
@@ -193,6 +203,45 @@ the paired median uses the eight process-mean pairs.
 | 63 | 105.070 ms | 104.254 ms | 0.78% | 2.81% | 7/8 |
 | 64 | 40.764 ms | 44.897 ms | -10.14% | -0.92% | 3/8 |
 | 252 | 202.431 ms | 208.245 ms | -2.87% | -3.03% | 2/8 |
+
+### Preconvert Decoder Convolution Weights
+
+Status: Enabled
+
+F32 and BF16 codec files previously kept all 29 runtime convolution kernels in
+their source type. Each offline and streaming graph then cast those kernels to
+F16 again because GGML's 1D convolution lowering requires F16 kernels on CPU.
+The loader now performs the same F32/BF16-to-F16 rounding once while loading
+the model. This removes the repeated graph casts without changing the values
+consumed by the convolution kernels.
+
+The generic GGUF loader now validates source and target byte sizes and supports
+this explicit F32/BF16-to-F16 load conversion. Other tensors retain their GGUF
+type. A 63-frame F32 before/after decode was byte-identical (120,960 float
+samples; identical SHA-256), and both paths reported RMS 0.002730 and
+correlation 0.998535 against the tracked Python reference.
+
+The upstream GGML submodule was updated from `eced84c8` (v0.15.3) to
+`af97976c` (v0.16.0). Upstream now contains the fused Snake activation for
+CUDA and Vulkan, but not for CPU. The similarly named CPU fusion remains
+specific to qwentts' GGML fork and is deliberately not copied into this
+repository. Combining the upstream update, load-time convolution conversion,
+and summed CPU projection reduced the historical 0.6B 128-frame Freeman
+decoder mean from 2814.4 ms to 2739.0 ms (2.7%).
+
+A fresh qwentts `d17c33d` CPU build using its fork was compared in alternating
+three-run matrices with 16 threads. qwen3-tts deliberately retained its default
+F32 codec while qwentts used its Q8_0 codec; every output had the expected
+duration and passed the WAV validity checks. Without an upstream CPU Snake
+fusion, qwentts remains faster in the decoder at every tested length.
+
+| Frames | qwen3-tts F32 decoder | qwentts Q8_0 decoder | qwentts lead |
+|---:|---:|---:|---:|
+| 32 | 1037.7 ms | 966.1 ms | 7.4% |
+| 64 | 1645.3 ms | 1546.2 ms | 6.4% |
+| 128 | 2739.0 ms | 2530.5 ms | 8.2% |
+
+Raw artifacts are under the ignored `benchmark_output/cpu_compare` directory.
 
 Correctness validation covered fixed inputs of 1, 63, 64, 73, and 252 frames.
 Every output had the expected sample count and finite values. For the active
