@@ -56,6 +56,27 @@ ggml_backend_t init_backend_by_type(enum ggml_backend_dev_type type) {
     return backend;
 }
 
+ggml_backend_t init_backend_by_registry(const char * registry_name) {
+    ggml_backend_reg_t registry = ggml_backend_reg_by_name(registry_name);
+    if (!registry || ggml_backend_reg_dev_count(registry) == 0) {
+        return nullptr;
+    }
+    return ggml_backend_dev_init(ggml_backend_reg_dev_get(registry, 0), nullptr);
+}
+
+ggml_backend_t init_backend_for_preference(
+    backend_preference preference,
+    enum ggml_backend_dev_type requested_type
+) {
+    if (requested_type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return init_backend_by_type(requested_type);
+    }
+    if (preference == backend_preference::metal) {
+        return init_backend_by_registry("MTL");
+    }
+    return init_backend_by_type(requested_type);
+}
+
 std::string backend_name(ggml_backend_t backend) {
     if (!backend) {
         return "";
@@ -86,6 +107,8 @@ ggml_backend_t init_preferred_backend(const char * component_name, std::string *
         backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     } else if (shared.preference == backend_preference::cuda) {
         backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    } else if (shared.preference == backend_preference::metal) {
+        backend = init_backend_by_registry("MTL");
     } else {
         backend = init_backend_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
         if (!backend) {
@@ -103,6 +126,8 @@ ggml_backend_t init_preferred_backend(const char * component_name, std::string *
         const char * name = component_name ? component_name : "component";
         if (shared.preference == backend_preference::cuda) {
             *error_msg = "CUDA backend was requested but could not be initialized for " + std::string(name);
+        } else if (shared.preference == backend_preference::metal) {
+            *error_msg = "Metal backend was requested but could not be initialized for " + std::string(name);
         } else if (shared.preference == backend_preference::cpu) {
             *error_msg = "CPU backend could not be initialized for " + std::string(name);
         } else {
@@ -207,6 +232,8 @@ enum ggml_backend_dev_type get_preferred_backend_type() {
             return GGML_BACKEND_DEVICE_TYPE_CPU;
         case backend_preference::cuda:
             return GGML_BACKEND_DEVICE_TYPE_GPU;
+        case backend_preference::metal:
+            return GGML_BACKEND_DEVICE_TYPE_GPU;
         case backend_preference::auto_select:
         default:
             return GGML_BACKEND_DEVICE_TYPE_IGPU;
@@ -217,6 +244,9 @@ int32_t get_compiled_backend_mask() {
     int32_t mask = 1; // CPU
 #ifdef QWEN3_TTS_CUDA_ENABLED
     mask |= 2; // CUDA
+#endif
+#ifdef QWEN3_TTS_METAL_ENABLED
+    mask |= 4; // Metal
 #endif
     return mask;
 }
@@ -309,8 +339,8 @@ bool load_tensor_data_from_file(
     std::string & error_msg,
     enum ggml_backend_dev_type preferred_backend_type
 ) {
-    ggml_backend_t backend = init_backend_by_type(preferred_backend_type);
     const backend_preference preference = get_backend_preference();
+    ggml_backend_t backend = init_backend_for_preference(preference, preferred_backend_type);
     const bool allow_fallback = preference == backend_preference::auto_select &&
         preferred_backend_type != GGML_BACKEND_DEVICE_TYPE_CPU;
     if (!backend && allow_fallback) {
@@ -330,6 +360,8 @@ bool load_tensor_data_from_file(
     if (!backend) {
         if (preference == backend_preference::cuda) {
             error_msg = "CUDA backend was requested but could not be initialized for GGUF tensor loader";
+        } else if (preference == backend_preference::metal) {
+            error_msg = "Metal backend was requested but could not be initialized for GGUF tensor loader";
         } else if (preference == backend_preference::cpu) {
             error_msg = "CPU backend could not be initialized for GGUF tensor loader";
         } else {

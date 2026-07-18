@@ -325,6 +325,34 @@ JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoad
     return result != 0 ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoadModelsWithTokenizer(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring model_dir, jstring model_name, jstring tokenizer_name
+) {
+    if (ctx_ptr == 0 || model_dir == nullptr) return JNI_FALSE;
+    const char* c_model_dir = env->GetStringUTFChars(model_dir, nullptr);
+    if (c_model_dir == nullptr) return JNI_FALSE;
+
+    const char* c_model_name = model_name ? env->GetStringUTFChars(model_name, nullptr) : nullptr;
+    const char* c_tokenizer_name = tokenizer_name ? env->GetStringUTFChars(tokenizer_name, nullptr) : nullptr;
+    if ((model_name && !c_model_name) || (tokenizer_name && !c_tokenizer_name)) {
+        if (c_model_name) env->ReleaseStringUTFChars(model_name, c_model_name);
+        if (c_tokenizer_name) env->ReleaseStringUTFChars(tokenizer_name, c_tokenizer_name);
+        env->ReleaseStringUTFChars(model_dir, c_model_dir);
+        return JNI_FALSE;
+    }
+
+    const int32_t result = qwen3_tts_load_models_with_names(
+        reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr),
+        c_model_dir,
+        c_model_name,
+        c_tokenizer_name);
+
+    if (c_model_name) env->ReleaseStringUTFChars(model_name, c_model_name);
+    if (c_tokenizer_name) env->ReleaseStringUTFChars(tokenizer_name, c_tokenizer_name);
+    env->ReleaseStringUTFChars(model_dir, c_model_dir);
+    return result != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoadIclPromptEncoder(
     JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring model_dir, jstring model_name
 ) {

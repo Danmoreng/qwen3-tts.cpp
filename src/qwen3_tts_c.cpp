@@ -139,6 +139,8 @@ int32_t qwen3_tts_set_backend_preference(int32_t preference) {
         native_preference = qwen3_tts::backend_preference::cpu;
     } else if (preference == QWEN3_TTS_BACKEND_CUDA) {
         native_preference = qwen3_tts::backend_preference::cuda;
+    } else if (preference == QWEN3_TTS_BACKEND_METAL) {
+        native_preference = qwen3_tts::backend_preference::metal;
     }
     return qwen3_tts::set_backend_preference(native_preference) ? 1 : 0;
 }
@@ -171,6 +173,23 @@ int32_t qwen3_tts_load_models_with_name(
 ) {
     if (!ctx || !model_dir) return 0;
     return ctx->tts.load_models(model_dir, model_name ? model_name : "") ? 1 : 0;
+}
+
+int32_t qwen3_tts_load_models_with_names(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir,
+    const char* model_name,
+    const char* tokenizer_name
+) {
+    if (!ctx || !model_dir) return 0;
+    const std::string tokenizer_path = tokenizer_name && tokenizer_name[0] != '\0'
+        ? std::string(model_dir) + "/" + tokenizer_name
+        : "";
+    return ctx->tts.load_models(
+        model_dir,
+        model_name ? model_name : "",
+        tokenizer_path
+    ) ? 1 : 0;
 }
 
 int32_t qwen3_tts_load_icl_prompt_encoder(

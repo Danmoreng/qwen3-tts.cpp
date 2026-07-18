@@ -16,6 +16,7 @@ enum class backend_preference {
     auto_select = 0,
     cpu = 1,
     cuda = 2,
+    metal = 3,
 };
 
 // Generic GGUF model loader class
