@@ -463,6 +463,7 @@ Common CMake options:
 | Option | Purpose |
 |--------|---------|
 | `QWEN3_TTS_CUDA` | Enable GGML CUDA integration |
+| `QWEN3_TTS_METAL` | Enable GGML Metal integration (Apple platforms; enabled by default) |
 | `QWEN3_TTS_TIMING` | Enable detailed timing logs |
 | `QWEN3_TTS_BUILD_SHARED` | Build optional JNI shared library |
 | `QWEN3_TTS_EMBED_GGML` | Build GGML as a CMake subdirectory |

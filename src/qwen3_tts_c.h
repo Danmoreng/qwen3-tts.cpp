@@ -64,6 +64,7 @@ typedef enum {
     QWEN3_TTS_BACKEND_AUTO = 0,
     QWEN3_TTS_BACKEND_CPU = 1,
     QWEN3_TTS_BACKEND_CUDA = 2,
+    QWEN3_TTS_BACKEND_METAL = 3,
 } qwen3_tts_backend_preference_t;
 
 typedef struct {
@@ -117,6 +118,12 @@ QWEN3_TTS_API int32_t qwen3_tts_load_models_with_name(
     qwen3_tts_context_t* ctx,
     const char* model_dir,
     const char* model_name
+);
+QWEN3_TTS_API int32_t qwen3_tts_load_models_with_names(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir,
+    const char* model_name,
+    const char* tokenizer_name
 );
 
 QWEN3_TTS_API int32_t qwen3_tts_load_icl_prompt_encoder(
