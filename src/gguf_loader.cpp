@@ -1,4 +1,5 @@
 #include "gguf_loader.h"
+#include "common/utf8_path.h"
 
 #include <cstdio>
 #include <cstring>
@@ -348,7 +349,7 @@ bool load_tensor_data_from_file(
     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     
     // Open file for reading tensor data
-    FILE * f = fopen(path.c_str(), "rb");
+    FILE * f = utf8_fopen(path, "rb");
     if (!f) {
         error_msg = "Failed to open file for reading: " + path;
         ggml_backend_free(backend);

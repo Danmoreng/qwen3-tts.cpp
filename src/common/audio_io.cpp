@@ -1,4 +1,5 @@
 #include "qwen3_tts.h"
+#include "common/utf8_path.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -10,7 +11,7 @@ namespace qwen3_tts {
 // WAV file loading (16-bit PCM or 32-bit float)
 bool load_audio_file(const std::string & path, std::vector<float> & samples,
                      int & sample_rate) {
-    FILE * f = fopen(path.c_str(), "rb");
+    FILE * f = utf8_fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "ERROR: Cannot open WAV file: %s\n", path.c_str());
         return false;
@@ -146,7 +147,7 @@ bool load_audio_file(const std::string & path, std::vector<float> & samples,
 // WAV file saving (16-bit PCM at specified sample rate)
 bool save_audio_file(const std::string & path, const std::vector<float> & samples,
                      int sample_rate) {
-    FILE * f = fopen(path.c_str(), "wb");
+    FILE * f = utf8_fopen(path, "wb");
     if (!f) {
         fprintf(stderr, "ERROR: Cannot create WAV file: %s\n", path.c_str());
         return false;

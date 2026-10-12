@@ -1,4 +1,5 @@
 #include "tts_transformer.h"
+#include "common/utf8_path.h"
 #include "transformer/transformer_state_internal.h"
 #include "gguf_loader.h"
 #include "transformer/transformer_internal.h"
@@ -386,7 +387,7 @@ bool transformer_internal::ops::load_tensor_data(TTSTransformer & self, const st
         return false;
     }
 
-    FILE * f = fopen(path.c_str(), "rb");
+    FILE * f = utf8_fopen(path, "rb");
     if (!f) {
         error_msg = "Failed to open file for reading: " + path;
         release_preferred_backend(backend);

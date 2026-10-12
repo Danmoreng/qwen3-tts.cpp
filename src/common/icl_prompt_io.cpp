@@ -1,4 +1,5 @@
 #include "qwen3_tts.h"
+#include "common/utf8_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -13,7 +14,7 @@ namespace qwen3_tts {
 namespace {
 
 std::string read_file_text(const std::string & path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(utf8_fs_path(path), std::ios::binary);
     if (!in) {
         return {};
     }
@@ -261,7 +262,7 @@ bool save_icl_prompt_file(const std::string & path, const icl_prompt & prompt) {
         return false;
     }
 
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    std::ofstream out(utf8_fs_path(path), std::ios::out | std::ios::trunc);
     if (!out) {
         fprintf(stderr, "ERROR: Cannot create ICL prompt file: %s\n", path.c_str());
         return false;

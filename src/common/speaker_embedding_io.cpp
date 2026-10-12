@@ -1,4 +1,5 @@
 #include "qwen3_tts.h"
+#include "common/utf8_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -46,7 +47,7 @@ static bool parse_embedding_text(const std::string & text, std::vector<float> & 
 
 bool load_speaker_embedding_file(const std::string & path,
                                  std::vector<float> & embedding) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(utf8_fs_path(path), std::ios::binary);
     if (!in) {
         fprintf(stderr, "ERROR: Cannot open speaker embedding file: %s\n", path.c_str());
         return false;
@@ -85,7 +86,7 @@ bool save_speaker_embedding_file(const std::string & path,
     }
 
     if (has_json_extension(path)) {
-        std::ofstream out(path, std::ios::out | std::ios::trunc);
+        std::ofstream out(utf8_fs_path(path), std::ios::out | std::ios::trunc);
         if (!out) {
             fprintf(stderr, "ERROR: Cannot create speaker embedding JSON file: %s\n", path.c_str());
             return false;
@@ -103,7 +104,7 @@ bool save_speaker_embedding_file(const std::string & path,
         return true;
     }
 
-    std::ofstream out(path, std::ios::binary | std::ios::out | std::ios::trunc);
+    std::ofstream out(utf8_fs_path(path), std::ios::binary | std::ios::out | std::ios::trunc);
     if (!out) {
         fprintf(stderr, "ERROR: Cannot create speaker embedding binary file: %s\n", path.c_str());
         return false;

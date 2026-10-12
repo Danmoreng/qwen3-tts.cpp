@@ -1,4 +1,5 @@
 #include "qwen3_tts.h"
+#include "common/utf8_path.h"
 #include "gguf_loader.h"
 #include "pipeline/pipeline_internal.h"
 
@@ -60,12 +61,12 @@ std::string choose_tts_model_path(const std::string & model_dir,
     std::string tts_model_path;
     tts_candidates.clear();
 
-    if (fs::exists(model_dir) && fs::is_directory(model_dir)) {
-        for (const auto & entry : fs::directory_iterator(model_dir)) {
+    if (fs::exists(utf8_fs_path(model_dir)) && fs::is_directory(utf8_fs_path(model_dir))) {
+        for (const auto & entry : fs::directory_iterator(utf8_fs_path(model_dir))) {
             if (!entry.is_regular_file()) continue;
-            std::string filename = entry.path().filename().string();
+            std::string filename = entry.path().filename().u8string();
             std::string filename_lower = to_lower(filename);
-            std::string ext = to_lower(entry.path().extension().string());
+            std::string ext = to_lower(entry.path().extension().u8string());
 
             if (ext == ".gguf" &&
                 filename_lower.find("tokenizer") == std::string::npos &&
@@ -74,10 +75,10 @@ std::string choose_tts_model_path(const std::string & model_dir,
                 tts_candidates.push_back(entry.path());
                 if (!model_name.empty()) {
                     if (filename.find(model_name) != std::string::npos) {
-                        tts_model_path = entry.path().string();
+                        tts_model_path = entry.path().u8string();
                     }
                 } else if (tts_model_path.empty() || filename.find("0.6b") != std::string::npos) {
-                    tts_model_path = entry.path().string();
+                    tts_model_path = entry.path().u8string();
                 }
             }
         }
@@ -97,11 +98,11 @@ std::string choose_tts_model_path(const std::string & model_dir,
 std::string choose_tokenizer_model_path(const std::string & model_dir,
                                         const std::string & tts_model_path) {
     std::vector<fs::path> tokenizer_candidates;
-    if (fs::exists(model_dir) && fs::is_directory(model_dir)) {
-        for (const auto & entry : fs::directory_iterator(model_dir)) {
+    if (fs::exists(utf8_fs_path(model_dir)) && fs::is_directory(utf8_fs_path(model_dir))) {
+        for (const auto & entry : fs::directory_iterator(utf8_fs_path(model_dir))) {
             if (!entry.is_regular_file()) continue;
-            std::string filename_lower = to_lower(entry.path().filename().string());
-            std::string ext = to_lower(entry.path().extension().string());
+            std::string filename_lower = to_lower(entry.path().filename().u8string());
+            std::string ext = to_lower(entry.path().extension().u8string());
             if (ext == ".gguf" && filename_lower.find("tokenizer") != std::string::npos) {
                 tokenizer_candidates.push_back(entry.path());
             }
@@ -116,24 +117,24 @@ std::string choose_tokenizer_model_path(const std::string & model_dir,
     };
     for (const auto & preferred : preferred_exact) {
         for (const auto & path : tokenizer_candidates) {
-            if (to_lower(path.filename().string()) == preferred) {
-                return path.string();
+            if (to_lower(path.filename().u8string()) == preferred) {
+                return path.u8string();
             }
         }
     }
 
     const bool prefer_qwen_talker =
-        to_lower(fs::path(tts_model_path).filename().string()).find("qwen-talker") != std::string::npos;
+        to_lower(utf8_fs_path(tts_model_path).filename().u8string()).find("qwen-talker") != std::string::npos;
     if (prefer_qwen_talker) {
         for (const auto & path : tokenizer_candidates) {
-            if (to_lower(path.filename().string()).find("qwen-tokenizer-12hz") != std::string::npos) {
-                return path.string();
+            if (to_lower(path.filename().u8string()).find("qwen-tokenizer-12hz") != std::string::npos) {
+                return path.u8string();
             }
         }
     }
 
     if (!tokenizer_candidates.empty()) {
-        return tokenizer_candidates.front().string();
+        return tokenizer_candidates.front().u8string();
     }
     return model_dir + "/qwen-tokenizer-12hz-Q8_0.gguf";
 }
@@ -150,14 +151,14 @@ std::string find_speaker_encoder_model(const std::string & tts_model_path,
     std::string best_path;
 
     for (const auto & candidate : tts_candidates) {
-        const std::string filename = to_lower(candidate.filename().string());
+        const std::string filename = to_lower(candidate.filename().u8string());
         if (filename.find("tokenizer") != std::string::npos ||
             filename.find(size_marker) == std::string::npos ||
             filename.find("base") == std::string::npos) {
             continue;
         }
 
-        const std::string path = candidate.string();
+        const std::string path = candidate.u8string();
         if (!has_speaker_encoder_tensors(path)) {
             continue;
         }
@@ -203,13 +204,13 @@ bool Qwen3TTS::load_models(const std::string & model_dir,
     std::string tts_model_path;
     std::vector<fs::path> tts_candidates;
 
-    if (fs::exists(model_dir) && fs::is_directory(model_dir)) {
-        for (const auto & entry : fs::directory_iterator(model_dir)) {
+    if (fs::exists(utf8_fs_path(model_dir)) && fs::is_directory(utf8_fs_path(model_dir))) {
+        for (const auto & entry : fs::directory_iterator(utf8_fs_path(model_dir))) {
             if (!entry.is_regular_file()) continue;
-            std::string filename = entry.path().filename().string();
+            std::string filename = entry.path().filename().u8string();
             std::string filename_lower = filename;
             std::transform(filename_lower.begin(), filename_lower.end(), filename_lower.begin(), ::tolower);
-            std::string ext = entry.path().extension().string();
+            std::string ext = entry.path().extension().u8string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             if (ext == ".gguf") {
@@ -220,10 +221,10 @@ bool Qwen3TTS::load_models(const std::string & model_dir,
                     tts_candidates.push_back(entry.path());
                     if (!model_name.empty()) {
                         if (filename.find(model_name) != std::string::npos) {
-                            tts_model_path = entry.path().string();
+                            tts_model_path = entry.path().u8string();
                         }
                     } else if (tts_model_path.empty() || filename.find("0.6b") != std::string::npos) {
-                        tts_model_path = entry.path().string();
+                        tts_model_path = entry.path().u8string();
                     }
                 }
             }
@@ -240,7 +241,7 @@ bool Qwen3TTS::load_models(const std::string & model_dir,
     const std::string tokenizer_model_path = tokenizer_model_override.empty()
         ? choose_tokenizer_model_path(model_dir, tts_model_path)
         : tokenizer_model_override;
-    if (!fs::exists(tokenizer_model_path)) {
+    if (!fs::exists(utf8_fs_path(tokenizer_model_path))) {
         error_msg_ = "Tokenizer/codec model not found: " + tokenizer_model_path;
         return false;
     }
@@ -407,7 +408,7 @@ bool Qwen3TTS::load_icl_prompt_encoder_only(const std::string & model_dir,
     tokenizer_model_path_ = tokenizer_model_override.empty()
         ? choose_tokenizer_model_path(model_dir, tts_model_path_)
         : tokenizer_model_override;
-    if (!fs::exists(tokenizer_model_path_)) {
+    if (!fs::exists(utf8_fs_path(tokenizer_model_path_))) {
         error_msg_ = "Tokenizer/codec model not found: " + tokenizer_model_path_;
         return false;
     }
