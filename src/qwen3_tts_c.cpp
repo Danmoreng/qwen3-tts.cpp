@@ -1,8 +1,10 @@
 #include "qwen3_tts_c.h"
 #include "qwen3_tts.h"
 #include "gguf_loader.h"
+#include <cstddef>
 #include <cstring>
 #include <cstdlib>
+#include <exception>
 #include <vector>
 #include <string>
 
@@ -59,6 +61,120 @@ static qwen3_tts::tts_params convert_params(qwen3_tts_params_t params) {
     return p;
 }
 
+void qwen3_tts_bridge_abi_sizes(int32_t* sizes) {
+    if (!sizes) return;
+    sizes[0] = sizeof(qwen3_tts_params_t);
+    sizes[1] = sizeof(qwen3_tts_streaming_params_t);
+    sizes[2] = sizeof(qwen3_tts_audio_chunk_t);
+    sizes[3] = sizeof(qwen3_tts_result_t);
+}
+
+static int32_t copy_abi_table(const int32_t* table, int32_t count, int32_t* out, int32_t capacity) {
+    if (out) {
+        for (int32_t i = 0; i < count && i < capacity; ++i) {
+            out[i] = table[i];
+        }
+    }
+    return count;
+}
+
+// Field list shared by the layout and the type table: keep in declaration order.
+#define QWEN3_TTS_ABI_FIELDS(X)                                        \
+    X(qwen3_tts_params_t, max_audio_tokens)                            \
+    X(qwen3_tts_params_t, temperature)                                 \
+    X(qwen3_tts_params_t, top_p)                                       \
+    X(qwen3_tts_params_t, top_k)                                       \
+    X(qwen3_tts_params_t, n_threads)                                   \
+    X(qwen3_tts_params_t, print_progress)                              \
+    X(qwen3_tts_params_t, print_timing)                                \
+    X(qwen3_tts_params_t, repetition_penalty)                          \
+    X(qwen3_tts_params_t, language_id)                                 \
+    X(qwen3_tts_params_t, instruction)                                 \
+    X(qwen3_tts_params_t, speaker)                                     \
+    X(qwen3_tts_params_t, vocoder_left_context_sec)                    \
+    X(qwen3_tts_streaming_params_t, generation)                        \
+    X(qwen3_tts_streaming_params_t, chunk_sec)                         \
+    X(qwen3_tts_streaming_params_t, left_context_sec)                  \
+    X(qwen3_tts_streaming_params_t, collect_audio)                     \
+    X(qwen3_tts_audio_chunk_t, samples)                                \
+    X(qwen3_tts_audio_chunk_t, n_samples)                              \
+    X(qwen3_tts_audio_chunk_t, sample_rate)                            \
+    X(qwen3_tts_audio_chunk_t, start_sample)                           \
+    X(qwen3_tts_audio_chunk_t, end_sample)                             \
+    X(qwen3_tts_audio_chunk_t, start_frame)                            \
+    X(qwen3_tts_audio_chunk_t, end_frame)                              \
+    X(qwen3_tts_audio_chunk_t, start_text_byte)                        \
+    X(qwen3_tts_audio_chunk_t, end_text_byte)                          \
+    X(qwen3_tts_audio_chunk_t, text_alignment_kind)                    \
+    X(qwen3_tts_audio_chunk_t, confidence)                             \
+    X(qwen3_tts_result_t, audio)                                       \
+    X(qwen3_tts_result_t, audio_len)                                   \
+    X(qwen3_tts_result_t, sample_rate)                                 \
+    X(qwen3_tts_result_t, success)                                     \
+    X(qwen3_tts_result_t, error_msg)                                   \
+    X(qwen3_tts_result_t, t_total_ms)
+
+template <typename T> struct abi_type_code { static const int32_t value = 5; };  // nested struct
+template <> struct abi_type_code<int32_t> { static const int32_t value = 1; };
+template <> struct abi_type_code<int64_t> { static const int32_t value = 2; };
+template <> struct abi_type_code<float> { static const int32_t value = 3; };
+template <typename T> struct abi_type_code<T*> { static const int32_t value = 4; };
+
+int32_t qwen3_tts_bridge_abi_types(int32_t* out, int32_t capacity) {
+#define QWEN3_TTS_TYPE(type, field) abi_type_code<decltype(type::field)>::value,
+    static const int32_t types[] = { QWEN3_TTS_ABI_FIELDS(QWEN3_TTS_TYPE) };
+#undef QWEN3_TTS_TYPE
+    return copy_abi_table(types, (int32_t) (sizeof(types) / sizeof(types[0])), out, capacity);
+}
+
+int32_t qwen3_tts_bridge_abi_layout(int32_t* out, int32_t capacity) {
+#define QWEN3_TTS_OFFSET(type, field) (int32_t) offsetof(type, field)
+    static const int32_t layout[] = {
+        (int32_t) sizeof(qwen3_tts_params_t),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, max_audio_tokens),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, temperature),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, top_p),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, top_k),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, n_threads),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, print_progress),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, print_timing),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, repetition_penalty),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, language_id),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, instruction),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, speaker),
+        QWEN3_TTS_OFFSET(qwen3_tts_params_t, vocoder_left_context_sec),
+
+        (int32_t) sizeof(qwen3_tts_streaming_params_t),
+        QWEN3_TTS_OFFSET(qwen3_tts_streaming_params_t, generation),
+        QWEN3_TTS_OFFSET(qwen3_tts_streaming_params_t, chunk_sec),
+        QWEN3_TTS_OFFSET(qwen3_tts_streaming_params_t, left_context_sec),
+        QWEN3_TTS_OFFSET(qwen3_tts_streaming_params_t, collect_audio),
+
+        (int32_t) sizeof(qwen3_tts_audio_chunk_t),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, samples),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, n_samples),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, sample_rate),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, start_sample),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, end_sample),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, start_frame),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, end_frame),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, start_text_byte),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, end_text_byte),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, text_alignment_kind),
+        QWEN3_TTS_OFFSET(qwen3_tts_audio_chunk_t, confidence),
+
+        (int32_t) sizeof(qwen3_tts_result_t),
+        QWEN3_TTS_OFFSET(qwen3_tts_result_t, audio),
+        QWEN3_TTS_OFFSET(qwen3_tts_result_t, audio_len),
+        QWEN3_TTS_OFFSET(qwen3_tts_result_t, sample_rate),
+        QWEN3_TTS_OFFSET(qwen3_tts_result_t, success),
+        QWEN3_TTS_OFFSET(qwen3_tts_result_t, error_msg),
+        QWEN3_TTS_OFFSET(qwen3_tts_result_t, t_total_ms),
+    };
+#undef QWEN3_TTS_OFFSET
+    return copy_abi_table(layout, (int32_t) (sizeof(layout) / sizeof(layout[0])), out, capacity);
+}
+
 static qwen3_tts::tts_streaming_params convert_streaming_params(qwen3_tts_streaming_params_t params) {
     qwen3_tts::tts_streaming_params p;
     p.generation = convert_params(params.generation);
@@ -95,6 +211,34 @@ static qwen3_tts_result_t make_error_result(const char * message) {
     return res;
 }
 
+// No C++ exception may cross the C boundary: on Windows it would terminate the
+// host process (a Python interpreter, say) instead of reaching the caller.
+static const char * UNKNOWN_EXCEPTION = "Unhandled C++ exception in the qwen3_tts bridge";
+
+template <typename Body>
+static qwen3_tts_result_t guarded_result(Body && body) {
+    try {
+        return body();
+    } catch (const std::exception & error) {
+        return make_error_result(error.what());
+    } catch (...) {
+        return make_error_result(UNKNOWN_EXCEPTION);
+    }
+}
+
+template <typename Body>
+static int32_t guarded_status(qwen3_tts_context_t* ctx, Body && body) {
+    try {
+        return body();
+    } catch (const std::exception & error) {
+        set_last_error(ctx, error.what());
+        return 0;
+    } catch (...) {
+        set_last_error(ctx, UNKNOWN_EXCEPTION);
+        return 0;
+    }
+}
+
 static bool load_icl_prompt_params(const char * icl_prompt_file,
                                    qwen3_tts::icl_prompt & prompt,
                                    qwen3_tts::tts_params & params,
@@ -125,8 +269,20 @@ static qwen3_tts_audio_chunk_t convert_audio_chunk(const qwen3_tts::tts_audio_ch
     return out;
 }
 
+static qwen3_tts::tts_audio_chunk_callback_t wrap_chunk_callback(qwen3_tts_audio_chunk_callback callback,
+                                                                 void* user_data) {
+    return [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
+        qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
+        return callback(&c_chunk, user_data) != 0;
+    };
+}
+
 qwen3_tts_context_t* qwen3_tts_init() {
-    return new qwen3_tts_context();
+    try {
+        return new qwen3_tts_context();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 void qwen3_tts_free(qwen3_tts_context_t* ctx) {
@@ -134,17 +290,21 @@ void qwen3_tts_free(qwen3_tts_context_t* ctx) {
 }
 
 int32_t qwen3_tts_set_backend_preference(int32_t preference) {
-    qwen3_tts::backend_preference native_preference = qwen3_tts::backend_preference::auto_select;
-    if (preference == QWEN3_TTS_BACKEND_CPU) {
-        native_preference = qwen3_tts::backend_preference::cpu;
-    } else if (preference == QWEN3_TTS_BACKEND_CUDA) {
-        native_preference = qwen3_tts::backend_preference::cuda;
-    }
-    return qwen3_tts::set_backend_preference(native_preference) ? 1 : 0;
+    return guarded_status(nullptr, [&]() -> int32_t {
+        qwen3_tts::backend_preference native_preference = qwen3_tts::backend_preference::auto_select;
+        if (preference == QWEN3_TTS_BACKEND_CPU) {
+            native_preference = qwen3_tts::backend_preference::cpu;
+        } else if (preference == QWEN3_TTS_BACKEND_CUDA) {
+            native_preference = qwen3_tts::backend_preference::cuda;
+        }
+        return qwen3_tts::set_backend_preference(native_preference) ? 1 : 0;
+    });
 }
 
 int32_t qwen3_tts_set_cpu_threads(int32_t n_threads) {
-    return qwen3_tts::set_cpu_thread_count(n_threads) ? 1 : 0;
+    return guarded_status(nullptr, [&]() -> int32_t {
+        return qwen3_tts::set_cpu_thread_count(n_threads) ? 1 : 0;
+    });
 }
 
 int32_t qwen3_tts_get_cpu_threads() {
@@ -156,8 +316,12 @@ int32_t qwen3_tts_get_compiled_backend_mask() {
 }
 
 char* qwen3_tts_get_active_backend_name() {
-    const std::string name = qwen3_tts::get_active_backend_name();
-    return strdup(name.c_str());
+    try {
+        const std::string name = qwen3_tts::get_active_backend_name();
+        return strdup(name.c_str());
+    } catch (...) {
+        return strdup("");
+    }
 }
 
 int32_t qwen3_tts_load_models(qwen3_tts_context_t* ctx, const char* model_dir) {
@@ -170,7 +334,9 @@ int32_t qwen3_tts_load_models_with_name(
     const char* model_name
 ) {
     if (!ctx || !model_dir) return 0;
-    return ctx->tts.load_models(model_dir, model_name ? model_name : "") ? 1 : 0;
+    return guarded_status(ctx, [&]() -> int32_t {
+        return ctx->tts.load_models(model_dir, model_name ? model_name : "") ? 1 : 0;
+    });
 }
 
 int32_t qwen3_tts_load_icl_prompt_encoder(
@@ -186,38 +352,36 @@ int32_t qwen3_tts_load_icl_prompt_encoder_with_name(
     const char* model_name
 ) {
     if (!ctx || !model_dir) return 0;
-    return ctx->tts.load_icl_prompt_encoder_only(model_dir, model_name ? model_name : "") ? 1 : 0;
+    return guarded_status(ctx, [&]() -> int32_t {
+        return ctx->tts.load_icl_prompt_encoder_only(model_dir, model_name ? model_name : "") ? 1 : 0;
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize(
-    qwen3_tts_context_t* ctx, 
-    const char* text, 
+    qwen3_tts_context_t* ctx,
+    const char* text,
     qwen3_tts_params_t params
 ) {
     if (!ctx || !text) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Invalid context or text");
-        return res;
+        return make_error_result("Invalid context or text");
     }
-    auto result = ctx->tts.synthesize(text, convert_params(params));
-    return convert_result(result);
+    return guarded_result([&]() {
+        return convert_result(ctx->tts.synthesize(text, convert_params(params)));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_with_voice(
-    qwen3_tts_context_t* ctx, 
-    const char* text, 
-    const char* reference_audio, 
+    qwen3_tts_context_t* ctx,
+    const char* text,
+    const char* reference_audio,
     qwen3_tts_params_t params
 ) {
     if (!ctx || !text || !reference_audio) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Invalid context, text, or reference audio");
-        return res;
+        return make_error_result("Invalid context, text, or reference audio");
     }
-    auto result = ctx->tts.synthesize_with_voice(text, reference_audio, convert_params(params));
-    return convert_result(result);
+    return guarded_result([&]() {
+        return convert_result(ctx->tts.synthesize_with_voice(text, reference_audio, convert_params(params)));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
@@ -227,22 +391,16 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding(
     qwen3_tts_params_t params
 ) {
     if (!ctx || !text || !speaker_embedding_file) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Invalid context, text, or speaker embedding file");
-        return res;
+        return make_error_result("Invalid context, text, or speaker embedding file");
     }
-
-    std::vector<float> speaker_embedding;
-    if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Failed to load speaker embedding file");
-        return res;
-    }
-
-    auto result = ctx->tts.synthesize_with_speaker_embedding(text, speaker_embedding, convert_params(params));
-    return convert_result(result);
+    return guarded_result([&]() {
+        std::vector<float> speaker_embedding;
+        if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
+            return make_error_result("Failed to load speaker embedding file");
+        }
+        return convert_result(
+            ctx->tts.synthesize_with_speaker_embedding(text, speaker_embedding, convert_params(params)));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt(
@@ -254,16 +412,16 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt(
     if (!ctx || !text || !icl_prompt_file) {
         return make_error_result("Invalid context, text, or ICL prompt file");
     }
-
-    qwen3_tts::icl_prompt prompt;
-    qwen3_tts::tts_params native_params = convert_params(params);
-    qwen3_tts_result_t error_result = {0};
-    if (!load_icl_prompt_params(icl_prompt_file, prompt, native_params, error_result)) {
-        return error_result;
-    }
-
-    auto result = ctx->tts.synthesize_with_speaker_embedding(text, prompt.speaker_embedding, native_params);
-    return convert_result(result);
+    return guarded_result([&]() {
+        qwen3_tts::icl_prompt prompt;
+        qwen3_tts::tts_params native_params = convert_params(params);
+        qwen3_tts_result_t error_result = {0};
+        if (!load_icl_prompt_params(icl_prompt_file, prompt, native_params, error_result)) {
+            return error_result;
+        }
+        return convert_result(
+            ctx->tts.synthesize_with_speaker_embedding(text, prompt.speaker_embedding, native_params));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_streaming(
@@ -274,19 +432,12 @@ qwen3_tts_result_t qwen3_tts_synthesize_streaming(
     void* user_data
 ) {
     if (!ctx || !text || !callback) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Invalid context, text, or streaming callback");
-        return res;
+        return make_error_result("Invalid context, text, or streaming callback");
     }
-
-    qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
-            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
-            return callback(&c_chunk, user_data) != 0;
-        };
-    auto result = ctx->tts.synthesize_streaming(text, cb, convert_streaming_params(params));
-    return convert_result(result);
+    return guarded_result([&]() {
+        return convert_result(ctx->tts.synthesize_streaming(
+            text, wrap_chunk_callback(callback, user_data), convert_streaming_params(params)));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_with_voice_streaming(
@@ -298,20 +449,12 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_voice_streaming(
     void* user_data
 ) {
     if (!ctx || !text || !reference_audio || !callback) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Invalid context, text, reference audio, or streaming callback");
-        return res;
+        return make_error_result("Invalid context, text, reference audio, or streaming callback");
     }
-
-    qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
-            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
-            return callback(&c_chunk, user_data) != 0;
-        };
-    auto result = ctx->tts.synthesize_with_voice_streaming(text, reference_audio, cb,
-                                                           convert_streaming_params(params));
-    return convert_result(result);
+    return guarded_result([&]() {
+        return convert_result(ctx->tts.synthesize_with_voice_streaming(
+            text, reference_audio, wrap_chunk_callback(callback, user_data), convert_streaming_params(params)));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_streaming(
@@ -323,28 +466,16 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_speaker_embedding_streaming(
     void* user_data
 ) {
     if (!ctx || !text || !speaker_embedding_file || !callback) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Invalid context, text, speaker embedding file, or streaming callback");
-        return res;
+        return make_error_result("Invalid context, text, speaker embedding file, or streaming callback");
     }
-
-    std::vector<float> speaker_embedding;
-    if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
-        qwen3_tts_result_t res = {0};
-        res.success = 0;
-        res.error_msg = strdup("Failed to load speaker embedding file");
-        return res;
-    }
-
-    qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
-            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
-            return callback(&c_chunk, user_data) != 0;
-        };
-    auto result = ctx->tts.synthesize_with_speaker_embedding_streaming(
-        text, speaker_embedding, cb, convert_streaming_params(params));
-    return convert_result(result);
+    return guarded_result([&]() {
+        std::vector<float> speaker_embedding;
+        if (!qwen3_tts::load_speaker_embedding_file(speaker_embedding_file, speaker_embedding)) {
+            return make_error_result("Failed to load speaker embedding file");
+        }
+        return convert_result(ctx->tts.synthesize_with_speaker_embedding_streaming(
+            text, speaker_embedding, wrap_chunk_callback(callback, user_data), convert_streaming_params(params)));
+    });
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt_streaming(
@@ -358,22 +489,16 @@ qwen3_tts_result_t qwen3_tts_synthesize_with_icl_prompt_streaming(
     if (!ctx || !text || !icl_prompt_file || !callback) {
         return make_error_result("Invalid context, text, ICL prompt file, or streaming callback");
     }
-
-    qwen3_tts::icl_prompt prompt;
-    qwen3_tts::tts_streaming_params native_params = convert_streaming_params(params);
-    qwen3_tts_result_t error_result = {0};
-    if (!load_icl_prompt_params(icl_prompt_file, prompt, native_params.generation, error_result)) {
-        return error_result;
-    }
-
-    qwen3_tts::tts_audio_chunk_callback_t cb =
-        [callback, user_data](const qwen3_tts::tts_audio_chunk & chunk) {
-            qwen3_tts_audio_chunk_t c_chunk = convert_audio_chunk(chunk);
-            return callback(&c_chunk, user_data) != 0;
-        };
-    auto result = ctx->tts.synthesize_with_speaker_embedding_streaming(
-        text, prompt.speaker_embedding, cb, native_params);
-    return convert_result(result);
+    return guarded_result([&]() {
+        qwen3_tts::icl_prompt prompt;
+        qwen3_tts::tts_streaming_params native_params = convert_streaming_params(params);
+        qwen3_tts_result_t error_result = {0};
+        if (!load_icl_prompt_params(icl_prompt_file, prompt, native_params.generation, error_result)) {
+            return error_result;
+        }
+        return convert_result(ctx->tts.synthesize_with_speaker_embedding_streaming(
+            text, prompt.speaker_embedding, wrap_chunk_callback(callback, user_data), native_params));
+    });
 }
 
 int32_t qwen3_tts_extract_speaker_embedding(
@@ -386,18 +511,18 @@ int32_t qwen3_tts_extract_speaker_embedding(
         return 0;
     }
     clear_last_error(ctx);
-
-    std::vector<float> speaker_embedding;
-    if (!ctx->tts.extract_speaker_embedding(reference_audio, speaker_embedding, nullptr)) {
-        set_last_error(ctx, ctx->tts.get_error());
-        return 0;
-    }
-
-    if (!qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding)) {
-        set_last_error(ctx, std::string("Failed to save speaker embedding file: ") + output_path);
-        return 0;
-    }
-    return 1;
+    return guarded_status(ctx, [&]() -> int32_t {
+        std::vector<float> speaker_embedding;
+        if (!ctx->tts.extract_speaker_embedding(reference_audio, speaker_embedding, nullptr)) {
+            set_last_error(ctx, ctx->tts.get_error());
+            return 0;
+        }
+        if (!qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding)) {
+            set_last_error(ctx, std::string("Failed to save speaker embedding file: ") + output_path);
+            return 0;
+        }
+        return 1;
+    });
 }
 
 int32_t qwen3_tts_extract_icl_prompt(
@@ -411,18 +536,18 @@ int32_t qwen3_tts_extract_icl_prompt(
         return 0;
     }
     clear_last_error(ctx);
-
-    qwen3_tts::icl_prompt prompt;
-    if (!ctx->tts.extract_icl_prompt(reference_audio, reference_text, prompt, nullptr)) {
-        set_last_error(ctx, ctx->tts.get_error());
-        return 0;
-    }
-
-    if (!qwen3_tts::save_icl_prompt_file(output_path, prompt)) {
-        set_last_error(ctx, std::string("Failed to save ICL prompt file: ") + output_path);
-        return 0;
-    }
-    return 1;
+    return guarded_status(ctx, [&]() -> int32_t {
+        qwen3_tts::icl_prompt prompt;
+        if (!ctx->tts.extract_icl_prompt(reference_audio, reference_text, prompt, nullptr)) {
+            set_last_error(ctx, ctx->tts.get_error());
+            return 0;
+        }
+        if (!qwen3_tts::save_icl_prompt_file(output_path, prompt)) {
+            set_last_error(ctx, std::string("Failed to save ICL prompt file: ") + output_path);
+            return 0;
+        }
+        return 1;
+    });
 }
 
 qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(qwen3_tts_context_t* ctx) {
@@ -431,15 +556,20 @@ qwen3_tts_model_capabilities_t qwen3_tts_get_model_capabilities(qwen3_tts_contex
     if (!ctx) {
         return out;
     }
-
-    const qwen3_tts::tts_model_capabilities caps = ctx->tts.get_model_capabilities();
-    out.loaded = caps.loaded ? 1 : 0;
-    out.supports_voice_clone = caps.supports_voice_clone ? 1 : 0;
-    out.supports_named_speakers = caps.supports_named_speakers ? 1 : 0;
-    out.supports_instruction = caps.supports_instruction ? 1 : 0;
-    out.speaker_embedding_dim = caps.speaker_embedding_dim;
-    out.speaker_count = caps.speaker_count;
-    out.model_kind = to_model_kind(caps.model_type);
+    try {
+        const qwen3_tts::tts_model_capabilities caps = ctx->tts.get_model_capabilities();
+        out.loaded = caps.loaded ? 1 : 0;
+        out.supports_voice_clone = caps.supports_voice_clone ? 1 : 0;
+        out.supports_named_speakers = caps.supports_named_speakers ? 1 : 0;
+        out.supports_instruction = caps.supports_instruction ? 1 : 0;
+        out.speaker_embedding_dim = caps.speaker_embedding_dim;
+        out.speaker_count = caps.speaker_count;
+        out.model_kind = to_model_kind(caps.model_type);
+    } catch (const std::exception & error) {
+        set_last_error(ctx, error.what());
+    } catch (...) {
+        set_last_error(ctx, UNKNOWN_EXCEPTION);
+    }
     return out;
 }
 
@@ -447,17 +577,20 @@ char* qwen3_tts_get_available_speakers(qwen3_tts_context_t* ctx) {
     if (!ctx) {
         return strdup("");
     }
-
-    const std::vector<std::string> speakers = ctx->tts.get_available_speakers();
-    std::string joined;
-    for (size_t i = 0; i < speakers.size(); ++i) {
-        if (i != 0) {
-            joined.push_back('\n');
+    try {
+        const std::vector<std::string> speakers = ctx->tts.get_available_speakers();
+        std::string joined;
+        for (size_t i = 0; i < speakers.size(); ++i) {
+            if (i != 0) {
+                joined.push_back('\n');
+            }
+            joined += speakers[i];
         }
-        joined += speakers[i];
+        return strdup(joined.c_str());
+    } catch (...) {
+        set_last_error(ctx, UNKNOWN_EXCEPTION);
+        return strdup("");
     }
-
-    return strdup(joined.c_str());
 }
 
 char* qwen3_tts_get_last_error(qwen3_tts_context_t* ctx) {
@@ -480,14 +613,14 @@ void qwen3_tts_free_result(qwen3_tts_result_t result) {
 }
 
 void qwen3_tts_set_progress_callback(
-    qwen3_tts_context_t* ctx, 
-    qwen3_tts_progress_callback callback, 
+    qwen3_tts_context_t* ctx,
+    qwen3_tts_progress_callback callback,
     void* user_data
 ) {
     if (!ctx) return;
     ctx->progress_callback = callback;
     ctx->user_data = user_data;
-    
+
     if (callback) {
         ctx->tts.set_progress_callback([ctx](int tokens, int max) {
             ctx->progress_callback(tokens, max, ctx->user_data);

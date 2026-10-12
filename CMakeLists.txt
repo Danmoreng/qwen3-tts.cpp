@@ -204,6 +204,14 @@ if(WIN32)
     target_link_libraries(qwen3_tts PUBLIC Psapi)
 endif()
 
+# Shared library exposing only the C ABI (qwen3_tts_c.h): for ctypes / FFI bindings, no JNI needed
+option(QWEN3_TTS_BUILD_C_BRIDGE "Build C ABI library without JNI" OFF)
+if(QWEN3_TTS_BUILD_C_BRIDGE)
+    add_library(qwen3_tts_bridge SHARED src/qwen3_tts_c.cpp)
+    target_link_libraries(qwen3_tts_bridge PRIVATE qwen3_tts)
+    target_compile_definitions(qwen3_tts_bridge PRIVATE QWEN3_TTS_EXPORT)
+endif()
+
 # Shared library for JNI (Android/JVM)
 option(QWEN3_TTS_BUILD_SHARED "Build shared library for JNI" OFF)
 if(QWEN3_TTS_BUILD_SHARED)

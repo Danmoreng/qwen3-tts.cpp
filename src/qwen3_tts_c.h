@@ -105,6 +105,18 @@ typedef int32_t (*qwen3_tts_audio_chunk_callback)(
 );
 
 QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
+// ABI self-description for foreign bindings (ctypes, FFI). Sizes of params, streaming
+// params, audio chunk and result, in that order.
+QWEN3_TTS_API void qwen3_tts_bridge_abi_sizes(int32_t* sizes);
+// For each of the same four structs: its size followed by the offset of every field in
+// declaration order. Writes up to `capacity` values into `out` and returns how many values
+// the layout has. A binding compares the list with its own, so a reordered, added or
+// removed field is caught at load time instead of as corrupted memory.
+QWEN3_TTS_API int32_t qwen3_tts_bridge_abi_layout(int32_t* out, int32_t capacity);
+// Type code of every field of the same four structs, in the same order (no sizes):
+// 1 int32, 2 int64, 3 float, 4 pointer, 5 nested struct. Catches a field changed to
+// another type of the same width, which leaves the layout unchanged.
+QWEN3_TTS_API int32_t qwen3_tts_bridge_abi_types(int32_t* out, int32_t capacity);
 QWEN3_TTS_API void qwen3_tts_free(qwen3_tts_context_t* ctx);
 QWEN3_TTS_API int32_t qwen3_tts_set_backend_preference(int32_t preference);
 QWEN3_TTS_API int32_t qwen3_tts_set_cpu_threads(int32_t n_threads);
